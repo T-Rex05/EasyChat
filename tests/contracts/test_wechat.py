@@ -8,7 +8,10 @@ import asyncio
 import json
 import uuid
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from backend.modules.channels.contracts import (
     LISTENER_BACKOFF,
@@ -18,12 +21,15 @@ from backend.modules.channels.contracts import (
     LISTENER_STOPPED,
     QR_CONFIRMED,
     QR_WAIT,
+    MediaRef,
 )
+from backend.modules.channels.routes import build_channels_router
 from backend.modules.channels.wechat.account import TransportError
+from backend.modules.channels.wechat.media import HttpMediaFetcher, MediaFetchError
 from backend.modules.channels.wechat.parser import parse_inbound
 from backend.runtime.contracts import RuntimeEvent
 from backend.shared.crypto import decrypt_secret
-from backend.shared.errors import ForbiddenError
+from backend.shared.errors import AppError, ForbiddenError
 from tests.support.rig import TEST_ENCRYPTION_SECRET
 from tests.support.wechat import (
     FakeTransport,
@@ -99,7 +105,7 @@ async def test_unbound_message_rejected_without_execution(env):
     assert outcome.reason == "unbound"
     await rig.drain_runs()
     assert rig.runtime.execute_count == 0
-    events = _rows(rig, "SELECT state, error FROM channel_events WHERE external_event_id='msg:m-unbound'")
+    events = _rows(rig, "SELECT state, error FROM channel_events WHERE external_event_id='msg:wx_ext_1:m-unbound'")
     assert events[0]["state"] == "rejected"
     assert "unbound" in events[0]["error"]
 
@@ -162,7 +168,7 @@ async def test_two_bot_accounts_same_message_id_do_not_conflict(env):
     assert len(runs) == 2
     assert {r["owner_id"] for r in runs} == {u1.user_id, u2.user_id}
     # 事件唯一键包含 account_id：两个机器人账号各有一条事件
-    events = _rows(rig, "SELECT account_id FROM channel_events WHERE external_event_id='msg:platform-msg-1'")
+    events = _rows(rig, "SELECT account_id FROM channel_events WHERE external_event_id='msg:openid_same:platform-msg-1'")
     assert {e["account_id"] for e in events} == {"bot_a", "bot_b"}
 
 
@@ -263,7 +269,7 @@ async def test_media_ingested_to_attachment_and_run_attachment_ids(env):
     assert len(attachments) == 1
     assert attachments[0]["file_size"] > 0
     # 事件 payload 只有引用描述，不含文件字节/data URL
-    payload = _rows(rig, "SELECT payload FROM channel_events WHERE external_event_id='msg:m-media-1'")[0]["payload"]
+    payload = _rows(rig, "SELECT payload FROM channel_events WHERE external_event_id='msg:wx_ext_1:m-media-1'")[0]["payload"]
     assert "base64" not in payload.lower()
     assert "fake-image" not in payload
 
@@ -276,13 +282,97 @@ async def test_media_fetch_failure_does_not_block_text(env):
     _bind(rig, admin, account, "wx_ext_1", user)
     media.fail_next = True
 
-    outcome = await rig.channels.handle_inbound(
-        inbound(rig, account, image_message(message_id="m-media-fail"))
-    )
-    assert outcome.accepted is True  # 媒体失败不阻塞文字/默认指令
+    # 有文字时媒体失败不阻塞文字消息
+    msg = image_message(message_id="m-media-fail")
+    msg["item_list"].insert(0, {"type": 1, "text_item": {"text": "看这张图"}})
+    outcome = await rig.channels.handle_inbound(inbound(rig, account, msg))
+    assert outcome.accepted is True
     await rig.drain_runs()
     assert rig.runtime.execute_count == 1
     assert rig.runtime.requests[-1].attachment_ids == ()
+
+    # 纯媒体且全部失败：明确拒绝，不用"请描述图片"空跑模型
+    media.fail_next = True
+    only_media = await rig.channels.handle_inbound(
+        inbound(rig, account, image_message(message_id="m-media-only-fail"))
+    )
+    assert only_media.accepted is False
+    assert only_media.reason == "media_failed"
+    await rig.drain_runs()
+    assert rig.runtime.execute_count == 1
+
+
+# ── 异常/重投与身份边界 ───────────────────────────────────────────────────────
+
+
+async def test_duplicate_message_id_from_two_users_both_execute(env):
+    rig, _, _ = env
+    admin = _admin(rig)
+    u1, u2 = _user(rig), _user(rig)
+    account = _register(rig, admin)
+    _bind(rig, admin, account, "wx_ext_1", u1)
+    _bind(rig, admin, account, "wx_ext_2", u2)
+    msg1 = text_message("同一平台消息ID", message_id="same-platform-id", from_user="wx_ext_1")
+    msg2 = text_message("同一平台消息ID", message_id="same-platform-id", from_user="wx_ext_2")
+    assert (await rig.channels.handle_inbound(inbound(rig, account, msg1))).accepted
+    assert (await rig.channels.handle_inbound(inbound(rig, account, msg2))).accepted
+    await rig.drain_runs()
+    assert rig.runtime.execute_count == 2
+
+
+async def test_internal_failure_releases_event_for_redelivery(env):
+    rig, _, _ = env
+    admin = _admin(rig)
+    user = _user(rig)
+    account = _register(rig, admin)
+    _bind(rig, admin, account, "wx_ext_1", user)
+    original_submit = rig.assistant.submit
+
+    async def boom(command):
+        raise RuntimeError("模拟瞬时数据库错误")
+
+    rig.assistant.submit = boom
+    failed = await rig.channels.handle_inbound(inbound(rig, account, text_message("会重投", message_id="retry-1")))
+    assert failed.accepted is False
+    assert failed.reason == "internal"
+    assert _rows(rig, "SELECT count(*) AS c FROM channel_events")[0]["c"] == 0  # 事件已撤回
+
+    rig.assistant.submit = original_submit
+    retried = await rig.channels.handle_inbound(inbound(rig, account, text_message("会重投", message_id="retry-1")))
+    assert retried.accepted is True
+    await rig.drain_runs()
+    assert rig.runtime.execute_count == 1
+
+
+async def test_session_switch_does_not_cross_bot_accounts(env):
+    rig, _, _ = env
+    admin = _admin(rig)
+    user = _user(rig)
+    a1 = _register(rig, admin, "bot-switch-a", "tsa")
+    a2 = _register(rig, admin, "bot-switch-b", "tsb")
+    _bind(rig, admin, a1, "wx_ext_1", user)
+    _bind(rig, admin, a2, "wx_ext_2", user)
+
+    first_a = await rig.channels.handle_inbound(inbound(rig, a1, text_message("A 的第一句", message_id="sw-a1")))
+    first_b = await rig.channels.handle_inbound(inbound(rig, a2, text_message("B 的第一句", message_id="sw-b1")))
+    assert first_a.session_id != first_b.session_id
+
+    history = await rig.channels.handle_inbound(inbound(rig, a1, text_message("/history", message_id="sw-h1")))
+    assert history.reply_text.count("\n") == 2  # 标题行 + 一条 A 会话 + 提示行
+    out_of_range = await rig.channels.handle_inbound(inbound(rig, a1, text_message("/2", message_id="sw-n2")))
+    assert "序号无效" in out_of_range.reply_text
+    after = await rig.channels.handle_inbound(inbound(rig, a1, text_message("A 的第二句", message_id="sw-a2")))
+    assert after.session_id == first_a.session_id
+
+
+async def test_media_fetcher_rejects_non_wechat_hosts(env, tmp_path):
+    _, transport, _ = env
+    fetcher = HttpMediaFetcher(transport)
+    with pytest.raises(MediaFetchError):
+        await fetcher.fetch(MediaRef(kind="image", url="http://127.0.0.1/secret.png"), tmp_path)
+    with pytest.raises(MediaFetchError):
+        await fetcher.fetch(MediaRef(kind="image", url="https://evil.example/a.png"), tmp_path)
+    assert transport.download_calls == []  # 未发起任何下载（防 SSRF）
 
 
 # ── 会话切换与跨端隔离 ───────────────────────────────────────────────────────
@@ -442,3 +532,95 @@ async def test_listener_start_without_credentials_reports_error(env):
         tx.execute("UPDATE channel_accounts SET credentials_ref='' WHERE id=?", (account.id,))
     state = await rig.channels.listener.start(account.id)
     assert state.status == LISTENER_ERROR
+    assert "缺少凭证" in (rig.channels.repo.get_account(account.id).last_error or "")
+
+
+# ── HTTP 薄路由（单循环 httpx ASGITransport，禁用 TestClient） ─────────────────
+
+
+def _token(rig, principal) -> str:
+    return rig.access.create_token(principal.user_id, f"u{principal.user_id}", principal.role)
+
+
+def _client(rig) -> httpx.AsyncClient:
+    app = FastAPI()
+
+    @app.exception_handler(AppError)
+    async def handle(_: object, exc: AppError):
+        return JSONResponse(exc.to_payload(), status_code=exc.http_status)
+
+    app.include_router(build_channels_router(rig.channels, rig.access.authenticate_token))
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    )
+
+
+async def test_channels_http_requires_auth_and_admin(env):
+    rig, _, _ = env
+    user = _user(rig)
+    async with _client(rig) as client:
+        assert (await client.get("/api/channels/accounts")).status_code == 401
+        denied = await client.get(
+            "/api/channels/accounts", headers={"Authorization": f"Bearer {_token(rig, user)}"}
+        )
+        assert denied.status_code == 403
+
+
+async def test_channels_http_account_and_binding_crud(env):
+    rig, _, _ = env
+    admin = _admin(rig)
+    user = _user(rig)
+    headers = {"Authorization": f"Bearer {_token(rig, admin)}"}
+    async with _client(rig) as client:
+        created = await client.post("/api/channels/accounts", headers=headers, json={
+            "account_id": "http-bot", "token": "http-token", "base_url": "https://ilink.test",
+        })
+        assert created.status_code == 200
+        assert created.json()["account"]["account_id"] == "http-bot"
+
+        listed = await client.get("/api/channels/accounts", headers=headers)
+        assert listed.status_code == 200
+        assert len(listed.json()["accounts"]) == 1
+
+        bound = await client.post("/api/channels/bindings", headers=headers, json={
+            "platform": "wechat", "account_id": "http-bot",
+            "external_user_id": "wx_http_user", "user_id": user.user_id,
+        })
+        assert bound.status_code == 200
+        binding_id = bound.json()["binding"]["id"]
+
+        bindings = await client.get("/api/channels/bindings", headers=headers)
+        assert bindings.status_code == 200
+        assert bindings.json()["bindings"][0]["external_user_id"] == "wx_http_user"
+
+        removed = await client.delete(f"/api/channels/bindings/{binding_id}", headers=headers)
+        assert removed.status_code == 200
+        assert removed.json()["status"] == "disabled"
+
+
+async def test_channels_http_qr_flow(env):
+    rig, transport, _ = env
+    admin = _admin(rig)
+    headers = {"Authorization": f"Bearer {_token(rig, admin)}"}
+    transport.script_qr(
+        {"qrcode": "http-qr", "qrcode_img_content": "https://weixin.qq.com/qr"},
+        {"status": "confirmed", "ilink_bot_id": "http-qr-bot", "bot_token": "qr-token",
+         "baseurl": "https://ilink.test", "ilink_user_id": "http-scanner"},
+    )
+    async with _client(rig) as client:
+        started = await client.post("/api/channels/wechat/qr/start", headers=headers)
+        assert started.status_code == 200
+        session_id = started.json()["qr"]["session_id"]
+        assert started.json()["qr"]["status"] == QR_WAIT
+
+        polled = await client.get(f"/api/channels/wechat/qr/{session_id}", headers=headers)
+        assert polled.json()["qr"]["status"] == QR_CONFIRMED
+
+        bound = await client.post(f"/api/channels/wechat/qr/{session_id}/bind", headers=headers)
+        assert bound.status_code == 200
+        assert bound.json()["account"]["account_id"] == "http-qr-bot"
+        assert bound.json()["binding"]["user_id"] == admin.user_id
+
+    account = rig.channels.repo.get_account_by_platform_id("wechat", "http-qr-bot")
+    await rig.channels.listener.stop(account.id)

@@ -79,9 +79,9 @@ class WeChatListener:
     async def start(self, account_pk: str) -> ListenerState:
         account, credentials = self.service.listener_account(account_pk)
         if account is None or account.status != ACCOUNT_ACTIVE or not credentials.get("token"):
-            return self._set_state(
-                account_pk, LISTENER_ERROR, error="账号不存在、已禁用或缺少凭证",
-            )
+            error = "账号不存在、已禁用或缺少凭证"
+            self.service.record_poll(account_pk, error=error)  # 重启后仍可见
+            return self._set_state(account_pk, LISTENER_ERROR, error=error)
         existing = self._tasks.get(account_pk)
         if existing is not None and not existing.done():
             return self._set_state(account_pk, LISTENER_RUNNING, error="")
@@ -178,7 +178,10 @@ class WeChatListener:
         for raw in data.get("msgs") or []:
             if not isinstance(raw, dict):
                 continue
-            message = parse_inbound(account, raw, now=self.clock())
+            message = parse_inbound(
+                account, raw, now=self.clock(),
+                fingerprint_window=float(getattr(self.service, "fingerprint_window", 5.0)),
+            )
             if message is None:
                 continue
             outcome = await self.service.handle_inbound(message)

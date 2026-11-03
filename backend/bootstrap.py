@@ -70,18 +70,30 @@ async def run_startup(registry: ModuleRegistry) -> None:
         and registry.assistant is not None
         and registry.access is not None
     ):
-        secret = str(registry.settings.extra.get("encryption_secret") or "")
+        secret = str(registry.settings.encryption_secret or "")
         if secret:
             from backend.modules.channels.api import ChannelService
+            from backend.modules.channels.wechat.account import AiohttpTransport
+            from backend.modules.channels.wechat.media import HttpMediaFetcher
 
+            transport = AiohttpTransport()
             registry.channels = ChannelService(
                 db,
                 assistant=registry.assistant,
                 access=registry.access,
                 encryption_secret=secret,
+                transport=transport,
+                media_fetcher=HttpMediaFetcher(transport),
                 media_dir=registry.settings.artifacts_dir / "channels",
             )
             await registry.channels.start_listeners()
+        else:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "EASYCHAT_WECHAT_ENABLED=true 但未设置 EASYCHAT_ENCRYPTION_SECRET，"
+                "渠道模块保持关闭（不会以明文保存 bot token）"
+            )
 
 
 async def run_shutdown(registry: ModuleRegistry) -> None:

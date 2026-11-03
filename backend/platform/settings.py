@@ -24,6 +24,8 @@ class AppSettings:
     script_runner_enabled: bool = False
     wechat_enabled: bool = False
     mcp_enabled: bool = False
+    # 部署密钥：模型密钥与渠道凭证的 AES-GCM 加密来源；空值表示未配置（能力保持关闭）
+    encryption_secret: str = ""
     # 额外部署参数（各能力 Adapter 自行读取所需键）
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -62,4 +64,5 @@ def settings_from_environment() -> AppSettings:
         script_runner_enabled=flag("EASYCHAT_RUNNER_ENABLED"),
         wechat_enabled=flag("EASYCHAT_WECHAT_ENABLED"),
         mcp_enabled=flag("EASYCHAT_MCP_ENABLED"),
+        encryption_secret=os.environ.get("EASYCHAT_ENCRYPTION_SECRET", ""),
     )

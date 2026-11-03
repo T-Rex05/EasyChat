@@ -142,7 +142,8 @@ class AssistantRepository:
         conn = self.db.connect()
         try:
             rows = conn.execute(
-                "SELECT id, owner_id, title, source, active, created_at, updated_at FROM sessions "
+                "SELECT id, owner_id, title, source, channel_account_id, external_chat_id, "
+                "active, created_at, updated_at FROM sessions "
                 "WHERE owner_id=? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                 (owner_id, limit, offset),
             ).fetchall()

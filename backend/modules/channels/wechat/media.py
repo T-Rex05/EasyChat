@@ -77,6 +77,20 @@ def decrypt_aes128_ecb(ciphertext: bytes, aes_key_b64: str) -> bytes:
     return _pkcs7_unpad(AES.new(key, AES.MODE_ECB).decrypt(ciphertext))
 
 
+# 允许下载的微信媒体域名（防 SSRF：入站消息里的 URL 不能指向任意内网地址）
+_ALLOWED_URL_HOSTS = ("weixin.qq.com", "wechat.com", "qpic.cn")
+
+
+def _is_allowed_media_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    return any(host == allowed or host.endswith(f".{allowed}") for allowed in _ALLOWED_URL_HOSTS)
+
+
 def _download_url(ref: MediaRef) -> str:
     if ref.encrypt_query_param:
         return (
@@ -84,6 +98,8 @@ def _download_url(ref: MediaRef) -> str:
             f"encrypted_query_param={quote(ref.encrypt_query_param, safe='')}"
         )
     if ref.url:
+        if not _is_allowed_media_url(ref.url):
+            raise MediaFetchError("媒体下载地址不是微信 CDN 域名，已拒绝（防 SSRF）")
         return ref.url
     raise MediaFetchError("媒体引用没有下载地址")
 

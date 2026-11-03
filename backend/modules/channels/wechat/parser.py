@@ -163,7 +163,9 @@ def parse_inbound(
     )
     raw_message_id = str(msg.get("message_id") or msg.get("msg_id") or "").strip()
     if raw_message_id:
-        external_event_id = f"msg:{raw_message_id[:180]}"
+        # 平台消息 ID 的作用域未被文档保证为全局；带上发送者，避免两个用户
+        # 恰好同 ID 时后者被静默吞掉。账号维度另由 channel_events 唯一键覆盖。
+        external_event_id = f"msg:{from_user_id[:48]}:{raw_message_id[:140]}"
         event_kind = "message_id"
     else:
         window = max(1.0, float(fingerprint_window))

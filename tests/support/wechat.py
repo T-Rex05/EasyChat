@@ -24,6 +24,7 @@ class FakeTransport:
         self.posts: list[dict[str, Any]] = []
         self.sent: list[str] = []
         self.downloads: dict[str, bytes] = {}
+        self.download_calls: list[str] = []
         self.closed = False
 
     def script_updates(self, *responses: Any) -> None:
@@ -64,6 +65,7 @@ class FakeTransport:
     async def download_to(
         self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0
     ) -> int:
+        self.download_calls.append(url)
         data = self.downloads.get(url)
         if data is None:
             raise TransportError(f"没有预置下载内容: {url}")

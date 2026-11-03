@@ -31,6 +31,8 @@ REASON_FORBIDDEN = "forbidden"
 REASON_EMPTY = "empty"
 REASON_INVALID = "invalid"
 REASON_BUSY = "busy"
+REASON_MEDIA_FAILED = "media_failed"
+REASON_INTERNAL = "internal"
 
 # 无稳定 message_id 时的近似指纹短窗口（秒）。窗口桶保证相同文本只在窗口内
 # 去重，窗口过后可再次处理，不会被永久吞掉（架构 Task 7）。

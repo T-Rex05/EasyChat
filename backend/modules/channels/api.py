@@ -25,6 +25,8 @@ from backend.modules.channels.contracts import (
     REASON_EMPTY,
     REASON_FORBIDDEN,
     REASON_INVALID,
+    REASON_MEDIA_FAILED,
+    REASON_INTERNAL,
     REASON_OK,
     REASON_UNBOUND,
     REASON_USER_DISABLED,
@@ -90,11 +92,21 @@ class ChannelService:
     # ---- 生命周期 ----------------------------------------------------------------
 
     async def start_listeners(self) -> list[ListenerState]:
+        self.purge_old_events()
         states = []
         for account in self.repo.list_accounts():
             if account.platform == PLATFORM_WECHAT and account.status == ACCOUNT_ACTIVE:
                 states.append(await self.listener.start(account.id))
         return states
+
+    def purge_old_events(self, *, retention_days: int = 7) -> int:
+        """有界保留接收事件；仍在 received 的保留供人工对账。启动时执行一次。"""
+        from datetime import datetime, timedelta, timezone
+
+        before = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, retention_days))
+        ).isoformat(timespec="milliseconds")
+        return self.repo.purge_events(before)
 
     async def aclose(self) -> None:
         await self.listener.stop_all()
@@ -323,6 +335,16 @@ class ChannelService:
                 event_id=event_id,
             )
 
+        try:
+            return await self._process_event(account, message, event_id)
+        except Exception:  # noqa: BLE001  未产生业务结果的内部失败允许平台重投
+            logger.exception("渠道入站处理失败，撤回事件等待重投 event=%s", event_id)
+            self.repo.delete_event(event_id)
+            return InboundOutcome(accepted=False, reason=REASON_INTERNAL)
+
+    async def _process_event(
+        self, account: ChannelAccount, message: InboundMessage, event_id: str
+    ) -> InboundOutcome:
         if account.status != ACCOUNT_ACTIVE:
             return self._reject(event_id, REASON_ACCOUNT_DISABLED, "渠道账号已禁用")
 
@@ -362,6 +384,9 @@ class ChannelService:
             )
 
         attachment_ids = await self._ingest_media(principal, session_id, event_id, message)
+        if message.media and not attachment_ids and not message.text.strip():
+            # 只有媒体且全部接收失败：不要用"请描述图片"空跑一次模型
+            return self._reject(event_id, REASON_MEDIA_FAILED, "媒体接收失败且无文字")
         text = message.text.strip() or _default_media_text(message)
         from backend.modules.assistant.contracts import RunCommand
 
@@ -399,7 +424,12 @@ class ChannelService:
         )
         if cursor:
             existing = await self.assistant.get_session(principal, cursor)
-            if existing is not None and existing.get("active"):
+            if (
+                existing is not None
+                and existing.get("active")
+                and str(existing.get("source") or "") == "wechat"
+                and str(existing.get("channel_account_id") or "") == account.id
+            ):
                 return cursor
         external_chat_key = f"{account.account_id}:{message.external_chat_id}"
         session_id = await self.assistant.get_or_create_session(
@@ -448,7 +478,7 @@ class ChannelService:
         if lowered in ("/status", "/当前"):
             return f"📌 当前会话: {session_id[:20]}...", session_id
         if lowered in ("/history", "/历史", "/会话列表", "/list"):
-            sessions = await self._recent_sessions(principal)
+            sessions = await self._recent_sessions(principal, account)
             if not sessions:
                 return "📭 暂无微信对话记录", session_id
             lines = ["📚 最近会话："]
@@ -459,7 +489,7 @@ class ChannelService:
             return "\n".join(lines), session_id
         if command.startswith("/") and command[1:].isdigit():
             index = int(command[1:])
-            sessions = await self._recent_sessions(principal)
+            sessions = await self._recent_sessions(principal, account)
             if 1 <= index <= len(sessions):
                 target = sessions[index - 1]
                 self.repo.set_session_cursor(
@@ -488,9 +518,15 @@ class ChannelService:
             return "⚠️ 该命令已停用：模型切换请到 Web 控制台操作", session_id
         return None
 
-    async def _recent_sessions(self, principal: Principal) -> list[dict[str, Any]]:
+    async def _recent_sessions(self, principal: Principal, account: ChannelAccount) -> list[dict[str, Any]]:
+        """只列当前机器人账号下的微信会话，防止 /N 把 A 账号会话切给 B 账号。"""
         sessions = await self.assistant.list_sessions(principal, limit=10)
-        return [s for s in sessions if s.get("source") == "wechat" and s.get("active")]
+        return [
+            s for s in sessions
+            if s.get("source") == "wechat"
+            and s.get("active")
+            and str(s.get("channel_account_id") or "") == account.id
+        ]
 
     async def _ingest_media(
         self,

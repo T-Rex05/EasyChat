@@ -85,10 +85,11 @@ class ChannelRepository:
             ).fetchone()
             if existing is not None:
                 pk = str(existing["id"])
+                # 重新登记凭证不静默解除管理员的禁用状态；启用需显式 set_account_status。
                 conn.execute(
-                    "UPDATE channel_accounts SET display_name=?, credentials_ref=?, status=?, "
+                    "UPDATE channel_accounts SET display_name=?, credentials_ref=?, "
                     "bot_user_id=?, updated_at=? WHERE id=?",
-                    (display_name, credentials_ref, ACCOUNT_ACTIVE, bot_user_id, now, pk),
+                    (display_name, credentials_ref, bot_user_id, now, pk),
                 )
             else:
                 pk = new_channel_account_id()
@@ -342,6 +343,11 @@ class ChannelRepository:
             return dict(row) if row else None
         finally:
             conn.close()
+
+    def delete_event(self, event_id: str) -> None:
+        """撤回收件记录，让平台重投时重新处理（仅用于未产生业务结果的内部失败）。"""
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM channel_events WHERE id=?", (event_id,))
 
     def purge_events(self, before_iso: str) -> int:
         """清理旧事件（有界增长）；不清理仍被活动 run 引用的事件。"""
