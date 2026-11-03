@@ -497,3 +497,62 @@ python -m ruff check backend/modules/delivery backend/modules/scheduling backend
 ### 下一项
 
 Task 9：事实/事件/经验记忆、纠正与遗忘（memory 模块、20 条脱敏用例、中文检索与来源）。
+
+---
+
+---
+
+## Task 9：事实/事件/经验记忆、纠正与遗忘 — 2026-11-03 完成（commit `bebd4cd`）
+
+**状态：** 已完成（离线记忆闭环全绿，真实模型提取未联调）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0006_memory.sql`：`memories`（kind/content/source_refs/scope/event_at/version/status/pinned/confidence/source_type/supersedes）、`memory_revisions`（版本历史，UNIQUE(memory_id,version)）、`memory_tags`、`memory_feedback`（UNIQUE(memory_id,source_event_id)）、`forget_rules`（只存 target_hash，不存原文）、`memory_signals`（UNIQUE(owner,source_event_id) 幂等信号）。
+- `backend/modules/memory/contracts.py`：`MemoryCandidate/MemoryRecord/SourceRef/RecallResult/ForgetResult/SignalReceipt`；kind/status/source_type/信号常量；80 候选、top5、2000 token 预算；中文同义词表与“旧事”提示词。
+- `backend/modules/memory/repository.py`：单 SQLite 写入口；创建即写 revision v1；条件版本更新；反馈幂等；遗忘清空正文并删除全部 revisions（墓碑只留哈希）；信号幂等插入；`purge_deleted_content` 兜底。
+- `backend/modules/memory/extractor.py`：候选结构校验 + 保守过滤（来源必填、2–2000 字、假设/转述在 model_inferred 下不写成事实）；`validate_candidate` 同时用于直接构造候选，防止绕过。
+- `backend/modules/memory/retrieval.py`：中文 2-gram/单字/ASCII 词 + 同义词扩展；相关性 + 置信度/pin + 近期性；默认只召回 active，查询含“上次/以前/之前/还记得/曾经/过去/早先”才带 archived；top_k/2000 token 预算；0 条明确“无相关记忆（不调用模型编造）”。
+- `backend/modules/memory/api.py`：`remember/revise/recall/forget/list/record_feedback/enqueue_signal/apply_signal`；owner + memory.view/edit；expected_version 冲突；遗忘支持 memory_id/source_ref/query 三种选择，按 memory_id 时同时登记内容与来源墓碑。
+- `backend/modules/memory/worker.py`：认领 `memory.signal` job，幂等应用；确定性 rejected 不重试，依赖/存储异常 retry。
+- `backend/runtime/hermes/memory_bridge.py`：`MemoryBridge.prefetch/remember` 只调 memory 公开接口，无 Hermes import；无结果返回“【记忆】无相关记忆”，有结果带来源。
+- `backend/modules/memory/routes.py`：`/api/memory` 列表、`/recall`、`/remember`、`PUT /{id}`、`/{id}/feedback`、`/forget`、`DELETE /{id}` 薄路由。
+- `backend/bootstrap.py`：装配 MemoryService + MemoryWorker（JobQueue）；shutdown 逆序停止。
+- `tests/fixtures/memory/cases.json`：20 条脱敏用例，覆盖担心/别名/时间/相似事件/短期指令/长期偏好/archived/权限隔离/缺失来源/假设；4 条固定回归。
+- 测试：`tests/memory/test_retrieval.py`（9项：20用例核对、命中带来源、相似事件排序、无结果明确、archived 需旧事提示、来源缺失/假设拒绝、同义词、top5+预算、权限隔离）、`test_revision.py`（9项：版本递增、陈旧版本冲突、空修改拒绝、反馈幂等、来源类型保留、信号 job 只处理一次、correct 版本、stage no-op、无来源直接构造拒绝/权限）、`test_forgetting.py`（7项：按 id 清理正文/版本、阻止重提取、按来源级联、按内容、先墓碑后提取、跨用户、已删不可改）、`test_bridge.py`（3项）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/memory -q
+→ 29 passed in 8.07s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory -q
+→ 229 passed in 72.82s
+python -m ruff check backend/modules/memory backend/runtime/hermes/memory_bridge.py backend/bootstrap.py tests/memory
+→ All checks passed!
+```
+
+### 关键决策
+
+- **单 SQLite 模型**：fact/preference/event/experience 同表，不做 episodic/semantic 跨库晋升；原始聊天历史仍归 state.db。
+- **来源硬门槛**：无 source_refs 的候选直接拒绝（服务层也校验，不依赖路由）；模型推断与用户确认分列 `source_type`/`confidence`。
+- **遗忘墓碑**：只存 sha256(target) 与类型，删除正文和全部 revisions；按 memory_id 遗忘时额外登记 content/source_ref 墓碑，阻止旧消息重提取。
+- **召回预算**：候选最多 80，top5，2000 token；单条超预算时截断正文并保留来源，不静默丢弃。
+- **幂等信号**：`memory_signals` 唯一键 + JobQueue `memory.signal`；worker 只应用一次，rejected 语义（缺来源/已遗忘）不重试。
+- **旧 provider/Dreaming**：继续由 Task 5 的 `skip_memory=True` / `_skill_nudge_interval=0` 关闭；本任务不复活旧后台路径。
+
+### 未验证项
+
+- 真实 LLM 自动提取/纠正（需要模型凭证）：未联调；当前只接受显式信号与显式 remember。
+- MemoryBridge 尚未注入 Hermes 运行时（Adapter 无 memory_provider 扩展点）；桥接契约与纯格式化已测试，真实会话召回待后续接入。
+- 中文检索是 2-gram + 同义词回退，不承诺语义全覆盖；FTS5 加速未启用。
+- 记忆 HTTP 路由尚未在 app 工厂挂载（Task 15 显式装配）。
+- 衰减/used 信号只记录，不自动物理删除低分记忆（符合架构首版）。
+
+### schema 版本
+
+`0006_memory`（0001–0006）。
+
+### 下一项
+
+Task 10：个人技能、不可变版本与 Hermes 写入桥接（skills 模块、激活 compare-swap、pin/归档、路径与 hash 校验）。
