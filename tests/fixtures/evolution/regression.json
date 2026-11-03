@@ -1,0 +1,27 @@
+[
+  {
+    "case_id": "deploy-backup",
+    "input": "deploy the service",
+    "expect_contains": "backup",
+    "required": true,
+    "target": true
+  },
+  {
+    "case_id": "health-check",
+    "input": "check health",
+    "expect_contains": "ok",
+    "required": true
+  },
+  {
+    "case_id": "safe-rollback",
+    "input": "rollback the release",
+    "expect_contains": "safe",
+    "required": false
+  },
+  {
+    "case_id": "explain",
+    "input": "explain the change",
+    "expect_contains": "plain",
+    "required": false
+  }
+]

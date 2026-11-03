@@ -266,6 +266,19 @@ class SkillService:
         self._require_view(principal, skill)
         return self._read_version_text(self._active_version(skill))
 
+    def get_version(self, actor: Principal, version_id: str) -> SkillVersionView:
+        principal = self._principal(actor)
+        version = self.repo.get_version(version_id)
+        self._require_view(principal, self.repo.get_skill(version.skill_id))
+        return version
+
+    def read_version_content(self, actor: Principal, version_id: str) -> str:
+        """读取任意版本内容（验证回放用）；仍校验归属与 sha256。"""
+        principal = self._principal(actor)
+        version = self.repo.get_version(version_id)
+        self._require_view(principal, self.repo.get_skill(version.skill_id))
+        return self._read_version_text(version)
+
     def list_for_runtime(self, actor: Principal) -> tuple[SkillSnapshot, ...]:
         """运行时有效技能：只含 owner 自己的未归档技能，固定版本+内容快照。"""
         principal = self._principal(actor)
