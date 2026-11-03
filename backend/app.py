@@ -13,7 +13,53 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from backend.bootstrap import AppSettings, ModuleRegistry, default_settings, run_shutdown, run_startup
-from backend.shared.errors import AppError
+from backend.shared.errors import AppError, CapabilityUnavailableError
+
+
+class _LazyModule:
+    """请求期解析 bootstrap 构造的模块；未就绪时明确 503，不在工厂期连库。"""
+
+    def __init__(self, registry: ModuleRegistry, name: str) -> None:
+        self._registry = registry
+        self._name = name
+
+    def __getattr__(self, item: str):
+        service = getattr(self._registry, self._name, None)
+        if service is None:
+            raise CapabilityUnavailableError(f"模块未就绪: {self._name}")
+        return getattr(service, item)
+
+
+def _authenticate(registry: ModuleRegistry):
+    def authenticate(token: str):
+        access = registry.access
+        if access is None:
+            raise CapabilityUnavailableError("认证模块未就绪")
+        return access.authenticate_token(token)
+
+    return authenticate
+
+
+def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
+    """Task 15：显式注册新模块路由，不扫描 backend/controller。"""
+    from backend.modules.access.routes import build_access_router
+    from backend.modules.assistant.routes import build_web_chat_router
+    from backend.modules.channels.routes import build_channels_router
+    from backend.modules.evolution.routes import build_evolution_router
+    from backend.modules.memory.routes import build_memory_router
+    from backend.modules.skills.routes import build_skills_router
+    from backend.modules.usage.routes import build_usage_router
+
+    authenticate = _authenticate(registry)
+    app.include_router(build_access_router(_LazyModule(registry, "access")))
+    app.include_router(build_usage_router(_LazyModule(registry, "usage"), authenticate))
+    app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate))
+    app.include_router(build_channels_router(_LazyModule(registry, "channels"), authenticate))
+    app.include_router(build_memory_router(_LazyModule(registry, "memory"), authenticate))
+    app.include_router(build_skills_router(_LazyModule(registry, "skills"), authenticate))
+    app.include_router(build_evolution_router(
+        _LazyModule(registry, "evolution"), _LazyModule(registry, "adoption"), authenticate,
+    ))
 
 
 def error_to_response(exc: AppError) -> tuple[int, dict]:
@@ -45,6 +91,7 @@ def create_app(
     app.state.settings = settings
     app.state.registry = registry
     app.state.ready = False
+    _register_explicit_routers(app, registry)
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz() -> dict:

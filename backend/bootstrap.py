@@ -42,6 +42,7 @@ class ModuleRegistry:
     skills: Any | None = None  # Task 10
     evolution: Any | None = None  # Task 11
     evolution_worker: Any | None = None  # Task 11
+    adoption: Any | None = None  # Task 12
 
 
 async def run_startup(registry: ModuleRegistry) -> None:
@@ -57,6 +58,35 @@ async def run_startup(registry: ModuleRegistry) -> None:
     db.migrate()  # 迁移失败抛 MigrationError → 启动终止
     registry.db = db
 
+    # Task 15：启动时构造最小生产依赖（access/usage），不再依赖旧 controller 扫描。
+    if registry.access is None:
+        import secrets
+
+        from backend.modules.access.api import AccessService
+
+        secret = registry.settings.jwt_secret or secrets.token_hex(32)
+        registry.access = AccessService(db, jwt_secret=secret)
+    registry.access.seed()
+
+    if registry.usage is None:
+        from backend.modules.usage.api import UsageService
+
+        registry.usage = UsageService(
+            db,
+            effective_permissions=lambda principal: registry.access.effective_permissions(
+                principal.user_id
+            ),
+        )
+
+    if registry.runtime is None and registry.settings.hermes_enabled:
+        from backend.runtime.hermes.adapter import HermesRuntimeAdapter
+
+        registry.runtime = HermesRuntimeAdapter(
+            hermes_home=registry.settings.artifacts_dir / "hermes",
+            usage=registry.usage, models=registry.models,
+        )
+        await registry.runtime.startup()
+
     # Task 6：统一 Assistant（runtime 缺省时不装配——最小工厂仅存活/就绪）
     if registry.runtime is not None and registry.access is not None:
         from backend.modules.assistant.api import AssistantService
@@ -64,7 +94,6 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.assistant = AssistantService(
             db, runtime=registry.runtime, models=registry.models, access=registry.access,
         )
-        registry.access.seed()
         await registry.assistant.start()
 
     # Task 7：渠道模块（默认 wechat_enabled=False，不启动任何监听）。
@@ -157,6 +186,10 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.evolution_worker = EvolutionWorker(registry.evolution, evolution_queue)
         await registry.evolution_worker.start()
 
+        from backend.modules.evolution.adoption import AdoptionService
+
+        registry.adoption = AdoptionService(db, registry.skills)
+
 
 def _make_run_finished(registry: ModuleRegistry):
     """run 终态与投递请求同事务：先取已落库的最终回复，再入队。"""
@@ -190,6 +223,8 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.adoption is not None:
+        registry.adoption = None
     if registry.evolution_worker is not None:
         await registry.evolution_worker.stop()
         registry.evolution_worker = None
@@ -226,3 +261,7 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
     if registry.db is not None:
         registry.db.close()
         registry.db = None
+    # 连接已关闭：释放依赖旧 db 的模块，保证再次进入 lifespan 时重建
+    registry.access = None
+    registry.models = None
+    registry.usage = None
