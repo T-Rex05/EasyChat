@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 34（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14 完成；Task 15：显式装配 + 前端移除/构建 + 提醒/邮件/投递 API 完成；旧模块删除/main.py 切换未做** |
+| 提交数 | 36（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14 完成；Task 15：显式装配 + 前端移除/构建 + 提醒/邮件/投递/模型配置 API 完成；旧模块删除/main.py 切换未做** |
 | 下一任务 | **Task 15 剩余：旧后端删除、main.py 切换、144 路由核对；之后 Task 16** |
 | 未开始 | Task 15 剩余、Task 16 |
 | 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 `npm run type-check` / `npm run build` 通过 |
 
-最近提交：`80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `f276cba`(Task 15 docs) `10ffc03`(Task 14) `24c6f77`(Task 13) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`0367cca`(Task 15 模型路由) `80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `f276cba`(Task 15 docs) `10ffc03`(Task 14) `24c6f77`(Task 13) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 

@@ -888,3 +888,27 @@ ruff check（app/bootstrap/routes/新测试）→ All checks passed
 ### 下一项
 
 完成旧后端删除/main.py 切换与保留路由核对，然后 Task 16 干净镜像/资源/恢复/最终交付。
+
+---
+
+---
+
+## Task 15（继续 2）：模型配置/fallback 兼容路由 — 2026-11-03（commit `0367cca`）
+
+**状态：** Config 页所需核心模型配置 HTTP 契约已迁移；旧后端删除/main.py 仍未完成。
+
+### 已完成
+
+- `backend/modules/models/routes.py`：`GET/POST /api/model-configs`、PUT（更新/激活/多模态）、DELETE、fallback-chain GET/PUT；旧字段（config_name/config_type/api_url/model_name/category）映射到 ModelsService。
+- embedding/场景路由/reasoning-effort 批量设置/真实连通性测试明确 503（能力已移除或需外网），不伪装成功。
+- bootstrap：有部署密钥时构造 ModelsService（`permission_check=access.require_permission`）；app 显式挂载模型路由。
+- 测试：API 兼容路径集合加入 model-configs/fallback；离线全量 302 passed。
+
+### 未完成
+
+- **旧后端模块仍未删除/main.py 未切换**；保留路由仍缺 cron/email/memory-items/skills 旧别名、上传/反馈/exec-approval、host/command 黑名单等；144 路由逐条核对未完成。
+- 模型真实连接测试、场景路由 UI 未迁移。
+
+### 下一项
+
+继续 Task 15 的保留路由迁移与旧模块删除；随后 Task 16。
