@@ -53,12 +53,30 @@ async def run_startup(registry: ModuleRegistry) -> None:
     db.migrate()  # 迁移失败抛 MigrationError → 启动终止
     registry.db = db
 
+    # Task 6：统一 Assistant（runtime 缺省时不装配——最小工厂仅存活/就绪）
+    if registry.runtime is not None and registry.access is not None:
+        from backend.modules.assistant.api import AssistantService
+
+        registry.assistant = AssistantService(
+            db, runtime=registry.runtime, models=registry.models, access=registry.access,
+        )
+        registry.access.seed()
+        await registry.assistant.start()
+
 
 async def run_shutdown(registry: ModuleRegistry) -> None:
     """lifespan 关闭序列：停止接收→停任务→关Runtime→最终刷计量→释放连接。
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.assistant is not None:
+        await registry.assistant.aclose()
+        registry.assistant = None
+    if registry.runtime is not None:
+        aclose = getattr(registry.runtime, "aclose", None)
+        if aclose is not None:
+            await aclose()
+        registry.runtime = None
     if registry.db is not None:
         registry.db.close()
         registry.db = None

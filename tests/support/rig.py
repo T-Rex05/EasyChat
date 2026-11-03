@@ -73,16 +73,19 @@ class TestRig:
     runtime: FakeRuntime = field(default_factory=FakeRuntime)
     db: Database | None = None
     access: object | None = None  # Task 3: AccessService（字符串标注避免导入细节泄漏）
+    assistant: object | None = None  # Task 6: AssistantService
     _closed: bool = False
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
+        if self.assistant is not None:
+            await self.assistant.aclose()
         await self.runtime.aclose()
         if self.db is not None:
             self.db.close()
-        # Task 6 起在此关闭 assistant dispatcher；Task 8 起关闭 jobs worker。
+        # Task 8 起在此关闭 jobs worker。
 
     # ---- 种子（真实写入口；说明见各方法 docstring） ---------------------------
 
@@ -112,9 +115,54 @@ class TestRig:
         access.invalidate_all()
         return access.snapshot_principal(user_id)
 
-    def seed_session(self, principal, source: str = "web") -> str:
-        """真实会话入口创建会话（Task 6 assistant 就绪后接入）。"""
-        raise NotImplementedError("Task 6 接入 assistant 后实现")
+    async def seed_session(self, principal, source: str = "web", external_chat_id: str = "") -> str:
+        """真实会话入口创建会话（Task 6：assistant.create_session）。"""
+        assert self.assistant is not None, "attach_assistant() 后才能使用 seed_session"
+        return await self.assistant.create_session(principal, source=source, external_chat_id=external_chat_id)
+
+    def attach_assistant(self, *, wait_capacity: int = 32) -> None:
+        """装配 AssistantService（FakeRuntime + 已迁移的 access）。"""
+        from backend.modules.assistant.api import AssistantService
+
+        assert self.access is not None, "make_rig(seed_access=True) 后才能 attach_assistant"
+        self.assistant = AssistantService(
+            self.db,
+            runtime=self.runtime,
+            models=None,
+            access=self.access,
+            wait_capacity=wait_capacity,
+        )
+
+    async def start_assistant(self) -> None:
+        assert self.assistant is not None
+        await self.assistant.start()
+
+    async def drain_runs(self, *, max_polls: int = 600) -> None:
+        """推进调度直到无 queued/running/cancel_requested；超限直接失败。"""
+        import asyncio
+
+        from backend.modules.assistant.repository import (
+            RUN_CANCEL_REQUESTED,
+            RUN_QUEUED,
+            RUN_RUNNING,
+        )
+
+        assert self.assistant is not None
+        polls = 0
+        while polls < max_polls:
+            conn = self.db.connect()
+            try:
+                row = conn.execute(
+                    "SELECT count(*) AS c FROM runs WHERE status IN (?,?,?)",
+                    (RUN_QUEUED, RUN_RUNNING, RUN_CANCEL_REQUESTED),
+                ).fetchone()
+            finally:
+                conn.close()
+            if int(row["c"]) == 0:
+                return
+            polls += 1
+            await asyncio.sleep(0.02)
+        raise AssertionError(f"drain_runs 超时：run 未能推进到终态（polls={max_polls}）")
 
 
 def make_rig(

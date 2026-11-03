@@ -301,3 +301,51 @@ tools_decorator 导入纯净性：无 neo4j/pymilvus/chromadb/pymysql；get_proj
 ### 下一项
 
 Task 6：统一 Assistant、run 状态与 Web 兼容。
+
+---
+
+## Task 6：统一Assistant、run状态与Web兼容 — 2026-11-03 完成
+
+**状态：** 已完成（离线 Web 聊天闭环全绿，FakeRuntime）。
+
+### 新建/修改文件
+
+- `backend/modules/assistant/events.py`：`EventBus`——run 内 seq 单调、token 合并（0.05s 窗口）、环形缓存 256帧/256KiB 取小、终态缓冲 TTL 5min、截断后续传先发 stream_reset。
+- `backend/modules/assistant/repository.py`：sessions/runs/conversations 写入口；`create_run` 幂等（UNIQUE(owner,session,source,scope,client_message_id) 命中即 duplicate）；`transition_run` 条件状态机（cancelled 不可被 completed 覆盖）；`finish_run_with_projection`——终态+UI投影+注入回调（投递/学习job）同事务；`request_cancel` 幂等。
+- `backend/modules/assistant/dispatcher.py`：唯一前台 worker（active=1，FIFO 天然会话串行）；取消→runtime.cancel 协作取消，完成后仍落 cancelled；**启动对账**——遗留 running/cancel_requested 标 interrupted 并发事件，不重跑有副作用工具；**热循环防护**——执行异常的 run 立即落 failed（发现并修复了 runs 表缺 updated_at 导致的无限重试）。
+- `backend/modules/assistant/api.py`：`AssistantService.submit/events(iter_events)/cancel/create_session/get_or_create_session/session_messages/history 管理`；submit 校验 validate_principal+chat.use+会话归属+非空+容量（默认等待32，满则 BusyError）；用户输入先落 conversations 投影供 worker 取回。
+- `backend/modules/assistant/routes.py`：旧契约薄适配——GET/POST /chat/stream（token 查询参数/Bearer；thread_id 兼容 `{uid}_{ts}` 旧格式映射 external_chat_id 与新 sess_ id；wx_ 前缀拒绝至 Task 7）、409 busy、`id:{seq}`+`data:` 帧、Last-Event-ID→from_seq=N+1、缓存失效→stream_reset+持久终态（completed 从 conversations 投影取 final_content，不重跑）、chat_complete 后 retry:86400000、GET/POST /chat/cancel、/api/history 列表/详情/改名/删除。
+- `backend/bootstrap.py`：run_startup 装配 AssistantService（runtime+access 就绪时）并 seed；run_shutdown 逆序关闭 assistant→runtime→db。
+- `backend/platform/migrations/0003_runs_updated_at.sql`：runs 补 updated_at 列（0001 遗漏，条件状态机需要）。
+- 测试：`tests/assistant/test_runs.py`（9项：幂等单次执行/投影/跨用户不可见/FIFO顺序/busy/排队取消零执行/运行中取消协作/重启对账/校验）、`tests/contracts/test_web_chat.py`（6项：旧thread_id全流程帧序/409/取消端点/history四端点/未认证401）、`tests/contracts/test_sse.py`（6项：seq单调续传/token合并/截断resync/TTL清理/持久终态）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/assistant tests/contracts tests/storage tests/access tests/usage tests/models tests/architecture -q
+→ 152 passed in 46.75s
+python -m ruff check <新代码> → All checks passed!
+python -m compileall -q backend/modules/assistant backend/bootstrap.py → OK
+```
+
+### 关键决策记录
+
+- **Runtime 协议约定**：事件流必须以 completed/failed/cancelled/interrupted 终态事件结束；无终态结束视为协议违规落 failed（FakeRuntime 测试已遵守）。tool_started 有桥接，tool_finished 尚无（Hermes step 回调语义所限），列为后续改进。
+- **web busy 语义保留**：Web 契约 409 由容量与队列满触发；同会话并发提交由单 worker FIFO 串行（微信队列语义同源，Task 7 复用）。
+- resync 语义：环形缓存缺失时发 stream_reset + 从 conversations 投影取持久 final_content 构造 chat_complete/error 帧——不重新执行 run。
+- 修复过程中发现 runs 表缺 updated_at（0001 遗漏）导致条件 UPDATE 报错、worker 对同一 queued run 无限热循环——加迁移 0003 并给 worker 加失败即落 failed + 退避的护栏。
+
+### 未验证项（含范围偏差声明）
+
+- **main.py 切换推迟到 Task 15**：计划要求本任务末切换 main.py 到新工厂；当前旧 main.py 仍承载 100+ 尚未迁移的保留路由（cron/skills/email/platform-config 等），现在切换会使这些入口不可用，违反 A10（先恢复闭环再删旧实现）。Task 15 完成显式注册后一并切换。
+- 新工厂 OpenAPI 与 144 条保留路由清单比对：等 Task 15 显式装配后导出核对。
+- 真实 Hermes 链路的 /chat/stream 兼容（含 token_refresh、exec_approval 帧）：需真实模型凭证，属 integration。
+- check_env.py 等旧启动辅助未动。
+
+### schema 版本
+
+`0003_runs_updated_at`（0001+0002+0003）。
+
+### 下一项
+
+Task 7：微信与多端归一化、身份绑定和持久去重。
