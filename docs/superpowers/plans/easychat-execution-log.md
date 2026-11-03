@@ -850,3 +850,41 @@ ruff check（app/bootstrap/settings/新测试）→ All checks passed
 ### 下一项
 
 继续 Task 15 剩余：前端页面/API 收敛、旧模块删除与 main.py 切换；之后 Task 16 干净镜像/资源/交付。
+
+---
+
+---
+
+## Task 15（继续）：前端页面收敛与提醒/邮件/投递 API — 2026-11-03（commit `80f0327`）
+
+**状态：** 前端移除与构建验证完成；旧后端模块删除/main.py 切换仍未完成。
+
+### 已完成
+
+- 前端删除 KB/RAG 测评/图谱/图谱审核/社区/技能池/论文复现页面与 API 模块（`kb.ts`、`kbEval.ts`、`graphrag.ts`、`notification.ts`），router/菜单/权限判断同步移除；移除 `@vue-flow/*`、graphology、sigma、vis-* 依赖并更新 package-lock。
+- 新增后端 HTTP 面：`/api/schedules`（提醒 CRUD/停用/实例，默认目标取有效微信绑定，可显式邮箱）、`/api/email/config`+`/recipients`（密码掩码）、`/api/deliveries`（只读状态）；app 显式挂载。
+- `backend/server.py`：新架构启动入口（`uvicorn backend.server:app`），import 不连库/不迁移。
+- 投递更稳健：无渠道时构造 `DisabledDeliverySender` 账本仍可用；email/report 独立于微信装配。
+- 测试：`tests/contracts/test_frontend_compat.py`（前端不得再引用已删 API/路由/依赖）、`test_api_compatibility.py` 扩展 schedules/email/deliveries 路径与 503/权限语义。
+- 前端验证：`npm run type-check` 通过；`npm run build` 通过（仅 chunk 大小警告）。
+
+### 实际命令与结果
+
+```
+npm ci --ignore-scripts --no-audit --no-fund → added 161 packages
+npm run type-check → 通过（0 errors）
+npm run build → ✓ built in 12.99s
+python -m pytest tests/...（新套件） -q → 302 passed in 107.30s
+ruff check（app/bootstrap/routes/新测试）→ All checks passed
+```
+
+### 未完成
+
+- **旧后端模块未删除**：`backend/controller|service|db|rag|graphrag`、旧 mapper/provider、MySQL 启动仍在；旧 main.py 未切换。
+- 144 条保留路由与新 OpenAPI 的逐条核对未完成；旧测试/样本未删除。
+- 前端尚未新增提醒/进化/投递管理页面（API 已就绪；当前只有核心页面收敛）。
+- 真实浏览器联调未做（仅 type-check/build）。
+
+### 下一项
+
+完成旧后端删除/main.py 切换与保留路由核对，然后 Task 16 干净镜像/资源/恢复/最终交付。

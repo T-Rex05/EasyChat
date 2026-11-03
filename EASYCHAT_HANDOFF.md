@@ -18,9 +18,9 @@
 
 ## 已经完成与尚未完成
 
-已完成：Task 0–14；Task 15 的后端显式装配与 API 兼容守卫已完成（新 app 挂载 access/usage/assistant/channels/memory/skills/evolution）。新架构测试当前 **299 passed**；逐任务证据、commit 与未验证项见 `docs/superpowers/plans/easychat-execution-log.md`，当前进度与交接要点见 `EASYCHAT_PROGRESS.md`。
+已完成：Task 0–14；Task 15 的显式路由装配、前端移除/构建、提醒/邮件/投递 API 已完成。新架构测试当前 **302 passed**，前端 `type-check`/`build` 通过；逐任务证据、commit 与未验证项见 `docs/superpowers/plans/easychat-execution-log.md`，当前进度与交接要点见 `EASYCHAT_PROGRESS.md`。
 
-未完成：Task 15 剩余（前端页面/API 收敛、旧模块删除、main.py 切换、144 路由逐条核对）与 Task 16（干净镜像/资源/恢复/最终交付）；真实 LLM/微信/MCP/SMTP/PDF 未联调；真实 Runner 隔离未验收，自动执行保持关闭；新仓库未推送。
+未完成：Task 15 剩余（旧后端删除、main.py 切换、144 路由核对）与 Task 16（干净镜像/资源/恢复/最终交付）；真实 LLM/微信/MCP/SMTP/PDF 未联调；真实 Runner 隔离未验收，自动执行保持关闭；新仓库未推送。
 
 没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
 

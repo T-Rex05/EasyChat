@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 32（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14 完成；Task 15 后端装配部分完成（前端/旧模块删除未做）** |
-| 下一任务 | **Task 15 剩余：前端页面/API 收敛、旧模块删除、main.py 切换；之后 Task 16** |
+| 提交数 | 34（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14 完成；Task 15：显式装配 + 前端移除/构建 + 提醒/邮件/投递 API 完成；旧模块删除/main.py 切换未做** |
+| 下一任务 | **Task 15 剩余：旧后端删除、main.py 切换、144 路由核对；之后 Task 16** |
 | 未开始 | Task 15 剩余、Task 16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **299 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑** |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 `npm run type-check` / `npm run build` 通过 |
 
-最近提交：`986c5d3`(Task 15 装配) `cfd8a41`(Task 14 docs) `10ffc03`(Task 14) `24c6f77`(Task 13 docs) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `f276cba`(Task 15 docs) `10ffc03`(Task 14) `24c6f77`(Task 13) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -74,15 +74,17 @@ backend/
 32. **回放必须零副作用**：验证 replayer 由注入替身提供，测试断言不产生 deliveries/runs；真实执行必须等 Task 13 Runner 隔离验收。
 33. **Runner 默认 disabled**：没有通过真实 Linux 隔离验收前，任何脚本执行请求都返回 denied；子进程+参数过滤不等于安全隔离，自动执行保持关闭。
 34. **邮件/PDF 先 artifact 后投递**：PDF 未启用/缺依赖时明确失败且不建 artifact；SMTP 未启用不建连；密码只存 AES-GCM 密文，发送失败只重试同一文件。
+35. **前端依赖缺失时先 `npm ci`**：`node_modules` 未入库；`package-lock.json` 是唯一锁。删除 KB/图谱/论文页面后同步删 `src/api/{kb,kbEval,graphrag,notification}.ts` 与 package 依赖，并跑 `npm run type-check`+`npm run build` 验证。
+36. **无渠道也要有投递账本**：bootstrap 用 `DisabledDeliverySender` 构造 DeliveryService，避免邮件/提醒因微信未启用而 503；真正发送前仍校验目标。
 
-## 四、Task 15 剩余实施要点
+## 四、Task 15 剩余与 Task 16
 
-后端显式装配已完成（`986c5d3`）：新 app 已挂载 access/usage/assistant/channels/memory/skills/evolution，未就绪返回 503；启动自动构造 access/usage。剩余：
+已完成（`986c5d3`、`80f0327`）：新 app 显式挂载 access/usage/assistant/channels/scheduling/delivery/email/memory/skills/evolution；前端删除 KB/图谱/论文/社区/技能池页面与依赖，type-check/build 通过；提醒/邮件/投递 API 就绪。
 
-- **前端**：`agent_frontend/node_modules` 不存在，先在可联网环境安装锁定依赖，再收敛聊天/历史、RBAC、Token 榜、邮件/PDF、技能、提醒、记忆、运行/进化页面与菜单；删除 KB/图谱/论文/社区/SQL 页面与请求；执行 `npm run type-check`、`npm run build`。
-- **旧模块删除**：迁移保留路由（cron/skills/email/platform-config 等）到新模块后，切换 main.py 到 `backend.app.create_app`；删除 backend/controller|service|db 的旧 mapper/provider/MySQL 启动与 KB/图谱/论文/社区/SQL 专用路由；删对应旧测试/样本；保持旧库不作为运行时依赖。
-- **契约核对**：新 app OpenAPI 与 144 条保留路由逐条比对；`tests/architecture/test_removed_dependencies.py` 扩展为实际目录不存在/无 import；默认全量测试不得残留已删模块 import。
-- **Task 16**：单 worker Docker/持久卷、资源采样、干净环境启动、恢复验收与最终交付文档。
+剩余：
+- **旧后端删除/main.py 切换**：先迁移仍保留的旧入口（cron 表达式、文件上传、审计/部门、host whitelist/command blacklist），再把 main.py 切到 `backend.server:app`；删除旧 controller/service/db/rag/graphrag、旧 mapper/provider、MySQL/Redis 启动；删旧测试与样本，确保默认测试无旧模块 import。
+- **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录。
+- **Task 16**：单 worker Docker/持久卷、资源采样（主进程 RSS<1GiB 目标）、干净环境启动、state.db/app.db 中断恢复验收、最终交付文档与未验证项清单。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -99,6 +101,7 @@ backend/
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
 - 脚本 Runner 契约完成但真实 Linux 隔离未验收（Task 13）——自动执行继续保持关闭。
 - 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调。
-- 新 app 显式路由已装配，但生产启动仍需设置 JWT/Hermes/模型配置；未配置 Runtime 时聊天返回 503（预期）。
-- 前端未迁移，`agent_frontend/node_modules` 不存在，无法离线 type-check/build；旧 KB/图谱/论文/社区/SQL 模块、旧 mapper/provider、旧 main.py 路由仍存在，Task 15 未完成。
+- 新 app 显式路由已装配；未配置 Runtime 时聊天 503（预期）；生产需设置 JWT/Hermes/模型配置。
+- 前端 type-check/build 已通过，但真实浏览器联调未做；提醒/进化/投递暂无专门页面。
+- 旧 KB/图谱/论文/社区/SQL 模块、旧 mapper/provider、旧 main.py 路由仍存在，main.py 未切换，Task 15 未完成。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。
