@@ -24,36 +24,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create' },
   },
   {
-    path: '/knowledge',
-    name: 'Knowledge',
-    component: () => import('../views/KnowledgeView.vue'),
-    meta: { title: '知识库', icon: '', requiresAuth: true, permission: 'kb.manage' },
-  },
-  {
-    path: '/kb-eval',
-    name: 'KbEval',
-    component: () => import('../views/KnowledgeEvalView.vue'),
-    meta: { title: 'RAG 测评', icon: '', requiresAuth: true, permission: 'kb.eval' },
-  },
-  {
-    path: '/graph',
-    name: 'GraphRAG',
-    component: () => import('../views/GraphView.vue'),
-    meta: { title: '知识图谱', icon: '', requiresAuth: true, permission: 'graph.manage' },
-  },
-  {
-    path: '/kg-review',
-    name: 'KgReview',
-    component: () => import('../views/KgReviewView.vue'),
-    meta: { title: '图谱审核', icon: '', requiresAuth: true, permission: 'graph.manage' },
-  },
-  {
-    path: '/communities',
-    name: 'Communities',
-    component: () => import('../views/CommunityView.vue'),
-    meta: { title: '社区管理', icon: '', requiresAuth: true, permission: 'graph.manage' },
-  },
-  {
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryItemsView.vue'),
@@ -64,12 +34,6 @@ const routes: RouteRecordRaw[] = [
     name: 'MemoryDashboard',
     component: () => import('../views/MemoryDashboardView.vue'),
     meta: { title: '记忆监控', icon: '', requiresAuth: true, permission: 'memory.view' },
-  },
-  {
-    path: '/pool-review',
-    name: 'PoolReview',
-    component: () => import('../views/PoolReviewView.vue'),
-    meta: { title: '技能池审核', icon: '', requiresAuth: true, permission: 'skill.pool.review' },
   },
   {
     path: '/trace',
@@ -94,12 +58,6 @@ const routes: RouteRecordRaw[] = [
     name: 'Config',
     component: () => import('../views/ConfigView.vue'),
     meta: { title: '系统配置', icon: '', requiresAuth: true, permission: 'system.config' },
-  },
-  {
-    path: '/paper-reproduction',
-    name: 'PaperReproduction',
-    component: () => import('../views/paper-reproduction/PaperReproductionView.vue'),
-    meta: { title: '论文复现', icon: '', requiresAuth: true, permission: 'paper.use' },
   },
 ]
 

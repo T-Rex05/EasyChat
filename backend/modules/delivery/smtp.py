@@ -8,7 +8,10 @@ import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Header
+from pydantic import BaseModel
 
 from backend.modules.delivery.contracts import DeliveryTarget, SendResult
 from backend.platform.sqlite import Database, utc_now_iso
@@ -28,6 +31,23 @@ class EmailConfigView:
     use_tls: bool
     enabled: bool
     updated_at: str
+
+
+class EmailConfigBody(BaseModel):
+    host: str
+    port: int = 587
+    username: str = ""
+    password: str | None = None
+    sender_email: str
+    sender_name: str = "EasyChat"
+    use_tls: bool = True
+    enabled: bool = False
+
+
+class EmailRecipientBody(BaseModel):
+    name: str = ""
+    address: str
+    owner_id: int | None = None
 
 
 class EmailRepository:
@@ -249,3 +269,56 @@ class SmtpEmailSender:
                 server.quit()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def build_email_router(service: EmailService, authenticate: Any) -> APIRouter:
+    """邮件配置/收件人 HTTP 路由；不返回密码明文。"""
+    from backend.shared.errors import UnauthenticatedError
+
+    def _principal(authorization: str | None):
+        token = (authorization or "").replace("Bearer ", "").strip()
+        if not token:
+            raise UnauthenticatedError("请先登录")
+        return authenticate(token)
+
+    def _view(view: EmailConfigView) -> dict[str, Any]:
+        return {
+            "host": view.host, "port": view.port, "username": view.username,
+            "password_masked": view.password_masked, "sender_email": view.sender_email,
+            "sender_name": view.sender_name, "use_tls": view.use_tls,
+            "enabled": view.enabled, "updated_at": view.updated_at,
+        }
+
+    router = APIRouter(prefix="/api/email", tags=["email"])
+
+    @router.get("/config")
+    async def get_config(authorization: Annotated[str | None, Header()] = None):
+        return _view(service.get_config(_principal(authorization)))
+
+    @router.put("/config")
+    async def save_config(body: EmailConfigBody,
+                          authorization: Annotated[str | None, Header()] = None):
+        return _view(service.save_config(_principal(authorization), **body.model_dump()))
+
+    @router.get("/recipients")
+    async def list_recipients(owner_id: int | None = None,
+                              authorization: Annotated[str | None, Header()] = None):
+        return {"recipients": service.list_recipients(
+            _principal(authorization), owner_id=owner_id,
+        )}
+
+    @router.post("/recipients")
+    async def add_recipient(body: EmailRecipientBody,
+                            authorization: Annotated[str | None, Header()] = None):
+        return {"recipient": service.add_recipient(
+            _principal(authorization), name=body.name, address=body.address,
+            owner_id=body.owner_id,
+        )}
+
+    @router.delete("/recipients/{recipient_id}")
+    async def delete_recipient(recipient_id: str, owner_id: int | None = None,
+                               authorization: Annotated[str | None, Header()] = None):
+        service.deactivate(_principal(authorization), recipient_id, owner_id=owner_id)
+        return {"ok": True}
+
+    return router

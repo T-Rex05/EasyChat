@@ -14,6 +14,7 @@ from typing import Any
 from backend.modules.channels.contracts import (
     ACCOUNT_ACTIVE,
     ACCOUNT_DISABLED,
+    BINDING_ACTIVE,
     BINDING_DISABLED,
     DEFAULT_FINGERPRINT_WINDOW_SECONDS,
     EVENT_PROCESSED,
@@ -332,6 +333,24 @@ class ChannelService:
             return False
         resolved = self.repo.find_active_binding(account.platform, account.account_id, external_user_id)
         return resolved is not None and int(resolved[1].get("status") or 0) == 1
+
+    def delivery_target_for_owner(self, owner_id: int) -> dict[str, str] | None:
+        """用户默认微信目标：取该 owner 第一个有效绑定且账号启用。"""
+        for row in self.repo.list_bindings(owner_id):
+            if str(row.get("status") or "") != BINDING_ACTIVE:
+                continue
+            account = self.repo.get_account_by_platform_id(
+                str(row["platform"]), str(row["account_id"])
+            )
+            if account is None or account.status != ACCOUNT_ACTIVE:
+                continue
+            return {
+                "kind": str(row["platform"]),
+                "ref": str(row["external_user_id"]),
+                "channel_account_id": account.id,
+                "context_token": "",
+            }
+        return None
 
     async def send_wechat_text(
         self, *, account_pk: str, external_user_id: str, text: str, context_token: str = ""

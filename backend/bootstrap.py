@@ -35,6 +35,8 @@ class ModuleRegistry:
     channels: Any | None = None  # Task 7
     delivery: Any | None = None  # Task 8
     delivery_worker: Any | None = None  # Task 8（唯一投递 worker）
+    email: Any | None = None  # Task 14
+    report: Any | None = None  # Task 14
     scheduling: Any | None = None  # Task 8
     scheduler: Any | None = None  # Task 8（唯一提醒调度器）
     memory: Any | None = None  # Task 9
@@ -129,18 +131,21 @@ async def run_startup(registry: ModuleRegistry) -> None:
             )
 
     # Task 8：投递账本 + 唯一投递 worker + 唯一提醒调度器。
-    # 没有渠道发送器时不构造（避免“看似启用、实际发不出”）。
-    if registry.channels is not None and registry.assistant is not None:
+    # 无渠道时仍构造账本（email 能力独立），但 sender 显式拒绝而非静默成功。
+    if registry.access is not None:
         from backend.modules.delivery.api import DeliveryService
-        from backend.modules.delivery.wechat import WeChatTextSender
+        from backend.modules.delivery.wechat import DisabledDeliverySender, WeChatTextSender
         from backend.modules.delivery.worker import DeliveryWorker
 
-        registry.delivery = DeliveryService(
-            db, sender=WeChatTextSender(registry.channels),
+        sender = (
+            WeChatTextSender(registry.channels)
+            if registry.channels is not None else DisabledDeliverySender()
         )
+        registry.delivery = DeliveryService(db, sender=sender)
         registry.delivery_worker = DeliveryWorker(registry.delivery)
         await registry.delivery_worker.start()
-        registry.assistant.dispatcher.on_run_finished = _make_run_finished(registry)
+        if registry.assistant is not None:
+            registry.assistant.dispatcher.on_run_finished = _make_run_finished(registry)
 
         from backend.modules.scheduling.api import SchedulingService
         from backend.modules.scheduling.scheduler import Scheduler
@@ -151,6 +156,23 @@ async def run_startup(registry: ModuleRegistry) -> None:
         )
         registry.scheduler = Scheduler(registry.scheduling)
         await registry.scheduler.start()
+
+    # Task 14：邮件配置/报告能力（与渠道解耦；缺少部署密钥时保持不可用）。
+    if registry.access is not None and registry.settings.encryption_secret:
+        from backend.modules.delivery.smtp import EmailService
+
+        registry.email = EmailService(
+            db, access=registry.access,
+            encryption_secret=registry.settings.encryption_secret,
+        )
+        if registry.delivery is not None:
+            from backend.integrations.pdf import build_pdf_renderer
+            from backend.modules.delivery.reports import ReportService
+
+            registry.report = ReportService(
+                delivery=registry.delivery, renderer=build_pdf_renderer(registry.settings),
+                artifacts_dir=registry.settings.artifacts_dir,
+            )
 
     # Task 9：记忆服务与幂等信号 worker（runtime 桥接见 runtime/hermes/memory_bridge.py）。
     if registry.access is not None:
@@ -223,6 +245,10 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.report is not None:
+        registry.report = None
+    if registry.email is not None:
+        registry.email = None
     if registry.adoption is not None:
         registry.adoption = None
     if registry.evolution_worker is not None:

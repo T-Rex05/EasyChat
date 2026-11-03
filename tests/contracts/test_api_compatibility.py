@@ -31,7 +31,8 @@ async def test_explicit_routes_and_health(client):
     assert (await c.get("/readyz")).status_code == 200
     paths = set(app.openapi()["paths"])
     assert {"/api/auth/login", "/api/memory", "/api/skills", "/api/channels/accounts",
-            "/api/usage/ranking", "/chat/stream"}.issubset(paths)
+            "/api/usage/ranking", "/chat/stream", "/api/schedules",
+            "/api/email/config", "/api/deliveries"}.issubset(paths)
 
 
 async def test_removed_module_prefixes_not_mounted(client):
@@ -57,6 +58,14 @@ async def test_register_login_and_memory_ownership(client):
     assert (await c.get("/api/memory", headers=headers)).status_code == 200
     assert (await c.get("/api/skills", headers=headers)).status_code == 200
     assert (await c.get("/api/usage/ranking", headers=headers)).status_code == 200
+    assert (await c.get("/api/deliveries", headers=headers)).status_code == 200
+    # 未配置部署密钥/渠道时，邮件模块明确 503；配置后普通用户 403
+    assert (await c.get("/api/email/config", headers=headers)).status_code == 503
+    assert (await c.get("/api/schedules", headers=headers)).status_code == 200
+    no_target = await c.post("/api/schedules", headers=headers, json={
+        "text": "喝水", "every_seconds": 60,
+    })
+    assert no_target.status_code == 503
 
 
 async def test_assistant_route_reports_unavailable_without_runtime(client):

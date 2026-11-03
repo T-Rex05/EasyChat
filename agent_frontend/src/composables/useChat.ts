@@ -7,7 +7,7 @@ import { generateUUID } from '@/utils/uuid'
 import type { Message, ChatCallbacks, ChatImage, ThinkingProcess, SubagentTask } from '@/types/chat'
 
 /** 将后端 process_log JSON 字符串解析为 ThinkingProcess 数组 */
-function parseProcessLog(processLog?: string): { content: string; timestamp: string }[] {
+export function parseProcessLog(processLog?: string): { content: string; timestamp: string }[] {
   if (!processLog) return []
   try {
     const items = JSON.parse(processLog)
@@ -24,13 +24,13 @@ function parseProcessLog(processLog?: string): { content: string; timestamp: str
   }
 }
 
-function truncate(s: any, maxLen: number): string {
+export function truncate(s: any, maxLen: number): string {
   const str = typeof s === 'string' ? s : JSON.stringify(s || '')
   return str.length > maxLen ? str.slice(0, maxLen) + '...' : str
 }
 
 /** 合并已有流式思考步骤和后端补全步骤，按内容去重 */
-function mergeThinkingSteps(
+export function mergeThinkingSteps(
   existing: ThinkingProcess[],
   backend: ThinkingProcess[],
 ): ThinkingProcess[] {

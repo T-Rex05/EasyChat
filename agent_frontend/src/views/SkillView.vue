@@ -129,9 +129,6 @@
                     <span v-if="skill.locked" class="lock-badge" title="已锁定">🔒</span>
                   </div>
                   <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
-                  <div class="skill-item-actions" @click.stop>
-                    <button v-if="canShare" class="btn-icon" @click="handleForcePublish(skill)" title="强制发布到池">📤</button>
-                  </div>
                 </div>
               </div>
             </template>
@@ -762,12 +759,6 @@ function getFileIcon(path: string): string {
   return '📄'
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
 // 快捷模板
 const QUICK_TEMPLATES = [
   { path: 'references/api-guide.md', content: '# API 参考文档\n\n## 接口列表\n\n### GET /api/example\n\n**描述**: 示例接口\n\n**参数**:\n- `param1` (string, required): 参数说明\n\n**返回**:\n```json\n{\n  "code": 200,\n  "data": {}\n}\n```\n' },
@@ -1367,20 +1358,6 @@ async function handlePublish(name: string) {
     alert(resp && resp.status === 'active'
       ? `✅ 技能 "${name}" 已发布并直接上架（您拥有审核权限，无需审核）`
       : `技能 "${name}" 已发布到技能池，等待管理员审核`)
-  } catch (e) {
-    alert('发布失败: ' + errMsg(e))
-  }
-}
-
-async function handleForcePublish(skill: any) {
-  if (!confirm(`强制将 "${skill.name}" 发布到技能池？（跳过审核，直接上架）`)) return
-  try {
-    await request.post('/api/admin/pool/force-publish', {
-      content_type: 'skill',
-      content_name: skill.name,
-      owner_id: skill.owner_id
-    })
-    alert(`✅ "${skill.name}" 已强制发布到技能池`)
   } catch (e) {
     alert('发布失败: ' + errMsg(e))
   }

@@ -137,8 +137,8 @@
           <div class="scene-add-row" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px;">
             <select v-model="newSceneKey" class="select select-sm" style="width:240px;">
               <option value="">选择场景...</option>
-              <optgroup v-for="([catKey, group], idx) in groupedScenes" :key="catKey" :label="`${group.category.icon} ${group.category.name}`">
-                <option v-for="scene in group.scenes" :key="scene.key" :value="scene.key" :disabled="sceneRouting[scene.key]">
+              <optgroup v-for="([catKey, group]) in groupedScenes" :key="catKey" :label="`${group.category.icon} ${group.category.name}`">
+                <option v-for="scene in group.scenes" :key="scene.key" :value="scene.key" :disabled="!!sceneRouting[scene.key]">
                   {{ scene.name }}{{ sceneRouting[scene.key] ? ' (已配置)' : '' }}
                 </option>
               </optgroup>

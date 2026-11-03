@@ -13,6 +13,23 @@ from backend.modules.delivery.contracts import DeliveryTarget, SendResult
 logger = logging.getLogger(__name__)
 
 
+class DisabledDeliverySender:
+    """无渠道时的显式 sender：不接受投递，避免静默成功。"""
+
+    async def can_deliver(self, target: DeliveryTarget) -> bool:
+        return False
+
+    async def send_text(
+        self, target: DeliveryTarget, text: str, *, context_token: str = ""
+    ) -> SendResult:
+        return SendResult.failed("未配置任何渠道发送器")
+
+    async def send_artifact(
+        self, target: DeliveryTarget, artifact_path: str, *, subject: str, body: str = ""
+    ) -> SendResult:
+        return SendResult.failed("未配置任何渠道发送器")
+
+
 class WeChatTextSender:
     def __init__(self, channels: Any) -> None:
         self.channels = channels
