@@ -7,11 +7,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = REPO_ROOT / "agent_frontend"
 SRC = FRONTEND / "src"
-REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community")
+REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community", "/api/memories")
 REMOVED_ROUTES = ("/knowledge", "/kb-eval", "/graph", "/kg-review", "/communities",
-                  "/pool-review", "/paper-reproduction")
+                  "/pool-review", "/paper-reproduction", "/memory-dashboard")
 REMOVED_VIEW_FILES = ("KnowledgeView.vue", "KnowledgeEvalView.vue", "GraphView.vue",
-                      "KgReviewView.vue", "CommunityView.vue", "PoolReviewView.vue")
+                      "KgReviewView.vue", "CommunityView.vue", "PoolReviewView.vue",
+                      "MemoryItemsView.vue", "MemoryDashboardView.vue")
 REMOVED_PACKAGES = ("@vue-flow/core", "graphology", "sigma", "vis-network")
 
 
@@ -34,6 +35,8 @@ def test_router_and_views_removed():
     for name in REMOVED_VIEW_FILES:
         assert not (SRC / "views" / name).exists(), name
     assert not (SRC / "views" / "paper-reproduction").exists()
+    assert not (SRC / "api" / "memoryItems.ts").exists()
+    assert not (SRC / "api" / "memory.ts").exists()
 
 
 def test_removed_graph_packages_gone():

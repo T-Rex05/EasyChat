@@ -26,14 +26,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/memory',
     name: 'Memory',
-    component: () => import('../views/MemoryItemsView.vue'),
+    component: () => import('../views/MemoryView.vue'),
     meta: { title: '记忆管理', icon: '', requiresAuth: true, permission: 'memory.edit' },
-  },
-  {
-    path: '/memory-dashboard',
-    name: 'MemoryDashboard',
-    component: () => import('../views/MemoryDashboardView.vue'),
-    meta: { title: '记忆监控', icon: '', requiresAuth: true, permission: 'memory.view' },
   },
   {
     path: '/trace',
