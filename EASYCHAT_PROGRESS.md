@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 43（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14、Task 16 完成；Task 15：装配/前端收敛/提醒邮件投递模型 API/记忆/Skills/提醒/用量页完成；旧模块删除与 main.py 切换未做** |
-| 下一任务 | **Task 15 收尾：Admin 平台/邮箱迁移、旧模块删除、main.py 切换、144 路由核对** |
+| 提交数 | 44（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14、Task 16 完成；Task 15：装配/前端收敛/提醒邮件投递模型 API/记忆/Skills/提醒/用量/平台/邮箱/Admin 完成；chat/session 旧形状与旧模块删除未做** |
+| 下一任务 | **Task 15 收尾：chat/session/history、AuditLog、旧模块删除、main.py 切换** |
 | 未开始 | Task 15 收尾 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 type-check/build 通过；Docker 构建/启动/Hermes ready 已验证 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **303 passed**；前端 type-check/build 通过；Docker 构建/启动/Hermes ready 已验证 |
 
-最近提交：`64ad70d`(移除旧 Cron/用量页) `0b6bf64`(提醒页/删除) `25b0eb7`(Skills 页) `27da0d3`(记忆页) `94dbf38`(SPA/Hermes) `979187d`(Task 16) `0367cca`(模型路由) `80f0327`(前端/API) `986c5d3`(装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`b3ca11d`(平台/邮箱/Admin) `64ad70d`(旧 Cron/用量) `0b6bf64`(提醒) `25b0eb7`(Skills) `27da0d3`(记忆) `94dbf38`(SPA/Hermes) `979187d`(Task 16) `0367cca`(模型路由) `80f0327`(前端/API) `986c5d3`(装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -86,7 +86,7 @@ Task 16 已完成：单 worker 镜像 `docker build` 成功（496MB），容器 
 Task 15 剩余：
 - **旧后端删除/main.py 切换**：先迁移仍保留的旧入口（cron 表达式、文件上传、审计/部门、host whitelist/command blacklist），再把 main.py 切到 `backend.server:app`；删除旧 controller/service/db/rag/graphrag、旧 mapper/provider、MySQL/Redis 启动；删旧测试与样本，确保默认测试无旧模块 import。
 - **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录（当前约 130 条旧路由未迁移）。
-- **前端补充**：Admin 平台配置/部门/个人邮箱仍用旧接口；Config SMTP 测试仍走 `/api/platform-config/email/test`；进化/投递管理暂无页面。
+- **前端补充**：chat/session/history 仍用旧 `/api/data/sessions` 与上传/反馈/exec-approval；AuditLogView 仍用旧 admin 操作接口；进化/投递管理暂无页面。
 
 ## 五、已知未验证项（不要声称已完成）
 

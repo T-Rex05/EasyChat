@@ -1025,3 +1025,25 @@ Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路�
 ### 下一项
 
 迁移 Admin 平台配置/邮箱到新 channels/email API，随后切换 main.py 并删除旧模块。
+
+---
+
+---
+
+## Task 15（继续 6）：平台/邮箱/Admin 移除旧接口 — 2026-11-03（commit `b3ca11d`）
+
+### 已完成
+
+- `api/platform.ts` 重写：平台账号走 `/api/channels/accounts`，扫码走 `/api/channels/wechat/qr/*`，用户绑定走 `/api/channels/bindings`；不再调用 `/api/platform-config/*`、`/api/user-bindings`。
+- 新增邮件兼容路由（`build_email_compat_router`）：`/api/email-configs*`、`/api/personal-emails*`、`/api/platform-config/email/test` 全部落到新 `EmailService`；密码只出掩码，SMTP 真实测试 503。
+- Admin 移除部门（data-layers）/主机白名单/命令黑名单标签与组件；用户页删除 data-layer 编辑；`admin.ts` 删除 pool/data-layers 导出。
+- 测试：新增邮件兼容 API 流程（super_admin 保存配置→掩码→添加收件人）；全量 **303 passed**；type-check/build 通过。
+
+### 未完成
+
+- Chat/session 仍调用 `/api/data/sessions`、`/api/history/{id}` 旧形状与上传/反馈/exec-approval；AuditLogView 仍调用 `/api/admin/agent-operations` 等。
+- 旧后端模块/main.py 未切换。
+
+### 下一项
+
+迁移 chat/session/history 与 AuditLog，随后切换 main.py 并删除旧模块。
