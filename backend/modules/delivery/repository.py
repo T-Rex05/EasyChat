@@ -43,6 +43,7 @@ def _lease_from_row(row: Any, attempts: int) -> DeliveryLease:
         artifact_id=str(d.get("artifact_id") or ""),
         attempts=attempts,
         max_attempts=int(d.get("max_attempts") or 5),
+        subject=str(d.get("subject") or ""),
     )
 
 
@@ -62,6 +63,7 @@ class DeliveryRepository:
         source: str = "wechat",
         run_id: str = "",
         artifact_id: str = "",
+        subject: str = "",
         delay_seconds: float = 0.0,
         now: float = 0.0,
     ) -> str:
@@ -70,7 +72,8 @@ class DeliveryRepository:
                 conn,
                 owner_id=owner_id, target=target, content_text=content_text,
                 dedup_key=dedup_key, source=source, run_id=run_id,
-                artifact_id=artifact_id, delay_seconds=delay_seconds, now=now,
+                artifact_id=artifact_id, subject=subject,
+                delay_seconds=delay_seconds, now=now,
             )
 
     def enqueue_in_transaction(
@@ -84,6 +87,7 @@ class DeliveryRepository:
         source: str = "wechat",
         run_id: str = "",
         artifact_id: str = "",
+        subject: str = "",
         delay_seconds: float = 0.0,
         now: float = 0.0,
     ) -> str:
@@ -97,13 +101,13 @@ class DeliveryRepository:
         now_iso = utc_now_iso()
         conn.execute(
             "INSERT INTO deliveries(id, owner_id, run_id, source, target_kind, target_ref, "
-            "channel_account_id, context_token, content_text, artifact_id, dedup_key, status, "
+            "channel_account_id, context_token, content_text, artifact_id, subject, dedup_key, status, "
             "attempts, next_attempt_at, error, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)",
             (
                 delivery_id, owner_id, run_id or None, source, target.kind, target.ref,
                 target.channel_account_id, target.context_token, content_text, artifact_id or None,
-                dedup_key, DELIVERY_PENDING, max(0.0, now) + delay_seconds, "", now_iso, now_iso,
+                subject, dedup_key, DELIVERY_PENDING, max(0.0, now) + delay_seconds, "", now_iso, now_iso,
             ),
         )
         return delivery_id
@@ -133,6 +137,7 @@ class DeliveryRepository:
                 delivery_id=lease.delivery_id, owner_id=lease.owner_id, run_id=lease.run_id,
                 source=lease.source, target=lease.target, content_text=lease.content_text,
                 artifact_id=lease.artifact_id, attempts=attempts, max_attempts=max_attempts,
+                subject=lease.subject,
             )
 
     def finish(

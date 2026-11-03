@@ -9,6 +9,7 @@ from backend.modules.delivery.contracts import DeliveryTarget, SendResult
 class FakeSender:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.artifacts: list[dict[str, Any]] = []
         self.scripted: list[Any] = []
         self.deliverable = True
         self.can_deliver_calls = 0
@@ -28,6 +29,19 @@ class FakeSender:
         })
         if not self.scripted:
             return SendResult.sent(external_id=f"ext-{len(self.sent)}")
+        item = self.scripted.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def send_artifact(
+        self, target: DeliveryTarget, artifact_path: str, *, subject: str, body: str = ""
+    ) -> SendResult:
+        self.artifacts.append({
+            "target": target, "path": artifact_path, "subject": subject, "body": body,
+        })
+        if not self.scripted:
+            return SendResult.sent(external_id=f"art-{len(self.artifacts)}")
         item = self.scripted.pop(0)
         if isinstance(item, Exception):
             raise item

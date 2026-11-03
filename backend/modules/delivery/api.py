@@ -64,6 +64,7 @@ class DeliveryService:
         source: str = "wechat",
         run_id: str = "",
         artifact_id: str = "",
+        subject: str = "",
         delay_seconds: float = 0.0,
     ) -> str:
         if not target.kind or not target.ref:
@@ -72,7 +73,7 @@ class DeliveryService:
             raise InvalidInputError("投递内容为空")
         return self.repo.enqueue(
             owner_id=owner_id, target=target, content_text=text, dedup_key=dedup_key,
-            source=source, run_id=run_id, artifact_id=artifact_id,
+            source=source, run_id=run_id, artifact_id=artifact_id, subject=subject,
             delay_seconds=delay_seconds, now=self.clock(),
         )
 
@@ -102,11 +103,12 @@ class DeliveryService:
         text: str,
         dedup_key: str,
         source: str = "schedule",
+        subject: str = "",
     ) -> str:
         """供 scheduling 在同一事务内写“实例 + 投递”的窄协调入口。"""
         return self.repo.enqueue_in_transaction(
             conn, owner_id=owner_id, target=target, content_text=text,
-            dedup_key=dedup_key, source=source, now=self.clock(),
+            dedup_key=dedup_key, source=source, subject=subject, now=self.clock(),
         )
 
     # ---- 发送 ------------------------------------------------------------------
@@ -133,6 +135,10 @@ class DeliveryService:
             )
             return
 
+        if lease.artifact_id:
+            await self._deliver_artifact(lease)
+            return
+
         chunks = split_text(lease.content_text, self.chunk_chars) or [""]
         parts = self.repo.ensure_parts(lease.delivery_id, chunks)
         for part in parts:
@@ -151,26 +157,54 @@ class DeliveryService:
                 continue
 
             self.repo.mark_part_failed(lease.delivery_id, seq, result.error or "发送失败")
-            if result.uncertain:
-                self.repo.finish(
-                    lease.delivery_id, status=DELIVERY_UNCERTAIN,
-                    error=result.error or "发送结果不确定",
-                )
-                return
-            if result.retryable and lease.attempts < lease.max_attempts:
-                delay = self.retry_delays[min(lease.attempts - 1, len(self.retry_delays) - 1)]
-                self.repo.set_retry(
-                    lease.delivery_id, next_attempt_at=self.clock() + delay,
-                    error=result.error or "发送失败，稍后重试",
-                )
-                return
-            self.repo.finish(
-                lease.delivery_id, status=DELIVERY_FAILED,
-                error=result.error or "发送失败且不可重试",
-            )
+            self._finish_result(lease, result)
             return
 
         self.repo.finish(lease.delivery_id, status=DELIVERY_SENT, sent_at=True)
+
+    async def _deliver_artifact(self, lease: DeliveryLease) -> None:
+        try:
+            artifact = self.repo.get_artifact(lease.artifact_id)
+        except NotFoundError:
+            self.repo.finish(lease.delivery_id, status=DELIVERY_FAILED, error="投递产物不存在")
+            return
+        sender = getattr(self.sender, "send_artifact", None)
+        if sender is None:
+            self.repo.finish(
+                lease.delivery_id, status=DELIVERY_FAILED,
+                error="当前发送器不支持附件投递",
+            )
+            return
+        try:
+            result = await sender(
+                lease.target, str(artifact["file_path"]),
+                subject=lease.subject or "EasyChat 报告", body=lease.content_text,
+            )
+        except Exception as exc:  # noqa: BLE001  外部调用异常=结果未知
+            result = SendResult.unsure(f"附件发送异常: {exc}")
+        self._finish_result(lease, result)
+
+    def _finish_result(self, lease: DeliveryLease, result: SendResult) -> None:
+        if result.ok:
+            self.repo.finish(lease.delivery_id, status=DELIVERY_SENT, sent_at=True)
+            return
+        if result.uncertain:
+            self.repo.finish(
+                lease.delivery_id, status=DELIVERY_UNCERTAIN,
+                error=result.error or "发送结果不确定",
+            )
+            return
+        if result.retryable and lease.attempts < lease.max_attempts:
+            delay = self.retry_delays[min(lease.attempts - 1, len(self.retry_delays) - 1)]
+            self.repo.set_retry(
+                lease.delivery_id, next_attempt_at=self.clock() + delay,
+                error=result.error or "发送失败，稍后重试",
+            )
+            return
+        self.repo.finish(
+            lease.delivery_id, status=DELIVERY_FAILED,
+            error=result.error or "发送失败且不可重试",
+        )
 
     # ---- 查询 ------------------------------------------------------------------
 

@@ -85,6 +85,7 @@ class DeliveryLease:
     artifact_id: str
     attempts: int
     max_attempts: int
+    subject: str = ""
 
 
 @dataclass(frozen=True, slots=True)
