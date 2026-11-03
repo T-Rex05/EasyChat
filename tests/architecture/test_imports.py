@@ -38,7 +38,6 @@ LEGACY_FORBIDDEN_IMPORTS: dict[str, str] = {
     "service/kb/claim_vectorstore.py": "KB向量存储；R03 移除",
     "service/kb/entity_vectorstore.py": "KB向量存储；R03 移除",
     "service/kb/kb_retriever.py": "KB检索；R03 移除",
-    "controller/model_config_controller.py": "引用backend.rag.embeddings做多模态探测；R03后随迁移移除",
     "graphrag/community_reporter.py": "引用backend.rag.embeddings；R03 移除",
     "rag/__init__.py": "RAG包内部引用；R03 移除",
     "rag/embeddings.py": "RAG包内部引用；R03 移除",
@@ -56,9 +55,6 @@ LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
     "hermes_adapter.py",
     "context/task_state.py",
     "context/strategies/fact_anchor.py",
-    "controller/chat_controller.py",
-    "controller/chat/stream.py",
-    "controller/wechat/hermes.py",
     "graphrag/claim_extractor.py",
     "graphrag/extractor.py",
     "memory/consolidator.py",
@@ -80,7 +76,7 @@ LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
 
 # 旧目录整体：仅受“路由不得直接 import pymysql/redis”约束，其余规则待迁移
 LEGACY_DIRS_EXEMPT = (
-    "agents", "config", "context", "controller", "db", "graphrag", "hooks",
+    "agents", "config", "context", "db", "graphrag", "hooks",
     "infrastructure", "memory", "observer", "permission", "rag", "service",
     "templates", "tools", "utils", "wechat",
 )
