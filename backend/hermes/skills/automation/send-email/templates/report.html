@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+        .header { background: #4CAF50; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; }
+        .data-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        .data-table th, .data-table td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        .data-table th { background: #f4f4f4; }
+        .footer { background: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #666; }
+        .highlight { color: #4CAF50; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{TITLE}}</h1>
+    </div>
+    <div class="content">
+        <p>{{GREETING}}</p>
+        <p>{{SUMMARY}}</p>
+
+        <table class="data-table">
+            <tr>
+                <th>指标</th>
+                <th>数值</th>
+                <th>变化</th>
+            </tr>
+            {{DATA_ROWS}}
+        </table>
+
+        <p>{{CLOSING}}</p>
+    </div>
+    <div class="footer">
+        <p>此邮件由 Hermes Agent 自动发送 | {{DATE}}</p>
+    </div>
+</body>
+</html>

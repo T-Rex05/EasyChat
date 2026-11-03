@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title }}</title>
+  <style>
+    /* ─────────────────────────────────────────────────────────────
+       现代化 PDF 报告模板 - WeasyPrint
+       设计风格：简洁、专业、高对比度
+    ───────────────────────────────────────────────────────────── */
+    
+    @page {
+      size: A4;
+      margin: 20mm 18mm;
+      
+      @top-left {
+        content: "AgentForge";
+        font-size: 9pt;
+        color: #64748b;
+      }
+      @top-right {
+        content: "{{ generated_date }}";
+        font-size: 9pt;
+        color: #64748b;
+      }
+      @bottom-center {
+        content: "第 " counter(page) " 页";
+        font-size: 9pt;
+        color: #94a3b8;
+      }
+    }
+    
+    @page:first {
+      margin: 0;
+      @top-left { content: none; }
+      @top-right { content: none; }
+      @bottom-center { content: none; }
+    }
+    
+    :root {
+      --primary: #0f766e;
+      --secondary: #334155;
+      --accent: #10b981;
+      --accent-light: #34d399;
+      --border: #e2e8f0;
+      --bg-light: #f8fafc;
+      --bg-card: #ffffff;
+      --text: #1e293b;
+      --text-muted: #64748b;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      font-size: 11pt;
+      line-height: 1.7;
+      color: var(--text);
+      background: #fff;
+    }
+    
+    /* ── 封面 ────────────────────────────────────────────────────── */
+    .cover {
+      page-break-after: always;
+      height: 297mm;
+      display: flex;
+      flex-direction: column;
+      background: linear-gradient(135deg, #134e4a 0%, #0f766e 100%);
+      padding: 25mm;
+      position: relative;
+    }
+    
+    .cover-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 5mm;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .cover-logo {
+      font-size: 14pt;
+      font-weight: 600;
+      color: #fff;
+      letter-spacing: 0.5mm;
+    }
+    
+    .cover-badge {
+      background: var(--accent);
+      color: #fff;
+      padding: 2mm 5mm;
+      border-radius: 2mm;
+      font-size: 9pt;
+      font-weight: 500;
+    }
+    
+    .cover-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 20mm 0;
+    }
+    
+    .cover-title {
+      font-size: 32pt;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.3;
+      margin-bottom: 8mm;
+    }
+    
+    .cover-subtitle {
+      font-size: 14pt;
+      color: var(--accent-light);
+      margin-bottom: 15mm;
+    }
+    
+    .cover-meta {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 3mm;
+      padding: 8mm;
+      margin-top: auto;
+    }
+    
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 5mm;
+    }
+    
+    .meta-item {
+      padding: 3mm;
+    }
+    
+    .meta-label {
+      font-size: 9pt;
+      color: var(--text-muted);
+      margin-bottom: 2mm;
+    }
+    
+    .meta-value {
+      font-size: 11pt;
+      color: #fff;
+      font-weight: 500;
+    }
+    
+    .cover-footer {
+      padding-top: 5mm;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      text-align: center;
+    }
+    
+    .cover-footer p {
+      font-size: 9pt;
+      color: var(--text-muted);
+    }
+    
+    /* ── 正文内容 ────────────────────────────────────────────────── */
+    .content {
+      padding: 0;
+    }
+    
+    h1 {
+      font-size: 20pt;
+      font-weight: 700;
+      color: var(--primary);
+      margin: 12mm 0 6mm 0;
+      padding-bottom: 3mm;
+      border-bottom: 2px solid var(--accent);
+    }
+    
+    h2 {
+      font-size: 16pt;
+      font-weight: 600;
+      color: var(--primary);
+      margin: 10mm 0 5mm 0;
+    }
+    
+    h3 {
+      font-size: 13pt;
+      font-weight: 600;
+      color: var(--secondary);
+      margin: 8mm 0 4mm 0;
+    }
+    
+    h4 {
+      font-size: 11pt;
+      font-weight: 600;
+      color: var(--secondary);
+      margin: 6mm 0 3mm 0;
+    }
+    
+    p {
+      margin: 3mm 0;
+      text-align: justify;
+    }
+    
+    /* ── 列表 ─────────────────────────────────────────────────────── */
+    ul, ol {
+      margin: 4mm 0;
+      padding-left: 8mm;
+    }
+    
+    li {
+      margin: 2mm 0;
+    }
+    
+    ul li::marker {
+      color: var(--accent);
+    }
+    
+    /* ── 引用块 ───────────────────────────────────────────────────── */
+    blockquote {
+      background: var(--bg-light);
+      border-left: 3px solid var(--accent);
+      padding: 4mm 6mm;
+      margin: 5mm 0;
+      font-size: 10pt;
+      color: var(--secondary);
+    }
+    
+    /* ── 代码块 ───────────────────────────────────────────────────── */
+    pre {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 5mm;
+      border-radius: 2mm;
+      font-family: "JetBrains Mono", "Consolas", monospace;
+      font-size: 8.5pt;
+      line-height: 1.5;
+      overflow-x: auto;
+      margin: 5mm 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    code {
+      background: #f1f5f9;
+      padding: 0.5mm 2mm;
+      border-radius: 1mm;
+      font-family: "JetBrains Mono", "Consolas", monospace;
+      font-size: 9pt;
+      color: #0f172a;
+    }
+    
+    pre code {
+      background: transparent;
+      padding: 0;
+    }
+    
+    /* ── 表格 ─────────────────────────────────────────────────────── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 6mm 0;
+      font-size: 9.5pt;
+    }
+    
+    thead {
+      background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+    }
+    
+    th {
+      padding: 3mm 4mm;
+      text-align: left;
+      font-weight: 600;
+      color: var(--primary);
+      border-bottom: 2px solid var(--accent);
+    }
+    
+    td {
+      padding: 2.5mm 4mm;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    tr:nth-child(even) {
+      background: var(--bg-light);
+    }
+    
+    tr:hover {
+      background: #f0fdf4;
+    }
+    
+    /* ── 图片 ─────────────────────────────────────────────────────── */
+    img {
+      max-width: 100%;
+      height: auto;
+      margin: 5mm 0;
+      border-radius: 2mm;
+    }
+    
+    figure {
+      text-align: center;
+      margin: 8mm 0;
+    }
+    
+    figcaption {
+      font-size: 9pt;
+      color: var(--text-muted);
+      margin-top: 2mm;
+    }
+    
+    /* ── 分隔线 ───────────────────────────────────────────────────── */
+    hr {
+      border: none;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+      margin: 8mm 0;
+    }
+    
+    /* ── 信息卡片 ─────────────────────────────────────────────────── */
+    .info-card {
+      background: var(--bg-light);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 3mm 3mm 0;
+      padding: 5mm 6mm;
+      margin: 5mm 0;
+    }
+    
+    .info-card-title {
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 2mm;
+    }
+    
+    /* ── 目录样式 ─────────────────────────────────────────────────── */
+    .toc {
+      background: var(--bg-light);
+      border-radius: 3mm;
+      padding: 6mm;
+      margin: 6mm 0;
+    }
+    
+    .toc-title {
+      font-size: 12pt;
+      font-weight: 600;
+      margin-bottom: 4mm;
+      color: var(--primary);
+    }
+    
+    .toc-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 1.5mm 0;
+      border-bottom: 1px dotted var(--border);
+      font-size: 10pt;
+    }
+    
+    .toc-item:last-child {
+      border-bottom: none;
+    }
+    
+    /* ── 数据指标卡片 ─────────────────────────────────────────────── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4mm;
+      margin: 6mm 0;
+    }
+    
+    .metric-card {
+      background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-light) 100%);
+      border: 1px solid var(--border);
+      border-radius: 3mm;
+      padding: 4mm;
+      text-align: center;
+    }
+    
+    .metric-value {
+      font-size: 18pt;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    
+    .metric-label {
+      font-size: 9pt;
+      color: var(--text-muted);
+    }
+    
+    /* ── 页脚说明 ─────────────────────────────────────────────────── */
+    .footer-note {
+      margin-top: 10mm;
+      padding-top: 4mm;
+      border-top: 1px solid var(--border);
+      font-size: 9pt;
+      color: var(--text-muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <!-- 封面 -->
+  <div class="cover">
+    <div class="cover-header">
+      <div class="cover-logo">AgentForge</div>
+      <div class="cover-badge">自动分析报告</div>
+    </div>
+    
+    <div class="cover-main">
+      <h1 class="cover-title">{{ title }}</h1>
+      {% if subtitle %}
+      <p class="cover-subtitle">{{ subtitle }}</p>
+      {% endif %}
+      
+      <div class="cover-meta">
+        <div class="meta-grid">
+          <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value">{{ generated_date }}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">报告来源</div>
+            <div class="meta-value">{{ source }}</div>
+          </div>
+          <div class="meta-item">
+            <div class="meta-label">输出格式</div>
+            <div class="meta-value">PDF 附件</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="cover-footer">
+      <p>本报告由 AgentForge 智能分析系统自动生成</p>
+    </div>
+  </div>
+  
+  <!-- 正文内容 -->
+  <div class="content">
+    {{ content | safe }}
+  </div>
+  
+  <!-- 页脚 -->
+  <div class="footer-note">
+    本报告由 AgentForge 自动生成 | {{ generated_date }}
+  </div>
+</body>
+</html>

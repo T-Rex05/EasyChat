@@ -1,0 +1,8 @@
+[report]
+# 排除测试代码和主程序块
+exclude_lines =
+    pragma: no cover
+    def test_
+    if __name__ ==
+    ^import time$
+    ^import pytest$

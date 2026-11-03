@@ -1,0 +1,78 @@
+{
+  "_meta": {
+    "generated": "2026-11-03",
+    "source": "backend/controller/chat/stream.py, backend/controller/stream_runner.py, backend/service/run_registry.py, backend/controller/chat_controller.py, agent_frontend/src/api/chat.ts",
+    "purpose": "记录旧Web聊天SSE契约。Task 6 把内部事件适配到这些公开帧名/字段；A09要求首版保留现有HTTP/SSE契约。",
+    "transport": "SSE, 帧格式 id: {seq}\\n + data: {json}\\n\\n；完成/出错后发 retry: 86400000 抑制浏览器自动重连"
+  },
+  "endpoints": {
+    "get_stream": {
+      "path": "/chat/stream",
+      "method": "GET",
+      "query_params": {
+        "message": "用户消息文本(URL编码)",
+        "thread_id": "会话线程, 格式 {user_id}_{timestamp} 或微信 wx_{user_id}_{wx_user_id前12位}",
+        "client_msg_id": "客户端幂等ID, 同 thread+client_msg_id 复用同一run(断线重连/重复提交不重跑)",
+        "mode": "可选, 会话模式透传给钩子(如 disposal)",
+        "model_id": "可选, 用户指定的 model_config ID",
+        "scene": "可选, 场景路由标识(code/summary/chat)",
+        "token": "JWT; EventSource不能带Header, 登录态走查询参数"
+      },
+      "auth": "token查询参数解析当前用户; user_id从thread_id解析, 但必须与token主体校验(旧实现按thread_id前缀解析user_id, 新实现由可信Principal决定owner)"
+    },
+    "post_stream": {
+      "path": "/chat/stream",
+      "method": "POST",
+      "body": "JSON: message, thread_id, client_msg_id, mode, scene, model_id, images[{data_url,mime}], files[{filename,url,content}]",
+      "note": "POST用于携带图片/文件的多模态请求; 响应同为SSE流"
+    },
+    "cancel": {
+      "paths": ["/chat/cancel (GET和POST)"],
+      "params": "thread_id, client_msg_id",
+      "behavior": "run_registry.user_cancel 取消活跃run, CANCELLED状态"
+    },
+    "busy_response": {
+      "status": 409,
+      "body": {"error": "thread {thread_id} 已有进行中的请求"},
+      "trigger": "同 thread 已有 RUNNING run 时提交新消息; GET与POST行为一致(ThreadBusyError映射)"
+    }
+  },
+  "server_runtime": {
+    "run_registry": {
+      "MAX_RUNS": 200,
+      "RUN_TTL_seconds": 300,
+      "statuses": ["RUNNING", "DONE", "ERROR", "CANCELLED"],
+      "ring_buffer": "上限1000帧, 溢出截断至500帧并告警(截断后续传缺失, 前端需接受不完整重放)",
+      "idempotency_key": "thread_id:client_msg_id",
+      "busy_rule": "同thread同时只允许一个RUNNING run"
+    },
+    "resume": {
+      "mechanism": "每帧带 id: {seq}; 浏览器EventSource重连自动发 Last-Event-ID: N",
+      "conversion": "stream_runner.resume_from_seq: from_seq = N+1 (排除已看到的N)",
+      "no_id_header": "首连/空/非法头按 from_seq=0 全量重放",
+      "caveat": "ring buffer截断后的seq不连续窗口无法补发, 旧实现直接继续(前端以收到的帧为准)"
+    }
+  },
+  "frame_types": {
+    "start": {"fields": {"type": "start", "thread_id": "str", "conversation_id": "int?", "note": "入口落库(status=4)后立即发送; conversation_id缺省时无该字段"}},
+    "token": {"fields": {"type": "token", "content": "增量文本片段"}},
+    "thinking_step": {"fields": {"type": "thinking_step", "content": "思考/说明文本; stream_reset前会先发重置内容的thinking_step"}},
+    "stream_reset": {"fields": {"type": "stream_reset", "note": "前端收到后清空已累计内容重新累计"}},
+    "exec_approval_request": {"fields": {"type": "exec_approval_request", "approval_id": "str", "command": "str", "description": "str?", "note": "配对 GET /chat/exec-approval/pending 与 POST /chat/exec-approval 审批闭环"}},
+    "chat_complete": {"fields": {"type": "chat_complete", "thread_id": "str", "final_content": "str", "timestamp": "ISO(本地时区)", "todos": "list", "note": "终止帧; 之后发 retry: 86400000; 错误路径也以chat_complete收尾(内容为友好错误文案)并可另发error帧"}},
+    "error": {"fields": {"type": "error", "message": "str"}},
+    "token_refresh": {"fields": {"type": "token_refresh", "token": "新JWT", "note": "前端写入localStorage并更新authStore; 属认证侧旁路帧"}}
+  },
+  "frontend_handling": {
+    "source": "agent_frontend/src/api/chat.ts dispatchStreamEvent",
+    "cases": ["token", "stream_reset", "thinking_step", "exec_approval_request", "chat_complete", "error", "token_refresh(先于dispatch处理)"],
+    "notes": "EventSource message事件统一JSON.parse; 空帧忽略; 解析失败回调onError并close"
+  },
+  "new_mapping_requirements": [
+    "Task 6 内部事件accepted/queued/started/token/tool_started/tool_finished/stream_reset/completed/failed/cancel_requested/cancelled 需适配为上述公开帧名",
+    "tool_started/tool_finished 等内部新增事件不自动暴露敏感工具内容",
+    "环形缓存失效时发stream_reset+持久最终状态, 不从头重新执行",
+    "cancel语义: 已接受请求, 不宣称同步工具被强杀; 旧/chat/cancel无此语义, 迁移时保留响应字段兼容",
+    "旧实现user_id从thread_id解析——新契约中owner来自可信Principal, HTTP适配层负责把旧thread_id格式映射到会话"
+  ]
+}

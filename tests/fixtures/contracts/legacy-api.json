@@ -1,0 +1,2306 @@
+{
+ "_meta": {
+  "generated": "2026-11-03",
+  "source": "static AST scan of backend/controller route decorators (out/task0_route_scan.json) cross-checked against docs/superpowers/plans/2026-11-03-easychat-source-map.md and agent_frontend literal API calls (out/task0_frontend_calls.json).",
+  "total_decorators": 284,
+  "summary": {
+   "keep": 130,
+   "remove": 130,
+   "keep-migrate": 24
+  },
+  "note_keeplist_count": "源码定位文档声称144条保留路由，其表格实际含138行（含cancel_chat双方法）；本fixture按138行核对全部在代码中存在。",
+  "dead_frontend_paths": [
+   "/api/memory",
+   "/api/memory/user",
+   "/api/memory/main",
+   "/api/memory/share",
+   "/api/memory/pool",
+   "/api/memory/pool/categories",
+   "/api/memory/users",
+   "/api/memory/users/{userId}",
+   "（agent_frontend/src/api/memory.ts 调用，后端无任何路由承载——社区记忆分享死代码，Task 15随memory.ts清理）"
+  ],
+  "frontend_only_removed_pages": [
+   "/api/data-layers*",
+   "/api/kb/*",
+   "/api/graph/*",
+   "/api/tools/*",
+   "（前端仍调用，但归属确认移除模块；Task 15删前端页面与API层）"
+  ],
+  "openapi_note": "旧main.py会初始化MySQL等基础设施，不能为导出OpenAPI而启动；本fixture先做静态清单，待Task 1无副作用工厂完成后由新app导出OpenAPI复核。"
+ },
+ "routes": [
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/users",
+   "handler": "list_users",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/users/{user_id}/role",
+   "handler": "update_user_role",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/users/{user_id}/perms",
+   "handler": "get_user_perms",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/users/{user_id}/perms",
+   "handler": "update_user_perms",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/users/{user_id}/status",
+   "handler": "update_user_status",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/permissions",
+   "handler": "list_all_permissions",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/toolsets",
+   "handler": "list_toolset_definitions",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/roles",
+   "handler": "list_roles_handler",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "POST",
+   "path": "/api/admin/roles",
+   "handler": "create_role_handler",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/roles/{role_id}",
+   "handler": "update_role_handler",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "DELETE",
+   "path": "/api/admin/roles/{role_id}",
+   "handler": "delete_role_handler",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "GET",
+   "path": "/api/admin/pool/pending",
+   "handler": "list_pending_items",
+   "status": "remove",
+   "reason": "R14 社区上架审核列表"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "POST",
+   "path": "/api/admin/pool/{pool_id}/approve",
+   "handler": "approve_pool_item",
+   "status": "remove",
+   "reason": "R14 社区上架审核通过"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "POST",
+   "path": "/api/admin/pool/{pool_id}/reject",
+   "handler": "reject_pool_item",
+   "status": "remove",
+   "reason": "R14 社区上架审核拒绝"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "POST",
+   "path": "/api/admin/pool/force-publish",
+   "handler": "force_publish",
+   "status": "remove",
+   "reason": "R14 社区强制发布"
+  },
+  {
+   "file": "backend/controller/admin_controller.py",
+   "method": "DELETE",
+   "path": "/api/admin/pool/{pool_name}",
+   "handler": "remove_from_pool",
+   "status": "remove",
+   "reason": "R14 社区池移除"
+  },
+  {
+   "file": "backend/controller/auth_controller.py",
+   "method": "POST",
+   "path": "/api/auth/register",
+   "handler": "register",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/auth_controller.py",
+   "method": "POST",
+   "path": "/api/auth/login",
+   "handler": "login",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/auth_controller.py",
+   "method": "GET",
+   "path": "/api/auth/me",
+   "handler": "get_me",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/auth_controller.py",
+   "method": "POST",
+   "path": "/api/auth/refresh",
+   "handler": "refresh_token",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/auth_controller.py",
+   "method": "GET",
+   "path": "/api/auth/users",
+   "handler": "list_users",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/category_controller.py",
+   "method": "GET",
+   "path": "/api/categories",
+   "handler": "list_categories",
+   "status": "remove",
+   "reason": "R14 技能社区分类；前端实际调用 /api/skills/categories(保留)，此控制器无前端调用者"
+  },
+  {
+   "file": "backend/controller/category_controller.py",
+   "method": "POST",
+   "path": "/api/categories",
+   "handler": "create_category",
+   "status": "remove",
+   "reason": "R14 技能社区分类；前端实际调用 /api/skills/categories(保留)，此控制器无前端调用者"
+  },
+  {
+   "file": "backend/controller/category_controller.py",
+   "method": "DELETE",
+   "path": "/api/categories/{cat_id}",
+   "handler": "delete_category",
+   "status": "remove",
+   "reason": "R14 技能社区分类；前端实际调用 /api/skills/categories(保留)，此控制器无前端调用者"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/chat/stream",
+   "handler": "stream_chat",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/chat/stream",
+   "handler": "stream_chat_post",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/api/chat/upload-images",
+   "handler": "upload_chat_images",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/api/chat/upload-files",
+   "handler": "upload_chat_files",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/chat/cancel",
+   "handler": "cancel_chat",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/chat/cancel",
+   "handler": "cancel_chat",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/api/history",
+   "handler": "get_chat_history_list",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "PUT",
+   "path": "/api/history/{chat_id}",
+   "handler": "rename_chat_session",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "DELETE",
+   "path": "/api/history/{chat_id}",
+   "handler": "delete_chat_session",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/api/history/{chat_id}",
+   "handler": "get_chat_messages",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/api/todos",
+   "handler": "get_thread_todos",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/api/chat/feedback",
+   "handler": "chat_feedback",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/chat/exec-approval/pending",
+   "handler": "get_pending_exec_approval",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "POST",
+   "path": "/chat/exec-approval",
+   "handler": "resolve_exec_approval",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/chat_controller.py",
+   "method": "GET",
+   "path": "/favicon.ico",
+   "handler": "favicon",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/command-blacklist",
+   "handler": "list_rules",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "POST",
+   "path": "/api/admin/command-blacklist",
+   "handler": "add_rule",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/command-blacklist/{rule_id}",
+   "handler": "update_rule",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "DELETE",
+   "path": "/api/admin/command-blacklist/{rule_id}",
+   "handler": "delete_rule",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "POST",
+   "path": "/api/admin/command-blacklist/test",
+   "handler": "test_pattern",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/command_blacklist_controller.py",
+   "method": "POST",
+   "path": "/api/admin/command-blacklist/ai-suggest",
+   "handler": "ai_suggest_pattern",
+   "status": "keep-migrate",
+   "reason": "保留迁移：命令黑名单是受控执行的安全边界；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/config_controller.py",
+   "method": "GET",
+   "path": "/api/config",
+   "handler": "get_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/config_controller.py",
+   "method": "POST",
+   "path": "/api/config",
+   "handler": "save_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "GET",
+   "path": "/api/cron-jobs/delivery-options",
+   "handler": "get_delivery_options",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "GET",
+   "path": "/api/cron-jobs",
+   "handler": "list_cron_jobs",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "POST",
+   "path": "/api/cron-jobs",
+   "handler": "create_cron_job",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "PUT",
+   "path": "/api/cron-jobs/{job_id}",
+   "handler": "update_cron_job",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "DELETE",
+   "path": "/api/cron-jobs/{job_id}",
+   "handler": "delete_cron_job",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "PUT",
+   "path": "/api/cron-jobs/{job_id}/toggle",
+   "handler": "toggle_cron_job",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "POST",
+   "path": "/api/cron-jobs/{job_id}/run-now",
+   "handler": "run_cron_job_now",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "GET",
+   "path": "/api/cron-jobs/{job_id}/executions",
+   "handler": "list_executions",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/cron_controller.py",
+   "method": "GET",
+   "path": "/api/cron-jobs/events/{user_id}",
+   "handler": "cron_events",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "GET",
+   "path": "/api/data/sessions",
+   "handler": "get_all_sessions",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "GET",
+   "path": "/api/data/conversations/user/{user_id}",
+   "handler": "get_conversations_by_user",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "DELETE",
+   "path": "/api/data/sessions/{session_id}",
+   "handler": "delete_session",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "DELETE",
+   "path": "/api/data/conversations/{conversation_id}",
+   "handler": "delete_conversation",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "GET",
+   "path": "/api/data/model-configs/user/{user_id}",
+   "handler": "get_model_configs_by_user",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "GET",
+   "path": "/api/data/model-configs/user/{user_id}/list",
+   "handler": "get_model_configs_list",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_controller.py",
+   "method": "GET",
+   "path": "/api/data/health",
+   "handler": "health_check",
+   "status": "keep-migrate",
+   "reason": "迁移后移除：/api/data/sessions与会话列表重复，Task 6以assistant会话列表+保留/api/history为准，Task 15删本控制器并切前端session.ts"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "GET",
+   "path": "/api/data-layers",
+   "handler": "list_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "POST",
+   "path": "/api/data-layers",
+   "handler": "create_layer",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "PUT",
+   "path": "/api/data-layers/{layer_id}",
+   "handler": "update_layer",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "GET",
+   "path": "/api/data-layers/{layer_id}/info",
+   "handler": "get_layer_info",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "DELETE",
+   "path": "/api/data-layers/{layer_id}",
+   "handler": "delete_layer",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "GET",
+   "path": "/api/data-layers/user/{user_id}",
+   "handler": "get_user_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "PUT",
+   "path": "/api/data-layers/user/{user_id}",
+   "handler": "set_user_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "GET",
+   "path": "/api/data-layers/my",
+   "handler": "get_my_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "GET",
+   "path": "/api/data-layers/kb/{kb_id}",
+   "handler": "get_kb_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/data_layer_controller.py",
+   "method": "PUT",
+   "path": "/api/data-layers/kb/{kb_id}",
+   "handler": "set_kb_layers",
+   "status": "remove",
+   "reason": "R03 删除专用数据层"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "GET",
+   "path": "/api/email-configs",
+   "handler": "list_email_configs",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "POST",
+   "path": "/api/email-configs",
+   "handler": "create_email_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "PUT",
+   "path": "/api/email-configs/{config_id}",
+   "handler": "update_email_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "PUT",
+   "path": "/api/email-configs/{config_id}/active",
+   "handler": "set_active_email_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "DELETE",
+   "path": "/api/email-configs/{config_id}",
+   "handler": "delete_email_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/email_config_controller.py",
+   "method": "POST",
+   "path": "/api/email-configs/{config_id}/test",
+   "handler": "test_email_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/search",
+   "handler": "search_entities",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/{entity_id}",
+   "handler": "get_entity",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/entities",
+   "handler": "create_entity",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "DELETE",
+   "path": "/api/graph/entities/{entity_id}",
+   "handler": "delete_entity",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/entities/{entity_id}/restore",
+   "handler": "restore_entity",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/{entity_id}/relations",
+   "handler": "get_entity_relations",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/relations",
+   "handler": "create_relation",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/subgraph/{entity_id}",
+   "handler": "get_subgraph",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/user-graph",
+   "handler": "get_user_graph",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/paths",
+   "handler": "find_entity_paths",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/reachable",
+   "handler": "get_reachable_entities",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/extract",
+   "handler": "extract_from_text",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/extract-batch",
+   "handler": "batch_extract_from_memories",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/stats",
+   "handler": "get_graph_stats",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/quality",
+   "handler": "get_quality_report",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/documents/{document_id}/extract",
+   "handler": "extract_from_document",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/documents/{document_id}/extracting",
+   "handler": "is_document_extracting",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/documents/{document_id}/refresh",
+   "handler": "refresh_document_entities",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "DELETE",
+   "path": "/api/graph/documents/{document_id}/entities",
+   "handler": "clear_document_entities",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/documents/{document_id}/extraction-progress",
+   "handler": "get_extraction_progress",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/extraction-progress",
+   "handler": "get_all_extraction_progress",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/{entity_id}/time-travel/{target_date}",
+   "handler": "get_entity_at_time",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/{entity_id}/timeline",
+   "handler": "get_entity_timeline",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/candidates",
+   "handler": "list_candidates",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/candidates/count",
+   "handler": "count_pending_candidates",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/candidates/{candidate_id}/merge",
+   "handler": "merge_candidate",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/candidates/{candidate_id}/confirm",
+   "handler": "confirm_candidate",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/candidates/{candidate_id}/ignore",
+   "handler": "ignore_candidate",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "PUT",
+   "path": "/api/graph/entities/{entity_id}",
+   "handler": "edit_entity",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/relations/{relation_id}/flip",
+   "handler": "flip_relation",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "PUT",
+   "path": "/api/graph/relations/{relation_id}",
+   "handler": "edit_relation",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "DELETE",
+   "path": "/api/graph/relations/{relation_id}",
+   "handler": "delete_relation",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/change-logs",
+   "handler": "get_change_logs",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/entities/{entity_id}/change-logs",
+   "handler": "get_entity_change_logs",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/change-logs/{log_id}",
+   "handler": "get_change_log_detail",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/change-logs/{log_id}/rollback",
+   "handler": "rollback_change",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/communities/detect",
+   "handler": "detect_communities_endpoint",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/communities/generate-reports",
+   "handler": "generate_community_reports_endpoint",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/communities/report-progress/{task_id}",
+   "handler": "get_report_progress_endpoint",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/communities",
+   "handler": "list_communities",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/communities/reports",
+   "handler": "list_community_reports",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "GET",
+   "path": "/api/graph/communities/{community_id}/report",
+   "handler": "get_community_report",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/graphrag_controller.py",
+   "method": "POST",
+   "path": "/api/graph/smart-search",
+   "handler": "smart_search",
+   "status": "remove",
+   "reason": "R03 删除GraphRAG"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/host-whitelist",
+   "handler": "list_hosts",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "POST",
+   "path": "/api/admin/host-whitelist",
+   "handler": "add_host",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "PUT",
+   "path": "/api/admin/host-whitelist/{host_id}",
+   "handler": "update_host",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "DELETE",
+   "path": "/api/admin/host-whitelist/{host_id}",
+   "handler": "delete_host",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/exec-approvals",
+   "handler": "list_exec_approvals",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "POST",
+   "path": "/api/admin/host-whitelist/test",
+   "handler": "test_host_connection",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/agent-operations",
+   "handler": "list_agent_operations",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/sql-operations",
+   "handler": "list_sql_operations",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/users-with-whitelist-perm",
+   "handler": "list_users_with_whitelist_perm",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/memory-operations",
+   "handler": "list_memory_operations",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/host_whitelist_controller.py",
+   "method": "GET",
+   "path": "/api/admin/chat-host-whitelist",
+   "handler": "get_my_accessible_hosts",
+   "status": "keep-migrate",
+   "reason": "保留迁移：exec治理与操作审计，服务被保留的Code Mode/执行审批；宿主模块Task 15决定"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "POST",
+   "path": "/api/kb/documents",
+   "handler": "upload_documents",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/documents",
+   "handler": "list_documents",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/documents/{doc_id}",
+   "handler": "get_document",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/documents/{doc_id}/chunks",
+   "handler": "list_chunks",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/documents/{doc_id}/text",
+   "handler": "get_document_text",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "POST",
+   "path": "/api/kb/documents/{doc_id}/reprocess",
+   "handler": "reprocess_document",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/documents/{doc_id}",
+   "handler": "delete_document",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "POST",
+   "path": "/api/kb/documents/{doc_id}/move",
+   "handler": "move_document",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/documents/{doc_id}/download",
+   "handler": "download_document",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "POST",
+   "path": "/api/kb/knowledge-bases",
+   "handler": "create_knowledge_base",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/knowledge-bases",
+   "handler": "list_knowledge_bases",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/knowledge-bases/{kb_id}",
+   "handler": "get_knowledge_base",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "PUT",
+   "path": "/api/kb/knowledge-bases/{kb_id}",
+   "handler": "update_knowledge_base",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/knowledge-bases/{kb_id}",
+   "handler": "delete_knowledge_base",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_controller.py",
+   "method": "GET",
+   "path": "/api/kb/retrieval-stats",
+   "handler": "get_retrieval_stats",
+   "status": "remove",
+   "reason": "R03 删除本地KB/RAG"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/documents/{doc_id}/vectorize",
+   "handler": "vectorize_document",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/retrieve",
+   "handler": "try_retrieve",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/chunks/search",
+   "handler": "search_chunks",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/eval-sets",
+   "handler": "create_eval_set",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-sets",
+   "handler": "list_eval_sets",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-sets/{set_id}",
+   "handler": "get_eval_set",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "PUT",
+   "path": "/api/kb/eval-sets/{set_id}",
+   "handler": "update_eval_set",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/eval-sets/{set_id}",
+   "handler": "delete_eval_set",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/eval-sets/{set_id}/items",
+   "handler": "add_item",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "PUT",
+   "path": "/api/kb/eval-sets/{set_id}/items/{item_id}",
+   "handler": "update_item",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/eval-sets/{set_id}/items/{item_id}",
+   "handler": "delete_item",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/eval-sets/generate",
+   "handler": "generate_testset",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/eval-sets/{set_id}/run",
+   "handler": "run_eval_set",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-sets/{set_id}/runs/compare",
+   "handler": "compare_runs",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-sets/{set_id}/runs",
+   "handler": "list_runs",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-runs/{run_id}",
+   "handler": "get_run",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/eval-runs/{run_id}",
+   "handler": "delete_run",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-runs/{run_id}/diagnosis",
+   "handler": "batch_diagnosis",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/eval-runs/{run_id}/results/{result_id}/diagnosis",
+   "handler": "single_diagnosis",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/feedback",
+   "handler": "list_chat_feedback",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/feedback/{feedback_id}",
+   "handler": "delete_chat_feedback",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/chat-eval/items",
+   "handler": "list_chat_eval_items",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/eval-runs/{run_id}/suggestions",
+   "handler": "generate_suggestions",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/suggestions",
+   "handler": "list_suggestions",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/suggestions/{suggestion_id}",
+   "handler": "get_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/suggestions/{suggestion_id}/run",
+   "handler": "run_suggestion_verification",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/suggestions/{suggestion_id}/dismiss",
+   "handler": "dismiss_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/kb/suggestions/{suggestion_id}",
+   "handler": "delete_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/suggestions/{suggestion_id}/approve",
+   "handler": "approve_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/chunks/{chunk_id}/modify",
+   "handler": "modify_chunk",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/chunks/{chunk_id}/rollback",
+   "handler": "rollback_chunk",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/chunks/{chunk_id}",
+   "handler": "get_chunk_content",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/suggestions/{suggestion_id}/execute",
+   "handler": "execute_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "POST",
+   "path": "/api/kb/feedback/{feedback_id}/generate-suggestion",
+   "handler": "generate_feedback_suggestion",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "GET",
+   "path": "/api/kb/classify-thresholds",
+   "handler": "get_thresholds",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/kb_eval_controller.py",
+   "method": "PUT",
+   "path": "/api/kb/classify-thresholds",
+   "handler": "update_thresholds",
+   "status": "remove",
+   "reason": "R03 删除KB评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/sets",
+   "handler": "list_eval_sets",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "POST",
+   "path": "/api/memory/eval/sets",
+   "handler": "create_eval_set",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/sets/{set_id}",
+   "handler": "get_eval_set",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/memory/eval/sets/{set_id}",
+   "handler": "delete_eval_set",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/sets/{set_id}/items",
+   "handler": "list_eval_items",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "POST",
+   "path": "/api/memory/eval/sets/{set_id}/items",
+   "handler": "add_eval_item",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "POST",
+   "path": "/api/memory/eval/sets/{set_id}/items/batch",
+   "handler": "batch_add_eval_items",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "DELETE",
+   "path": "/api/memory/eval/items/{item_id}",
+   "handler": "delete_eval_item",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "POST",
+   "path": "/api/memory/eval/run",
+   "handler": "run_evaluation",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/runs",
+   "handler": "list_eval_runs",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/runs/{run_id}",
+   "handler": "get_eval_run",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_eval_controller.py",
+   "method": "GET",
+   "path": "/api/memory/eval/stats",
+   "handler": "get_eval_stats",
+   "status": "remove",
+   "reason": "R03 删除记忆评测"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories",
+   "handler": "list_memories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/stats",
+   "handler": "get_memory_stats",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/episodic",
+   "handler": "list_episodic_memories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/semantic",
+   "handler": "list_semantic_memories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/episodic/stats",
+   "handler": "get_episodic_stats",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/semantic/stats",
+   "handler": "get_semantic_stats",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/dashboard",
+   "handler": "get_memory_dashboard",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/{memory_id}",
+   "handler": "get_memory",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories",
+   "handler": "create_memory",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "PUT",
+   "path": "/api/memories/{memory_id}",
+   "handler": "update_memory",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "DELETE",
+   "path": "/api/memories/{memory_id}",
+   "handler": "delete_memory",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories/search",
+   "handler": "search_memories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/{memory_id}/graph",
+   "handler": "get_memory_graph",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/{memory_id}/versions",
+   "handler": "get_memory_versions",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/{memory_id}/versions/{version}",
+   "handler": "get_memory_version",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories/{memory_id}/restore/{version}",
+   "handler": "restore_memory_version",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories/consolidate",
+   "handler": "trigger_consolidation",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories/episodic/{memory_id}/promote",
+   "handler": "promote_episodic_to_semantic",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "GET",
+   "path": "/api/memories/outbox/list",
+   "handler": "list_outbox_events",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/memory_items_controller.py",
+   "method": "POST",
+   "path": "/api/memories/outbox/retry",
+   "handler": "retry_outbox_events",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "GET",
+   "path": "/api/model-configs",
+   "handler": "list_model_configs",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "POST",
+   "path": "/api/model-configs",
+   "handler": "create_model_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-configs/{config_id}/active",
+   "handler": "set_active",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "DELETE",
+   "path": "/api/model-configs/{config_id}",
+   "handler": "delete_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-configs/{config_id}/multimodal",
+   "handler": "toggle_multimodal",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "POST",
+   "path": "/api/model-configs/redetect-multimodal",
+   "handler": "redetect_all_multimodal",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-configs/reasoning-effort",
+   "handler": "update_reasoning_effort",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-configs/{config_id}",
+   "handler": "update_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "POST",
+   "path": "/api/model-configs/{config_id}/test",
+   "handler": "test_connection",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "GET",
+   "path": "/api/model-routes/fallback-chain",
+   "handler": "get_fallback_chain",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-routes/fallback-chain",
+   "handler": "save_fallback_chain",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "GET",
+   "path": "/api/model-routes/scene-routing",
+   "handler": "get_scene_routing",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "PUT",
+   "path": "/api/model-routes/scene-routing",
+   "handler": "save_scene_routing",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "POST",
+   "path": "/api/model-routes/evaluate",
+   "handler": "evaluate_route",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/model_config_controller.py",
+   "method": "GET",
+   "path": "/api/model-routes/scenes",
+   "handler": "list_scenes",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/notification_controller.py",
+   "method": "GET",
+   "path": "/api/notifications/pending-counts",
+   "handler": "get_pending_counts",
+   "status": "remove",
+   "reason": "R14 社区审核红点计数，依赖技能审核/记忆分享待审表；Task 15 核对进化是否需要替代计数"
+  },
+  {
+   "file": "backend/controller/personal_email_controller.py",
+   "method": "GET",
+   "path": "/api/personal-emails",
+   "handler": "list_personal_emails",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/personal_email_controller.py",
+   "method": "POST",
+   "path": "/api/personal-emails",
+   "handler": "add_personal_email",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/personal_email_controller.py",
+   "method": "PUT",
+   "path": "/api/personal-emails/{email_id}/active",
+   "handler": "set_active_personal_email",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/personal_email_controller.py",
+   "method": "DELETE",
+   "path": "/api/personal-emails/{email_id}",
+   "handler": "delete_personal_email",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "GET",
+   "path": "/api/platform-config/{platform}",
+   "handler": "get_platform_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "PUT",
+   "path": "/api/platform-config/{platform}",
+   "handler": "save_platform_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "POST",
+   "path": "/api/platform-config/email/test",
+   "handler": "test_smtp_connection",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "GET",
+   "path": "/api/platform-config/{platform}/bindings",
+   "handler": "get_platform_bindings",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "POST",
+   "path": "/api/platform-config/wechat/qr/start",
+   "handler": "start_wechat_qr",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "GET",
+   "path": "/api/platform-config/wechat/qr/{session_id}/status",
+   "handler": "check_wechat_qr_status",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/platform_config_controller.py",
+   "method": "POST",
+   "path": "/api/platform-config/wechat/qr/{session_id}/bind",
+   "handler": "bind_after_qr",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}/toggle",
+   "handler": "toggle_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills",
+   "handler": "list_skills",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/categories",
+   "handler": "list_categories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/categories",
+   "handler": "create_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/categories/{name}/rename",
+   "handler": "rename_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "DELETE",
+   "path": "/api/skills/categories/{name}",
+   "handler": "delete_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/my-categories",
+   "handler": "list_my_categories",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/my-categories",
+   "handler": "create_my_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/my-categories/{name}/rename",
+   "handler": "rename_my_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "DELETE",
+   "path": "/api/skills/my-categories/{name}",
+   "handler": "delete_my_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}/category",
+   "handler": "set_skill_category",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/pool",
+   "handler": "list_pool",
+   "status": "remove",
+   "reason": "R14 技能社区池浏览"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/pool/{name}/install",
+   "handler": "install_from_pool",
+   "status": "remove",
+   "reason": "R14 社区技能安装"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "DELETE",
+   "path": "/api/skills/pool/{name}/install",
+   "handler": "uninstall_from_pool",
+   "status": "remove",
+   "reason": "R14 社区技能卸载"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}/lock",
+   "handler": "lock_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}/unlock",
+   "handler": "unlock_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/{name}/publish",
+   "handler": "publish_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/{name}",
+   "handler": "get_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/{name}/files/{file_path:path}",
+   "handler": "get_skill_file",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills",
+   "handler": "create_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}",
+   "handler": "update_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "DELETE",
+   "path": "/api/skills/{name}",
+   "handler": "delete_skill",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "PUT",
+   "path": "/api/skills/{name}/files/{file_path:path}",
+   "handler": "write_skill_file",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "DELETE",
+   "path": "/api/skills/{name}/files/{file_path:path}",
+   "handler": "delete_skill_file",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/{name}/files/upload",
+   "handler": "upload_skill_files",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "GET",
+   "path": "/api/skills/{name}/files/{file_path:path}/raw",
+   "handler": "download_skill_file_raw",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/skill_controller.py",
+   "method": "POST",
+   "path": "/api/skills/{name}/files/mkdir",
+   "handler": "create_skill_subdir",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/tool_controller.py",
+   "method": "POST",
+   "path": "/api/tools/{tool_name}",
+   "handler": "invoke_tool",
+   "status": "remove",
+   "reason": "R14 删除论文复现直接工具调用"
+  },
+  {
+   "file": "backend/controller/tool_controller.py",
+   "method": "GET",
+   "path": "/api/tools/",
+   "handler": "list_tools",
+   "status": "remove",
+   "reason": "R14 删除论文复现直接工具调用"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/dashboard",
+   "handler": "dashboard",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces",
+   "handler": "list_traces",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/all",
+   "handler": "list_all_traces",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/ranking",
+   "handler": "ranking",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/users/search",
+   "handler": "search_users",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/turns/{session_id}",
+   "handler": "turn_detail",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/{trace_id}",
+   "handler": "trace_detail",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "GET",
+   "path": "/api/traces/config/me",
+   "handler": "get_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/trace_controller.py",
+   "method": "PUT",
+   "path": "/api/traces/config",
+   "handler": "update_config",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/user_binding_controller.py",
+   "method": "GET",
+   "path": "/api/user-bindings",
+   "handler": "list_bindings",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/user_binding_controller.py",
+   "method": "POST",
+   "path": "/api/user-bindings",
+   "handler": "create_binding",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  },
+  {
+   "file": "backend/controller/user_binding_controller.py",
+   "method": "DELETE",
+   "path": "/api/user-bindings/{binding_id}",
+   "handler": "delete_binding",
+   "status": "keep",
+   "reason": "保留入口：迁移到模块公开接口，HTTP契约不变(A09)"
+  }
+ ]
+}

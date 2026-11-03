@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentforge"
+version = "1.0.0"
+description = "通用 Hermes AI Agent 脚手架 — 快速搭建智能体 Web 应用"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+# ── 核心依赖 ──
+dependencies = [
+    # Web 框架
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.9",
+
+    # LLM / Agent
+    "langchain>=1.0.0",
+    "langchain-core>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "tiktoken>=0.5.0",
+
+    # HTTP
+    "httpx>=0.24.0",
+    "requests>=2.31.0",
+
+    # 数据
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+
+    # 日志
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+# MySQL 支持
+mysql = ["pymysql>=1.1.0"]
+
+# 开发工具
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+
+# Ollama 本地模型
+ollama = ["langchain-ollama>=1.0.0"]
+
+[project.scripts]
+agentforge = "agentforge_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "agentforge_cli*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

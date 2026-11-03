@@ -1,0 +1,228 @@
+# AgentForge Docker 部署
+# 包含：MySQL + Neo4j + Redis + Milvus
+
+name: agentforge
+
+services:
+  # ═══════════════════════════════════════════════════════════
+  # AgentForge 主服务（多阶段构建：前端 + 后端）
+  # ═══════════════════════════════════════════════════════════
+  agentforge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: agentforge
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8001}:8001"
+    environment:
+      # 数据库
+      - MYSQL_HOST=${MYSQL_HOST:-host.docker.internal}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-agentforge}
+      - MYSQL_USER=${MYSQL_USER:-agentforge}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agentforge123}
+      # LLM
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4}
+      # Embedding（可选）
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      # Redis
+      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      # 安全
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      # 日志
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 运行时路径
+      - HERMES_HOME=/app/data/hermes
+      - AGENTFORGE_DATA_DIR=/app/data
+      - AGENTFORGE_LOG_DIR=/app/data/logs
+    volumes:
+      - agentforge_data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════
+  # MySQL 数据库
+  # ═══════════════════════════════════════════════════════════
+  mysql:
+    container_name: agentforge-mysql
+    image: mysql:8.0
+    restart: unless-stopped
+    ports:
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-agentforge123}
+      MYSQL_DATABASE: agentforge
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
+    volumes:
+      - ./volumes/mysql/data:/var/lib/mysql
+      - ./volumes/mysql/init:/docker-entrypoint-initdb.d
+    command: 
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-agentforge123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ═══════════════════════════════════════════════════════════
+  # Neo4j 知识图谱
+  # ═══════════════════════════════════════════════════════════
+  neo4j:
+    container_name: agentforge-neo4j
+    image: neo4j:5.15-community
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      # 数据库已初始化，密码在首次启动时设定，后续不需要 NEO4J_AUTH
+      # 如果重建数据卷，取消下行注释以设定初始密码：
+      # NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-agentforge123}
+      NEO4J_server_memory_pagecache_size: 256M
+      NEO4J_server_memory_heap_initial__size: 512M
+      NEO4J_server_memory_heap_max__size: 1G
+      # APOC 插件配置
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+      # APOC 插件已手动安装到 /data/plugins/apoc.jar，不使用自动安装（Windows 挂载卷有兼容问题）
+    # 启动前清理残留 PID 文件，防止重启死循环
+    entrypoint: ["/bin/sh", "-c", "rm -f /data/neo4j.pid /data/run/neo4j.pid 2>/dev/null; exec tini -g -- /startup/docker-entrypoint.sh neo4j"]
+    volumes:
+      - ./volumes/neo4j/data:/data
+      - ./volumes/neo4j/logs:/logs
+      - ./volumes/neo4j/import:/var/lib/neo4j/import
+    healthcheck:
+      # 使用 neo4j 自带的 cypher-shell 检查健康状态
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-agentforge123} 'RETURN 1' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ═══════════════════════════════════════════════════════════
+  # Redis 缓存
+  # ═══════════════════════════════════════════════════════════
+  redis:
+    container_name: agentforge-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_MAXMEMORY=${REDIS_MAXMEMORY:-256mb}
+      - REDIS_AOF=${REDIS_AOF:-yes}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    entrypoint: >
+      /bin/sh -c "
+        if [ -n \"$$REDIS_PASSWORD\" ]; then
+          exec redis-server --maxmemory $$REDIS_MAXMEMORY --maxmemory-policy allkeys-lru --appendonly $$REDIS_AOF --requirepass \"$$REDIS_PASSWORD\"
+        else
+          exec redis-server --maxmemory $$REDIS_MAXMEMORY --maxmemory-policy allkeys-lru --appendonly $$REDIS_AOF
+        fi
+      "
+    volumes:
+      - ./volumes/redis/data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping; else redis-cli ping; fi"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════
+  # Milvus 向量数据库
+  # ═══════════════════════════════════════════════════════════
+  etcd:
+    container_name: agentforge-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    volumes:
+      - ./volumes/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    container_name: agentforge-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - ./volumes/minio:/minio_data
+    command: minio server /minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    container_name: agentforge-milvus
+    image: milvusdb/milvus:v2.3.3
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - ./volumes/milvus:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  agentforge_data:
+    driver: local
+
+networks:
+  default:
+    name: agentforge-network

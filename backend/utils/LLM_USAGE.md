@@ -1,0 +1,25 @@
+# LLM用量和运行归属
+
+llm_usage.trace_usage统一处理Hermes归一化usage、Chat Completions、Responses和
+Anthropic格式。input_tokens代表未缓存输入，prompt_tokens代表输入合计；缓存全命中时
+input_tokens=0是有效值。reasoning_tokens是输出的子项，不再额外累加。缺失或非法usage
+返回None与usage_complete=false，不能当成0。
+
+TraceObserver与TracedLLMClient都使用该接口。现有traces表的数值字段允许NULL；
+缺失usage会传NULL，写入层不会把它累加到每日token统计。历史数据不自动回填，历史0值
+无法据此判断是真实0还是缺失。仪表盘SUM只覆盖已知值，不能替代逐调用完整性账本。
+
+bind_runtime即使在结果管理关闭时，也为本轮安装trace_context。辅助调用使用当前根会话、
+run_id和独立request_id；run_id编码进request ID，TracedResponse.correlation提供
+父请求等相关信息。没有运行上下文时，为辅助请求生成独立aux会话，避免所有同来源请求
+挤在同一个aux_source。此版未新增数据库关联列，父子关系的完整查询仍需后续显式账本。
+
+辅助SDK调用禁用隐藏自动重试，每次invoke只有一次可见attempt；需要重试的调用方应显式
+调用并保留各次记录。HTTP client在成功/失败后关闭。model_override路径不再初始化模型路由。
+
+主模型完成后，observer短期保存请求到trace的映射，供随后执行的工具span按request ID定位。
+没有ID时，仅在指定session归属唯一时使用兜底；禁止用全局最近记录推断归属。
+映射采用锁保护、TTL清理和已完成记录数量上限。
+
+验证使用假SDK、假trace存储和临时运行上下文，不调用模型或业务数据库。
+当前变更不提供新的性能结论，也不把Coding Plan套餐token折算为真实人民币扣费。

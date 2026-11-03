@@ -1,0 +1,1 @@
+# Browser plugins stub

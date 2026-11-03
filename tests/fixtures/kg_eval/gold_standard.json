@@ -1,0 +1,109 @@
+[
+  {
+    "id": "basic-001",
+    "description": "基础人物-组织-地点提取",
+    "text": "张三在阿里巴巴集团担任技术总监，工作地点在杭州。他本科毕业于浙江大学。",
+    "gold_entities": [
+      {"name": "张三", "type": "person"},
+      {"name": "阿里巴巴集团", "type": "org", "aliases": ["阿里巴巴", "阿里"]},
+      {"name": "杭州", "type": "location"},
+      {"name": "浙江大学", "type": "org"}
+    ],
+    "gold_relations": [
+      {"source": "张三", "target": "阿里巴巴集团", "type": "works_at"},
+      {"source": "张三", "target": "杭州", "type": "located_in"},
+      {"source": "张三", "target": "浙江大学", "type": "learned"}
+    ]
+  },
+  {
+    "id": "temporal-001",
+    "description": "时间属性：曾任职 vs 现任",
+    "text": "张三曾于2015年1月至2017年12月在腾讯工作。2018年1月加入阿里巴巴，现任技术总监。",
+    "gold_entities": [
+      {"name": "张三", "type": "person"},
+      {"name": "腾讯", "type": "org"},
+      {"name": "阿里巴巴", "type": "org"}
+    ],
+    "gold_relations": [
+      {
+        "source": "张三", "target": "腾讯", "type": "works_at",
+        "valid_from": "2015-01", "valid_until": "2017-12", "is_current": false
+      },
+      {
+        "source": "张三", "target": "阿里巴巴", "type": "works_at",
+        "valid_from": "2018-01", "valid_until": null, "is_current": true
+      }
+    ]
+  },
+  {
+    "id": "multi-rel-001",
+    "description": "多关系同实体：一人身兼多职",
+    "text": "李四创办了甲公司并担任CEO，同时他也是乙公司的独立董事。此外，李四在丙学会担任副会长。",
+    "gold_entities": [
+      {"name": "李四", "type": "person"},
+      {"name": "甲公司", "type": "org"},
+      {"name": "乙公司", "type": "org"},
+      {"name": "丙学会", "type": "org"}
+    ],
+    "gold_relations": [
+      {"source": "李四", "target": "甲公司", "type": "founded"},
+      {"source": "李四", "target": "甲公司", "type": "works_at"},
+      {"source": "李四", "target": "乙公司", "type": "member_of"},
+      {"source": "李四", "target": "丙学会", "type": "member_of"}
+    ]
+  },
+  {
+    "id": "alias-001",
+    "description": "实体别名：同一公司的多种表达",
+    "text": "阿里与蚂蚁集团达成合作。阿里巴巴集团控股有限公司CEO表示，阿里云计算业务将提供支持。",
+    "gold_entities": [
+      {
+        "name": "阿里巴巴集团控股有限公司",
+        "type": "org",
+        "aliases": ["阿里巴巴", "阿里", "阿里云"]
+      },
+      {
+        "name": "蚂蚁集团",
+        "type": "org",
+        "aliases": ["蚂蚁金服"]
+      }
+    ],
+    "gold_relations": [
+      {"source": "阿里巴巴集团控股有限公司", "target": "蚂蚁集团", "type": "related_to"}
+    ],
+    "notes": "阿里/阿里巴巴/阿里云 应该对齐为同一实体"
+  },
+  {
+    "id": "disambig-001",
+    "description": "实体消歧：苹果是公司还是水果",
+    "text": "苹果公司发布了新款iPhone。与此同时，山东的苹果迎来了大丰收。",
+    "gold_entities": [
+      {"name": "苹果公司", "type": "org", "aliases": ["Apple"]},
+      {"name": "iPhone", "type": "product"},
+      {"name": "山东", "type": "location"}
+    ],
+    "gold_relations": [
+      {"source": "苹果公司", "target": "iPhone", "type": "owns"}
+    ],
+    "notes": "第二个'苹果'指水果，不应提取为 org 类型实体"
+  },
+  {
+    "id": "complex-001",
+    "description": "复杂关系链：投资+任职",
+    "text": "张三是A公司的创始人兼CEO。A公司投资了B公司500万元。张三的配偶李四在B公司担任CTO。",
+    "gold_entities": [
+      {"name": "张三", "type": "person"},
+      {"name": "李四", "type": "person"},
+      {"name": "A公司", "type": "org"},
+      {"name": "B公司", "type": "org"}
+    ],
+    "gold_relations": [
+      {"source": "张三", "target": "A公司", "type": "founded"},
+      {"source": "张三", "target": "A公司", "type": "works_at"},
+      {"source": "A公司", "target": "B公司", "type": "invested"},
+      {"source": "李四", "target": "B公司", "type": "works_at"},
+      {"source": "张三", "target": "李四", "type": "knows"}
+    ],
+    "notes": "夫妻关系可推断为 knows 关系"
+  }
+]

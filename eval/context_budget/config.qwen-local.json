@@ -1,0 +1,13 @@
+{
+  "model": "qwen3.8-flash-next-unsloth-q8_0",
+  "base_url": "http://100.110.165.80:8080/v1",
+  "api_key_env": "AGENTFORGE_LOCAL_EVAL_API_KEY",
+  "cost_mode": "local_compute_not_metered",
+  "max_model_attempts_per_run": 8,
+  "context_length": 262144,
+  "temperature": 0,
+  "max_output_tokens": 2048,
+  "wall_seconds_per_run": 180,
+  "repeats": 1,
+  "context_mode_sha": "b77ba447f51ff193962d6f0fb78c061c76ae871c"
+}

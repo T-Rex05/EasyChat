@@ -1,0 +1,19 @@
+{
+  "model": "YOUR_LOCAL_MODEL_ID",
+  "base_url": "http://127.0.0.1:8000/v1",
+  "api_key_env": "AGENTFORGE_EVAL_API_KEY",
+  "currency": "CNY",
+  "max_total_cost": 20,
+  "max_model_attempts_per_run": 16,
+  "max_output_tokens": 2048,
+  "wall_seconds_per_run": 300,
+  "repeats": 3,
+  "rates_per_million": {
+    "uncached_input": null,
+    "cache_read": null,
+    "cache_write": null,
+    "output": null
+  },
+  "price_source": null,
+  "context_mode_sha": "b77ba447f51ff193962d6f0fb78c061c76ae871c"
+}

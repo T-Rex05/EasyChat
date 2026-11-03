@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+        .header { background: #2196F3; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; }
+        .alert-box { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 15px 0; }
+        .alert-box.error { background: #f8d7da; border-left-color: #dc3545; }
+        .alert-box.success { background: #d4edda; border-left-color: #28a745; }
+        .alert-box.info { background: #d1ecf1; border-left-color: #17a2b8; }
+        .footer { background: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #666; }
+        .btn { display: inline-block; background: #2196F3; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{TITLE}}</h1>
+    </div>
+    <div class="content">
+        <p>{{GREETING}}</p>
+
+        <div class="alert-box {{ALERT_TYPE}}">
+            <strong>{{ALERT_TITLE}}</strong><br>
+            {{ALERT_MESSAGE}}
+        </div>
+
+        <p>{{DETAILS}}</p>
+
+        <p style="text-align: center; margin: 20px 0;">
+            <a href="{{ACTION_URL}}" class="btn">{{ACTION_TEXT}}</a>
+        </p>
+
+        <p>{{CLOSING}}</p>
+    </div>
+    <div class="footer">
+        <p>此邮件由 Hermes Agent 自动发送 | {{DATE}}</p>
+        <p>如有疑问，请联系 {{SUPPORT_EMAIL}}</p>
+    </div>
+</body>
+</html>

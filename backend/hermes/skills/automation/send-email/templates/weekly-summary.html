@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+        .header { background: #673AB7; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; }
+        .section { margin: 20px 0; padding: 15px; background: #f9f9f9; border-radius: 5px; }
+        .section h3 { color: #673AB7; margin-top: 0; }
+        .task-list { list-style: none; padding: 0; }
+        .task-list li { padding: 8px 0; border-bottom: 1px solid #eee; }
+        .task-list li:last-child { border-bottom: none; }
+        .task-done { color: #28a745; }
+        .task-pending { color: #ffc107; }
+        .footer { background: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>周报 — {{WEEK}}</h1>
+    </div>
+    <div class="content">
+        <p>{{GREETING}}</p>
+
+        <div class="section">
+            <h3>📋 本周完成</h3>
+            <ul class="task-list">
+                {{COMPLETED_TASKS}}
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>🚧 进行中</h3>
+            <ul class="task-list">
+                {{IN_PROGRESS_TASKS}}
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>📅 下周计划</h3>
+            <ul class="task-list">
+                {{NEXT_WEEK_TASKS}}
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>⚠️ 需要协助</h3>
+            <p>{{BLOCKERS}}</p>
+        </div>
+
+        <p>{{CLOSING}}</p>
+    </div>
+    <div class="footer">
+        <p>此邮件由 Hermes Agent 自动生成 | {{DATE}}</p>
+    </div>
+</body>
+</html>
