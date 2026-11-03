@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 36（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14 完成；Task 15：显式装配 + 前端移除/构建 + 提醒/邮件/投递/模型配置 API 完成；旧模块删除/main.py 切换未做** |
-| 下一任务 | **Task 15 剩余：旧后端删除、main.py 切换、144 路由核对；之后 Task 16** |
-| 未开始 | Task 15 剩余、Task 16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 `npm run type-check` / `npm run build` 通过 |
+| 提交数 | 39（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14、Task 16 完成；Task 15 仅剩旧后端删除/main.py 切换/144 路由核对** |
+| 下一任务 | **Task 15 收尾：旧模块删除、main.py 切换、路由核对** |
+| 未开始 | Task 15 收尾 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 type-check/build 通过；`docker build`/容器启动/Hermes ready 已验证 |
 
-最近提交：`0367cca`(Task 15 模型路由) `80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `f276cba`(Task 15 docs) `10ffc03`(Task 14) `24c6f77`(Task 13) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`94dbf38`(SPA/Hermes 镜像修正) `979187d`(Task 16 部署) `0367cca`(Task 15 模型路由) `80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -76,15 +76,17 @@ backend/
 34. **邮件/PDF 先 artifact 后投递**：PDF 未启用/缺依赖时明确失败且不建 artifact；SMTP 未启用不建连；密码只存 AES-GCM 密文，发送失败只重试同一文件。
 35. **前端依赖缺失时先 `npm ci`**：`node_modules` 未入库；`package-lock.json` 是唯一锁。删除 KB/图谱/论文页面后同步删 `src/api/{kb,kbEval,graphrag,notification}.ts` 与 package 依赖，并跑 `npm run type-check`+`npm run build` 验证。
 36. **无渠道也要有投递账本**：bootstrap 用 `DisabledDeliverySender` 构造 DeliveryService，避免邮件/提醒因微信未启用而 503；真正发送前仍校验目标。
+37. **镜像 Hermes 依赖与 ToolRegistry 签名**：`docker/requirements-hermes.txt` 必装 openai/langchain-core/tiktoken/loguru/pytz；vendored Hermes 的 `register(name, toolset, schema, handler...)` 不接受 parameters/description 旧参数，Task 5 的调用已按实际 signature 修正。
+38. **SPA 挂载顺序**：`app.mount("/", StaticFiles(static, html=True))` 必须在所有 API 路由之后；仅当 `static/index.html` 存在，工厂测试无静态目录时不挂载。
 
-## 四、Task 15 剩余与 Task 16
+## 四、Task 15 剩余（唯一未完成任务）
 
-已完成（`986c5d3`、`80f0327`）：新 app 显式挂载 access/usage/assistant/channels/scheduling/delivery/email/memory/skills/evolution；前端删除 KB/图谱/论文/社区/技能池页面与依赖，type-check/build 通过；提醒/邮件/投递 API 就绪。
+Task 16 已完成：单 worker 镜像 `docker build` 成功（496MB），容器 `/healthz`/`/readyz`/SPA 200，注册/登录/memory/skills 200；`EASYCHAT_HERMES_ENABLED=true` 容器 ready；空载 RSS 40.44MiB；compose config OK；`tests/resources` 通过。详见 `docs/architecture/operations.md`。
 
-剩余：
+Task 15 剩余：
 - **旧后端删除/main.py 切换**：先迁移仍保留的旧入口（cron 表达式、文件上传、审计/部门、host whitelist/command blacklist），再把 main.py 切到 `backend.server:app`；删除旧 controller/service/db/rag/graphrag、旧 mapper/provider、MySQL/Redis 启动；删旧测试与样本，确保默认测试无旧模块 import。
-- **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录。
-- **Task 16**：单 worker Docker/持久卷、资源采样（主进程 RSS<1GiB 目标）、干净环境启动、state.db/app.db 中断恢复验收、最终交付文档与未验证项清单。
+- **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录（当前约 130 条旧路由未迁移）。
+- **前端补充**：提醒/进化/投递管理页面（API 已就绪）；旧 Skills/Memory/Cron 页面与旧 API 形状的兼容或改写。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -103,5 +105,6 @@ backend/
 - 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调。
 - 新 app 显式路由已装配；未配置 Runtime 时聊天 503（预期）；生产需设置 JWT/Hermes/模型配置。
 - 前端 type-check/build 已通过，但真实浏览器联调未做；提醒/进化/投递暂无专门页面。
-- 旧 KB/图谱/论文/社区/SQL 模块、旧 mapper/provider、旧 main.py 路由仍存在，main.py 未切换，Task 15 未完成。
+- Docker 镜像已构建/启动/Hermes ready/SPA 访问通过；真实 LLM API 调用未联调（镜像无模型凭证），空载 RSS 40.44MiB 仅为空闲值，非压力测试。
+- Task 15 旧模块删除/main.py 切换未完成，仓库仍保留旧代码。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。

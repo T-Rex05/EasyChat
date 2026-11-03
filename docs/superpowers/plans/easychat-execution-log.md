@@ -912,3 +912,51 @@ ruff check（app/bootstrap/routes/新测试）→ All checks passed
 ### 下一项
 
 继续 Task 15 的保留路由迁移与旧模块删除；随后 Task 16。
+
+---
+
+---
+
+## Task 16：干净镜像、资源、恢复与最终交付 — 2026-11-03 完成（部署部分，commit `979187d` + `94dbf38`）
+
+**状态：** 单 worker 镜像已真实构建/启动/健康检查通过；Hermes 启用模式启动通过；SPA 可访问；资源采样通过。Task 15 的旧模块删除仍未完成，因此整体交付不标“全部完成”。
+
+### 已完成
+
+- `docker/Dockerfile`：多阶段（Node 构建前端 → Python 3.12-slim runtime），单 worker `uvicorn backend.server:app`，健康检查 `/healthz`。
+- `docker/requirements-core.txt`：仅 fastapi/uvicorn/pydantic/httpx/cryptography/aiohttp/tzdata，无 MySQL/Redis/Neo4j/Milvus/RAG；`requirements-hermes.txt` 提供 Hermes 运行时依赖（openai/langchain-core/tiktoken/loguru/pytz 等）。
+- `docker/docker-compose.yml`：只有 easychat + `easychat_data` 卷；无外部数据库；内存 limit 1G；单副本。
+- `.dockerignore` 修正：排除 node_modules/data，但保留前端源码/锁与 operations.md。
+- `backend/app.py`：存在 `static/index.html` 时最后挂载 SPA，不吞 API 路由。
+- `backend/runtime/hermes/tools.py`：按 vendored Hermes `ToolRegistry.register(name, toolset, schema, handler...)` 修正注册参数（原 parameters/description 旧假设在镜像中暴露）。
+- `docs/architecture/operations.md`：构建/启动、数据权威、能力开关、单 worker、备份恢复、资源目标与未验证项。
+- `tests/resources/test_resource_sample.py`：真实 uvicorn 子进程 + psutil RSS 采样（marker=resources）。
+
+### 实际命令与结果
+
+```
+docker build -f docker/Dockerfile -t easychat:test . → 成功（image 496MB）
+docker run ... easychat:test → /healthz 200 /readyz ready
+GET / → 200（前端 SPA）
+容器内注册/登录 /api/auth/me、/api/memory、/api/skills → 200
+docker stats --no-stream → easychat 40.44MiB RSS（空载，目标 <1GiB）
+EASYCHAT_HERMES_ENABLED=true 容器 → /readyz ready（Hermes Runtime 启动成功）
+docker compose -f docker/docker-compose.yml config --quiet → OK
+python -m pytest tests/resources -m resources -q → 1 passed
+python -m pytest tests/...（新套件） -q → 302 passed
+```
+
+### 未验证/限制
+
+- 真实 LLM 对话未联调（镜像无模型配置/API key）；Hermes 启用启动已通过，但真实 API 调用未验收。
+- 真实微信/MCP/SMTP/PDF 未联调；邮件/PDF 可选依赖未安装到镜像（按需构建）。
+- Docker 构建依赖外部网络拉取 base image/依赖；资源测量是空载值，不是压力测试结论。
+- Task 15 旧模块删除/main.py 切换仍未完成，镜像使用新入口但仓库仍保留旧代码。
+
+### schema 版本
+
+`0010_delivery_email`（0001–0010；Task 16 无新迁移）。
+
+### 下一项
+
+Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路由核对；然后整体里程碑四验收。
