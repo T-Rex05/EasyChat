@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = REPO_ROOT / "agent_frontend"
 SRC = FRONTEND / "src"
 REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community", "/api/memories",
-               "/api/cron-jobs", "/api/traces")
+               "/api/cron-jobs", "/api/traces", "/api/data-layers", "/api/admin/pool")
 REMOVED_ROUTES = ("/knowledge", "/kb-eval", "/graph", "/kg-review", "/communities",
                   "/pool-review", "/paper-reproduction", "/memory-dashboard")
 REMOVED_VIEW_FILES = ("KnowledgeView.vue", "KnowledgeEvalView.vue", "GraphView.vue",
@@ -42,6 +42,8 @@ def test_router_and_views_removed():
     assert not (SRC / "api" / "skills.ts").exists()
     assert not (SRC / "api" / "cron.ts").exists()
     assert not (SRC / "api" / "trace.ts").exists()
+    for name in ("DepartmentPanel.vue", "HostWhitelistPanel.vue", "CommandBlacklistPanel.vue"):
+        assert not (SRC / "views" / "admin" / name).exists(), name
 
 
 def test_removed_graph_packages_gone():

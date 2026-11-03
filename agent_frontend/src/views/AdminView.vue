@@ -11,9 +11,6 @@
 
     <UserListPanel v-if="activeTab === 'users'" />
     <RoleListPanel v-else-if="activeTab === 'roles'" ref="roleListRef" @edit="openRoleEdit" />
-    <DepartmentPanel v-else-if="activeTab === 'departments'" />
-    <HostWhitelistPanel v-else-if="activeTab === 'hosts'" />
-    <CommandBlacklistPanel v-else-if="activeTab === 'blacklist'" />
 
     <RoleEditDialog
       v-if="showRoleEdit"
@@ -31,9 +28,6 @@ import AdminLayout from './admin/AdminLayout.vue'
 import UserListPanel from './admin/UserListPanel.vue'
 import RoleListPanel from './admin/RoleListPanel.vue'
 import RoleEditDialog from './admin/RoleEditDialog.vue'
-import HostWhitelistPanel from './admin/HostWhitelistPanel.vue'
-import CommandBlacklistPanel from './admin/CommandBlacklistPanel.vue'
-import DepartmentPanel from './admin/DepartmentPanel.vue'
 import type { Role } from '@/api/admin'
 
 const auth = useAuthStore()
@@ -44,9 +38,6 @@ const visibleTabs = computed(() => {
   const tabs: { key: string; label: string; perm: string }[] = [
     { key: 'users', label: '用户管理', perm: 'system.manage' },
     { key: 'roles', label: '角色管理', perm: 'system.manage' },
-    { key: 'departments', label: '部门管理', perm: 'system.manage' },
-    { key: 'hosts', label: '主机白名单', perm: 'system.manage' },
-    { key: 'blacklist', label: '命令黑名单', perm: 'system.manage' },
   ]
   return tabs.filter(t => auth.hasPerm(t.perm))
 })

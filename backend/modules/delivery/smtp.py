@@ -322,3 +322,113 @@ def build_email_router(service: EmailService, authenticate: Any) -> APIRouter:
         return {"ok": True}
 
     return router
+
+
+def build_email_compat_router(service: EmailService, authenticate: Any) -> APIRouter:
+    """旧邮件配置/个人邮箱/平台测试路径的兼容层，全部落到新 EmailService。"""
+    from backend.shared.errors import CapabilityUnavailableError, UnauthenticatedError
+
+    def _principal(authorization: str | None):
+        token = (authorization or "").replace("Bearer ", "").strip()
+        if not token:
+            raise UnauthenticatedError("请先登录")
+        return authenticate(token)
+
+    def _config_payload(view: EmailConfigView) -> dict[str, Any]:
+        return {
+            "id": 1, "config_name": view.sender_name or "默认邮箱",
+            "host": view.host, "port": str(view.port), "sender_email": view.sender_email,
+            "sender_name": view.sender_name, "password": view.password_masked,
+            "is_current": 1, "enabled": 1 if view.enabled else 0,
+            "created_at": view.updated_at, "updated_at": view.updated_at,
+        }
+
+    def _save_body(body: dict[str, Any], principal) -> EmailConfigView:
+        current = service.get_config(principal)
+        enabled = bool(body.get("enabled", True))
+        if body.get("_disable"):
+            enabled = False
+        return service.save_config(
+            principal,
+            host=str(body.get("host") or current.host),
+            port=int(body.get("port") or current.port),
+            username=str(body.get("username") or current.username),
+            password=str(body.get("password") or "") or None,
+            sender_email=str(body.get("sender_email") or current.sender_email),
+            sender_name=str(body.get("sender_name") or current.sender_name),
+            use_tls=bool(body.get("use_tls", current.use_tls)),
+            enabled=enabled,
+        )
+
+    router = APIRouter(tags=["email-compat"])
+
+    @router.get("/api/email-configs")
+    async def list_configs(authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        return {"configs": [_config_payload(service.get_config(principal))]}
+
+    @router.post("/api/email-configs")
+    async def create_config(body: dict[str, Any],
+                            authorization: Annotated[str | None, Header()] = None):
+        _save_body(body, _principal(authorization))
+        return {"ok": True, "id": 1}
+
+    @router.put("/api/email-configs/{config_id}")
+    async def update_config(config_id: int, body: dict[str, Any],
+                            authorization: Annotated[str | None, Header()] = None):
+        _save_body(body, _principal(authorization))
+        return {"ok": True}
+
+    @router.put("/api/email-configs/{config_id}/active")
+    async def set_active(config_id: int,
+                         authorization: Annotated[str | None, Header()] = None):
+        _principal(authorization)
+        return {"ok": True}
+
+    @router.delete("/api/email-configs/{config_id}")
+    async def delete_config(config_id: int,
+                            authorization: Annotated[str | None, Header()] = None):
+        _save_body({"_disable": True}, _principal(authorization))
+        return {"ok": True}
+
+    @router.post("/api/email-configs/{config_id}/test")
+    async def test_config(config_id: int,
+                          authorization: Annotated[str | None, Header()] = None):
+        _principal(authorization)
+        raise CapabilityUnavailableError("真实 SMTP 测试需外部网络，离线环境不启用")
+
+    @router.get("/api/personal-emails")
+    async def list_personal(authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        rows = service.list_recipients(principal)
+        return {"emails": [{
+            "id": r["id"], "email": r["address"], "is_current": 1 if r.get("active") else 0,
+            "created_at": r.get("created_at"),
+        } for r in rows if r.get("active")]}
+
+    @router.post("/api/personal-emails")
+    async def add_personal(body: dict[str, Any],
+                           authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        email = str(body.get("email") or "")
+        row = service.add_recipient(principal, name="", address=email)
+        return {"ok": True, "id": row["id"]}
+
+    @router.put("/api/personal-emails/{email_id}/active")
+    async def set_personal_active(email_id: str,
+                                  authorization: Annotated[str | None, Header()] = None):
+        _principal(authorization)
+        return {"ok": True}
+
+    @router.delete("/api/personal-emails/{email_id}")
+    async def delete_personal(email_id: str,
+                              authorization: Annotated[str | None, Header()] = None):
+        service.deactivate(_principal(authorization), email_id)
+        return {"ok": True}
+
+    @router.post("/api/platform-config/email/test")
+    async def platform_email_test(authorization: Annotated[str | None, Header()] = None):
+        _principal(authorization)
+        raise CapabilityUnavailableError("真实 SMTP 测试需外部网络，离线环境不启用")
+
+    return router

@@ -33,7 +33,8 @@ async def test_explicit_routes_and_health(client):
     assert {"/api/auth/login", "/api/memory", "/api/skills", "/api/channels/accounts",
             "/api/usage/ranking", "/chat/stream", "/api/schedules",
             "/api/email/config", "/api/deliveries",
-            "/api/model-configs", "/api/model-routes/fallback-chain"}.issubset(paths)
+            "/api/model-configs", "/api/model-routes/fallback-chain",
+            "/api/email-configs", "/api/personal-emails"}.issubset(paths)
 
 
 async def test_removed_module_prefixes_not_mounted(client):
@@ -89,3 +90,39 @@ async def test_assistant_route_reports_unavailable_without_runtime(client):
     })
     assert response.status_code == 503
     assert response.json()["error"] == "capability_unavailable"
+
+
+async def test_email_compat_paths_use_new_service(tmp_path):
+    app = create_app(AppSettings(
+        data_db_path=tmp_path / "app.db",
+        state_db_path=tmp_path / "state.db",
+        artifacts_dir=tmp_path / "artifacts",
+        encryption_secret="e" * 64,
+    ))
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            reg = await c.post("/api/auth/register", json={
+                "username": "mail_admin", "password": "password6",
+            })
+            token = reg.json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            me = await c.get("/api/auth/me", headers=headers)
+            registry = app.state.registry
+            registry.access.repo.set_user_role(me.json()["id"], "super_admin")
+            registry.access.invalidate_all()
+
+            assert (await c.get("/api/email-configs", headers=headers)).status_code == 200
+            saved = await c.post("/api/email-configs", headers=headers, json={
+                "config_name": "测试", "host": "smtp.example.com", "port": "587",
+                "sender_email": "bot@example.com", "sender_name": "EasyChat",
+                "password": "secret",
+            })
+            assert saved.status_code == 200
+            listed = await c.get("/api/email-configs", headers=headers)
+            assert listed.json()["configs"][0]["host"] == "smtp.example.com"
+            assert listed.json()["configs"][0]["password"] != "secret"
+            added = await c.post("/api/personal-emails", headers=headers,
+                                 json={"email": "me@example.com"})
+            assert added.status_code == 200
+            assert (await c.get("/api/personal-emails", headers=headers)).status_code == 200

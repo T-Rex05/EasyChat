@@ -17,7 +17,6 @@
             <th>ID</th>
             <th>用户名</th>
             <th>角色</th>
-            <th>部门</th>
             <th>状态</th>
             <th>创建时间</th>
             <th>操作</th>
@@ -35,11 +34,6 @@
               </select>
             </td>
             <td>
-              <button class="btn-link" @click="openLayerEdit(user)">
-                {{ getUserLayerNames(user) }}
-              </button>
-            </td>
-            <td>
               <span :class="['status-badge', user.status === 1 ? 'status-active' : 'status-inactive']">
                 {{ user.status === 1 ? '正常' : '已禁用' }}
               </span>
@@ -55,55 +49,22 @@
       </table>
     </div>
 
-    <!-- 部门编辑对话框 -->
-    <div v-if="showLayerDialog" class="dialog-overlay" @click="closeLayerDialog">
-      <div class="dialog" @click.stop>
-        <div class="dialog-header">
-          <h3>编辑用户部门</h3>
-          <button class="btn-close" @click="closeLayerDialog">×</button>
-        </div>
-        <div class="dialog-body">
-          <p class="dialog-user">用户：<b>{{ editingUser?.username }}</b></p>
-          <div class="layer-checkboxes">
-            <label v-for="layer in layers" :key="layer.id" class="layer-checkbox">
-              <input type="checkbox" :value="layer.id" v-model="editingLayerIds" />
-              <span>{{ layer.name }}</span>
-            </label>
-          </div>
-        </div>
-        <div class="dialog-footer">
-          <button class="btn" @click="closeLayerDialog">取消</button>
-          <button class="btn btn-primary" @click="saveUserLayers" :disabled="savingLayers">
-            {{ savingLayers ? '保存中...' : '保存' }}
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import * as AdminAPI from '@/api/admin'
-import type { User, Role, DataLayer } from '@/api/admin'
+import type { User, Role } from '@/api/admin'
 
-const users = ref<(User & { layer_ids?: number[] })[]>([])
+const users = ref<User[]>([])
 const roles = ref<Role[]>([])
-const layers = ref<DataLayer[]>([])
 const loading = ref(false)
 
 async function loadUsers() {
   loading.value = true
   try {
     users.value = await AdminAPI.getUsers()
-    // 加载每个用户的部门
-    for (const user of users.value) {
-      try {
-        user.layer_ids = await AdminAPI.getUserDataLayers(user.id)
-      } catch {
-        user.layer_ids = [0]
-      }
-    }
   } catch (e) {
     console.error('加载用户失败:', e)
   } finally {
@@ -119,14 +80,6 @@ async function loadRoles() {
   }
 }
 
-async function loadLayers() {
-  try {
-    layers.value = await AdminAPI.getDataLayers()
-  } catch (e) {
-    console.error('加载部门失败:', e)
-  }
-}
-
 async function updateUserRole(user: User) {
   try {
     await AdminAPI.updateUserRole(user.id, user.role)
@@ -135,51 +88,6 @@ async function updateUserRole(user: User) {
     console.error('更新用户角色失败:', e)
     alert('❌ 更新角色失败')
     await loadUsers()
-  }
-}
-
-// ── 部门编辑对话框 ──
-const showLayerDialog = ref(false)
-const editingUser = ref<(User & { layer_ids?: number[] }) | null>(null)
-const editingLayerIds = ref<number[]>([])
-const savingLayers = ref(false)
-
-function getUserLayerNames(user: User & { layer_ids?: number[] }): string {
-  if (!user.layer_ids || user.layer_ids.length === 0) return '全员'
-  const names = user.layer_ids.map(id => {
-    const layer = layers.value.find(l => l.id === id)
-    return layer ? layer.name : `层级${id}`
-  })
-  return names.join(', ')
-}
-
-function openLayerEdit(user: User & { layer_ids?: number[] }) {
-  editingUser.value = user
-  editingLayerIds.value = [...(user.layer_ids || [0])]
-  showLayerDialog.value = true
-}
-
-function closeLayerDialog() {
-  showLayerDialog.value = false
-  editingUser.value = null
-  editingLayerIds.value = []
-}
-
-async function saveUserLayers() {
-  if (!editingUser.value) return
-  const userName = editingUser.value.username
-  savingLayers.value = true
-  try {
-    const layerIds = editingLayerIds.value.length > 0 ? editingLayerIds.value : [0]
-    await AdminAPI.setUserDataLayers(editingUser.value.id, layerIds)
-    editingUser.value.layer_ids = layerIds
-    closeLayerDialog()
-    alert(`✅ 用户 ${userName} 的部门已更新`)
-  } catch (e) {
-    console.error('更新用户部门失败:', e)
-    alert('❌ 更新部门失败')
-  } finally {
-    savingLayers.value = false
   }
 }
 
@@ -203,7 +111,6 @@ function formatTime(time?: string): string {
 onMounted(() => {
   loadUsers()
   loadRoles()
-  loadLayers()
 })
 </script>
 
