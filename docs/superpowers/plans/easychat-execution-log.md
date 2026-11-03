@@ -51,7 +51,7 @@ python -m compileall -q backend/shared backend/runtime backend/modules backend/a
 
 ### 提交
 
-`（Task 1 提交后回填）`
+`6f418e5` feat(backend): public contracts, explicit bootstrap, side-effect-free app factory (Task 1)
 
 ### 下一项
 
