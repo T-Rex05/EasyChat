@@ -5,13 +5,30 @@
 """
 from __future__ import annotations
 
-import asyncio
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Mapping
+from typing import AsyncIterator
 
 from backend.bootstrap import AppSettings
+from backend.platform.sqlite import Database, utc_now_iso
 from backend.runtime.contracts import RuntimeEvent, RuntimeRequest
+
+# 测试专用 JWT 密钥（64位，满足弱密钥拒绝规则）
+TEST_JWT_SECRET = "e" * 64
+
+
+class FakeClock:
+    """可推进的确定性时钟（秒）。"""
+
+    def __init__(self, now: float = 1_000_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 class FakeRuntime:
@@ -52,7 +69,10 @@ class TestRig:
 
     tmp_path: Path
     settings: AppSettings
+    clock: FakeClock = field(default_factory=FakeClock)
     runtime: FakeRuntime = field(default_factory=FakeRuntime)
+    db: Database | None = None
+    access: object | None = None  # Task 3: AccessService（字符串标注避免导入细节泄漏）
     _closed: bool = False
 
     async def aclose(self) -> None:
@@ -60,21 +80,68 @@ class TestRig:
             return
         self._closed = True
         await self.runtime.aclose()
+        if self.db is not None:
+            self.db.close()
         # Task 6 起在此关闭 assistant dispatcher；Task 8 起关闭 jobs worker。
 
+    # ---- 种子（真实写入口；说明见各方法 docstring） ---------------------------
 
-def make_rig(tmp_path: Path, clock: Mapping[str, object] | None = None) -> TestRig:
-    """构造独立测试环境。clock 参数在 Task 8（调度）接入注入的UTC时钟函数。"""
-    del clock  # 预留：注入 clock 注释见上
+    def seed_user(
+        self,
+        role: str = "user",
+        grants: tuple[str, ...] = (),
+        revokes: tuple[str, ...] = (),
+        username: str | None = None,
+    ):
+        """经真实 access 注册入口建用户，再按 bootstrap 种子语义设定角色/覆盖。
+
+        角色与覆盖经 repository 写入（等价旧 SQL 播种路径），随后 invalidate_all
+        保持缓存一致；有效权限仍由服务层规则计算，测试不手工拼权限集合。
+        """
+        assert self.access is not None, "make_rig(seed_access=True) 才能使用 seed_user"
+        access = self.access
+        name = username or f"user_{utc_now_iso()}_{uuid.uuid4().hex[:8]}"
+        result = access.register(name, "password6")
+        user_id = result["user_id"]
+        if role != "user":
+            access.repo.set_user_role(user_id, role)
+        for perm in grants:
+            access.repo.set_user_permission(user_id, perm, True)
+        for perm in revokes:
+            access.repo.set_user_permission(user_id, perm, False)
+        access.invalidate_all()
+        return access.snapshot_principal(user_id)
+
+    def seed_session(self, principal, source: str = "web") -> str:
+        """真实会话入口创建会话（Task 6 assistant 就绪后接入）。"""
+        raise NotImplementedError("Task 6 接入 assistant 后实现")
+
+
+def make_rig(
+    tmp_path: Path,
+    clock: FakeClock | None = None,
+    *,
+    seed_access: bool = False,
+) -> TestRig:
+    """构造独立测试环境。seed_access=True 时迁移真实临时库并装配 AccessService。
+
+    clock 传入可推进的 FakeClock 以固定时间（Task 8 调度测试使用）。
+    """
+    from backend.modules.access.api import AccessService
+
     data_dir = tmp_path / "data"
     settings = AppSettings(
         data_db_path=data_dir / "app.db",
         state_db_path=data_dir / "state.db",
         artifacts_dir=data_dir / "artifacts",
     )
-    return TestRig(tmp_path=tmp_path, settings=settings)
-
-
-def run_async(coro: object) -> None:
-    """同步入口帮助函数（供未来非async测试使用）。"""
-    asyncio.run(coro)  # type: ignore[arg-type]
+    rig = TestRig(tmp_path=tmp_path, settings=settings)
+    if clock is not None:
+        rig.clock = clock
+    if seed_access:
+        rig.db = Database(settings.data_db_path)
+        rig.db.migrate()
+        access = AccessService(rig.db, jwt_secret=TEST_JWT_SECRET, clock=rig.clock)
+        access.seed()
+        rig.access = access
+    return rig

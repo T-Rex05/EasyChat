@@ -55,7 +55,7 @@ python -m compileall -q backend/shared backend/runtime backend/modules backend/a
 
 ### 下一项
 
-Task 3：RBAC、用户/角色/部门与会话资源授权。
+Task 3：RBAC、用户/角色/部门与会话资源授权（已完成，见下）。
 
 ---
 
@@ -149,3 +149,48 @@ Task 3：RBAC、用户/角色/部门与会话资源授权。
 ### 下一项
 
 Task 1：公开契约、显式装配与无副作用工厂（`backend/shared/*`、`runtime/contracts.py`、`app.py`/`bootstrap.py`、测试设施 rig、架构 AST 测试、工厂契约测试）。
+
+---
+
+## Task 3：RBAC、用户/角色/部门与会话资源授权 — 2026-11-03 完成
+
+**状态：** 已完成（离线测试全绿）。
+
+### 新建文件
+
+- `backend/modules/access/contracts.py`：权限/工具集注册数据 + `UserSnapshot`/`RoleInfo`/`PermissionOverride`。权限口径：保留 12 键（chat.use、skill.create、skill.manage、memory.view、memory.edit、terminal.audit、cron.create、system.manage、system.config、trace.view、trace.manage），移除 skill.pool.review/kb.manage/kb.eval/graph.manage/paper.use（R03/R14），新增 evolution.view/evolution.manage（R12）。工具集移除 paper_repro，历史废弃键过滤沿用旧 checker 清单。部门现状：旧库无 departments 表，仅历史权限键，不新增不删除。
+- `backend/modules/access/policy.py`：纯函数——`effective_permissions`（revoke > grant > 角色；super_admin 取已注册全集）、`effective_toolsets`（fail-closed 过滤）、`can_manage_resource`（super_admin/manage权限/owner，沿用旧 check_ownership 语义）。
+- `backend/modules/access/repository.py`：users/roles/role_permissions/user_permissions/permission_defs 全部 SQLite 访问 + scrypt 密码哈希（格式沿用旧 auth_service，存量 SHA256+salt 验证并升级）+ 种子（默认授权仅在角色零授权时播种）。
+- `backend/modules/access/api.py`：`AccessService`——register/login（弱密钥拒绝沿用旧规则）、token 生命周期（HS256 格式沿用旧实现，旧 token 可验证；滑动续期+宽限刷新）、`authenticate_token`（每次对 DB 重查禁用状态与角色，token 内角色不信任——按架构 §6 比旧中间件更严格）、`validate_principal`（排队执行/后台重试前重校验）、有界缓存（revision 全局递增，任何授权变更整体失效，替代 Redis）、资源归属授权、用户/角色管理。
+- `backend/modules/access/routes.py`：`build_access_router(access)` 注入式工厂；/api/auth（register/login/me/refresh/users）+ /api/admin（users、role/status/perms、permissions、toolsets、roles CRUD）。响应结构沿用旧契约；移除社区审核端点。
+- `tests/support/rig.py` 扩展：`db`/`access` 字段、`seed_user(role, grants, revokes)`（真实注册入口+repository 种子路径）、`FakeClock`、`make_rig(seed_access=True)`。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/access tests/storage tests/architecture tests/contracts/test_app_factory.py tests/contracts/test_auth.py -q
+→ 85 passed in 19.64s
+python -m ruff check backend/modules/access tests/access tests/contracts/test_auth.py tests/support → All checks passed!
+python -m compileall -q backend/modules/access → OK
+```
+
+### 关键决策记录
+
+- super_admin 有效权限=运行时注册全集，不在库中重复授权（与旧 seed_to_db 行为一致）；revoke 对 super_admin 无效。
+- 未注册权限键在服务层入口拒绝（set_user_permission/create_role/update_role），防止已删业务权限（kb.manage 等）重新进入授权。
+- 缓存失效策略从 Redis+LRU 改为单进程有界 OrderedDict + revision；角色/用户/授权任何变更 invalidate_all（个人助手单机规模，简单正确优先）。
+- 禁用用户即时生效靠 authenticate/snapshot 重查 DB（旧行为仅登录时检查，架构 §6 要求请求级重查）。
+- rig.seed_user 经 repository 写入角色/覆盖，等价旧 SQL 播种路径；有效权限仍由服务层计算，测试不手工拼集合。
+
+### 未验证项
+
+- HTTP 端点与旧前端的字段级兼容（分页、字段命名差异）在 Task 15 前端迁移时按 fixture 逐项核对。
+- 微信解绑（channel binding）即时失效属 channels 模块（Task 7 验证）。
+
+### schema 版本
+
+`0001_core`（无新增迁移；access 复用首批表）。
+
+### 下一项
+
+Task 4：模型配置与唯一用量计量入口。
