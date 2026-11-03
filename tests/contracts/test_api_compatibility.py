@@ -32,7 +32,8 @@ async def test_explicit_routes_and_health(client):
     paths = set(app.openapi()["paths"])
     assert {"/api/auth/login", "/api/memory", "/api/skills", "/api/channels/accounts",
             "/api/usage/ranking", "/chat/stream", "/api/schedules",
-            "/api/email/config", "/api/deliveries"}.issubset(paths)
+            "/api/email/config", "/api/deliveries",
+            "/api/model-configs", "/api/model-routes/fallback-chain"}.issubset(paths)
 
 
 async def test_removed_module_prefixes_not_mounted(client):

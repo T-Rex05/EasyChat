@@ -80,6 +80,14 @@ async def run_startup(registry: ModuleRegistry) -> None:
             ),
         )
 
+    if registry.models is None and registry.settings.encryption_secret:
+        from backend.modules.models.api import ModelsService
+
+        registry.models = ModelsService(
+            db, encryption_secret=registry.settings.encryption_secret,
+            permission_check=registry.access.require_permission,
+        )
+
     if registry.runtime is None and registry.settings.hermes_enabled:
         from backend.runtime.hermes.adapter import HermesRuntimeAdapter
 
