@@ -23,6 +23,8 @@ _PREFIX_OCCURRENCE = "occ"
 _PREFIX_MEMORY = "mem"
 _PREFIX_REVISION = "rev"
 _PREFIX_SIGNAL = "sig"
+_PREFIX_SKILL = "skl"
+_PREFIX_SKILL_VERSION = "skv"
 
 
 def _new_id(prefix: str) -> str:
@@ -71,6 +73,14 @@ def new_revision_id() -> str:
 
 def new_signal_id() -> str:
     return _new_id(_PREFIX_SIGNAL)
+
+
+def new_skill_id() -> str:
+    return _new_id(_PREFIX_SKILL)
+
+
+def new_skill_version_id() -> str:
+    return _new_id(_PREFIX_SKILL_VERSION)
 
 
 def new_artifact_id() -> str:
