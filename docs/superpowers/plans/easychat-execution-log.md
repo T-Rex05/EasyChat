@@ -714,3 +714,49 @@ python -m ruff check backend/modules/evolution tests/evolution
 ### 下一项
 
 Task 13：脚本 Runner 与权限范围（受限执行契约、假 Runner、Linux 隔离验收保持关闭）。
+
+---
+
+---
+
+## Task 13：脚本 Runner 与权限范围 — 2026-11-03 完成（commit `5044c61`；真实隔离未验收）
+
+**状态：** 契约与默认关闭实现完成；真实 Linux 隔离验收未执行，自动执行保持关闭。
+
+### 新建文件
+
+- `backend/modules/evolution/runner_contracts.py`：`RunnerLimits`（deadline/memory/output 校验）、`RunnerCapabilities`（read/write/network/env 白名单）、`RunnerInput`（artifact/workspace/argv/input artifacts，不接收整包凭证）、`RunnerResult`（exit/timeout/denied/error + 受限 stdout/stderr + artifacts）、`ScriptRunner` Protocol。
+- `backend/integrations/script_runner.py`：`DisabledScriptRunner`（默认 denied）；`LocalSubprocessRunner`（仅 Linux、显式 enabled、workdir/读写路径根内校验、拒绝网络能力、env 白名单排除密钥、超时硬终止、输出截断）；`build_default_runner` 无 `bwrap`/非 Linux/未启用一律 disabled。
+- 测试：`tests/evolution/test_runner_contract.py`（限制值校验、默认 denied、假 Runner 流程、路径/网络拒绝、未启用拒绝）、`tests/integration/test_linux_runner.py`（integration 标记；Linux 真实越界/超时验收，未通过时自动执行保持关闭）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/evolution/test_runner_contract.py -q
+→ 5 passed in 0.34s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q
+→ 281 passed in 87.36s
+python -m ruff check ...
+→ All checks passed!
+```
+
+### 关键决策
+
+- **默认 disabled**：没有通过隔离验收的 Runner 时，任何执行请求都返回 denied；不把“子进程 + 参数过滤”当成安全隔离。
+- **能力显式**：RunnerInput 只给 artifact/workspace/argv 与显式能力；不携带 API key/SMTP 密码/部署密钥。
+- **本地 Runner 有边界**：拒绝网络能力（无法强制网络隔离）；workdir/读写路径必须在 workspace/artifacts 根内；超时 kill + wait 回收。
+
+### 未验证项
+
+- **真实 Linux 隔离未验收**：未安装/验证 bubblewrap 等隔离；`tests/integration/test_linux_runner.py` 未在目标 Linux 运行，自动执行保持关闭。
+- 生成/静态检查/执行验证三种状态尚未接入 UI/记录；未连接候选激活流程。
+- 环境凭证不可见/内存限制/输出限制只在代码路径实现，未做真实攻击样例验证。
+- Remote Runner 未实现。
+
+### schema 版本
+
+无新迁移（0001–0009）。
+
+### 下一项
+
+Task 14：邮件/PDF 按需启用与历史任务兼容（SMTP 配置/收件人、PDF artifact、失败只重发文件）。

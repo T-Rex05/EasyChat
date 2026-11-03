@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 26（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–12**（里程碑一 ~ 三：渠道/投递/记忆/技能/学习/验证采用） |
-| 下一任务 | **Task 13：脚本 Runner 与权限范围** |
-| 未开始 | Task 13–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **276 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 28（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–13**（里程碑一 ~ 三；Runner 契约完成但真实隔离未验收） |
+| 下一任务 | **Task 14：邮件/PDF 按需启用与历史任务兼容** |
+| 未开始 | Task 14–16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **281 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
 
-最近提交：`6ee4973`(Task 12) `cdfb504`(Task 10-11 docs) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`5044c61`(Task 13) `32e6ac0`(Task 12 docs) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -72,15 +72,16 @@ backend/
 30. **预算按项目时区日切**：`evolution_budgets(stat_date,user_id)`；每日 20k/单次 5k 默认可配；超预算任务标 paused，不发下一次 LLM。
 31. **验证先于采用**：无 baseline 不能证明无回归；pin 技能自动采用一律保留原版；采用只 CAS 切 active 指针并写证据，回滚也是 CAS。
 32. **回放必须零副作用**：验证 replayer 由注入替身提供，测试断言不产生 deliveries/runs；真实执行必须等 Task 13 Runner 隔离验收。
+33. **Runner 默认 disabled**：没有通过真实 Linux 隔离验收前，任何脚本执行请求都返回 denied；子进程+参数过滤不等于安全隔离，自动执行保持关闭。
 
-## 四、下一个任务（Task 13）的实施要点
+## 四、下一个任务（Task 14）的实施要点
 
-按实施计划原文：`backend/integrations/script_runner.py`、`backend/modules/evolution/runner_contracts.py`、`tests/evolution/test_runner_contract.py`、`tests/integration/test_linux_runner.py`。
+按实施计划原文：`backend/integrations/pdf.py`、`backend/modules/delivery/{smtp,reports}.py`、邮件配置/收件人路由迁移、`tests/delivery/test_reports.py`、`tests/delivery/test_email.py`。
 
-- 定义 Runner 输入：版本 artifact、工作目录引用、输入 artifact、deadline、memory/output 限制、显式文件/网络/工具能力；返回 exit/timeout/denied、产物与受限日志；不接收整包业务凭证。
-- 先用假 Runner 验收候选流程；Linux 实现选择受限本地 runner 或配置远程 runner 并固定文档；默认无隔离能力时不启用自动执行。
-- 真 Runner 必须验证文件越界、网络越界、环境凭证不可见、超时硬终止、内存/输出限制、子进程回收；验证不能修改源码/鉴权/迁移/技能 active 内容。
-- 生成/静态检查/执行验证三种状态在 UI 和记录中明确区分；未通过真实隔离测试时标注未验收并保持关闭。
+- 保留 SMTP 配置、联系人、渠道选择与报告格式，迁到 SQLite；能力开关及凭证保护保留 RBAC，配置响应不得泄露密码。
+- PDF 生成独立受控进程/队列，先落不可变 artifact；邮件失败只重发该文件；未启用时不 import 渲染栈、不启动 SMTP 连接。
+- 测试新提醒默认文本、老 PDF 任务格式不变、渲染缺依赖明确不可用、渲染超时回收进程、临时文件清理不误删被投递引用产物、发送不确定状态正确。
+- 真实渲染/SMTP 在用户提供测试端点后单列 integration；未授权不发真实邮件。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -95,6 +96,7 @@ backend/
 - 指纹窗口桶边界：重投恰好跨过 5s 桶边界时可能再执行一次；完全消除需滑动窗口查询，列为后续改进。
 - 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
-- 脚本 Runner 真实隔离验收（Task 13）未做——在此之前脚本"自动执行"必须保持关闭。
+- 脚本 Runner 契约完成但真实 Linux 隔离未验收（Task 13）——自动执行继续保持关闭。
+- 邮件/PDF 尚未迁移（Task 14）；SMTP 凭证保护与按需渲染未实现。
 - 前端完全未改动。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。
