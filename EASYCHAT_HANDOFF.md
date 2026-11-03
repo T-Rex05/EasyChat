@@ -18,9 +18,9 @@
 
 ## 已经完成与尚未完成
 
-已完成：从当前AgentForge工作区复制1,796个源码/必要文件到EasyChat，含未提交修改；逐文件校验。独立Git仓库分支main，origin为`https://gitee.com/T_Rex_Warrior/easy-chat.git`。复制基线来源HEAD为`23fdb99f60b6382018e5e8960352129024c6965c`，但副本内容包含该HEAD之外的工作区修改。
+已完成：Task 0–7（源码基线、公开契约/无副作用工厂、SQLite 平台与迁移、RBAC、唯一计量/模型、Hermes Runtime Adapter、统一 Assistant/Web 兼容、微信渠道离线链路）。新架构测试当前 **185 passed**；逐任务证据、commit 与未验证项见 `docs/superpowers/plans/easychat-execution-log.md`，当前进度与交接要点见 `EASYCHAT_PROGRESS.md`。
 
-未完成：任何业务改造、依赖精简、SQLite迁移、真实联调、性能测试。新仓库当前没有基线提交，也没有推送。旧方案文档仅补了历史版本提示，新增架构/任务文档不代表功能已实现。
+未完成：Task 8–16（投递/提醒、记忆、技能、进化、脚本 Runner、旧模块删除、前端与镜像交付）；真实 LLM/微信/MCP/SMTP 未联调；新仓库未推送。旧方案文档仅补了历史版本提示，新增架构/任务文档不代表未完成任务已实现。
 
 没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
 
@@ -62,9 +62,10 @@
 ## 可以直接交给执行模型的指令
 
 ```text
-请在 E:\PythonCode\EasyChat 按 EASYCHAT_HANDOFF.md 开始实施。
-先阅读其中链接的架构规范、实施计划和源码定位，从 Task 0 按顺序执行，
-每阶段完成必要测试和本地提交，更新 easychat-execution-log.md。
+请在 E:\PythonCode\EasyChat 按 EASYCHAT_PROGRESS.md 的当前进度继续实施。
+先读 EASYCHAT_PROGRESS.md、架构规范、实施计划和 easychat-execution-log.md，
+从未完成任务的下一项开始（当前为 Task 8），每阶段完成必要测试和本地提交，
+更新 easychat-execution-log.md 与 EASYCHAT_PROGRESS.md。
 不要修改 E:\PythonCode\AgentForge，不使用旧生产凭证，不自动推送。
 严格保留RBAC、Token排行榜、个人技能库、微信提醒和执行记录，
 邮件/PDF按需能力也要保留。架构采用模块化单体和单一执行/计量/进化入口，
@@ -73,4 +74,4 @@
 不要在前几个任务就宣称全部完成；按四个里程碑交付并明确未验证项。
 ```
 
-本次方案作者没有开始任何Task的业务实现。执行者接手后先核对工作区是否已被其他开发者修改，继续现有进度，不覆盖新改动。
+本文件最初由方案作者编写（当时未开始任何 Task 的业务实现）。当前 Task 0–7 已由执行模型完成；接手者先按 `EASYCHAT_PROGRESS.md` 核对工作区与最新提交，继续现有进度，不覆盖后续改动。

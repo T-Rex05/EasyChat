@@ -363,3 +363,79 @@ python -m compileall -q backend/modules/assistant backend/bootstrap.py → OK
 ### 下一项
 
 Task 7：微信与多端归一化、身份绑定和持久去重。
+
+---
+
+---
+
+## Task 7：微信与多端归一化、身份绑定和持久去重 — 2026-11-03 完成（commit `72aa14c` + 加固 `5cce711`、`08a4bd7`）
+
+**状态：** 已完成（离线渠道闭环全绿：真实临时 SQLite + FakeTransport/FakeRuntime；真实 iLink 扫码/收发/CDN 未联调）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0004_channels.sql`：账号生命周期列（`bot_user_id`/`sync_cursor`/`last_poll_at`/`last_error`）、事件处理结果列（`session_id`/`run_id`/`state`/`error`）、`channel_session_cursors`（每个微信聊天当前指向的 Assistant 会话）。0001–0003 未改动，checksum 不变。
+- `backend/shared/crypto.py`：把 AES-256-GCM 部署密钥加解密从 models.repository 抽出为共享 codec（models 保持同名导入，行为不变）；渠道 bot token 只以密文存 `channel_accounts.credentials_ref`。
+- `backend/modules/channels/contracts.py`：`ChannelAccount/ChannelBinding/MediaRef/InboundMessage/InboundOutcome/ListenerState/QrSessionView` 等冻结值对象；reason 常量；指纹窗口（默认 5s）、单消息媒体引用上限 10、媒体大小上限 50MB；监听状态 stopped/starting/running/backoff/error（没有假 running）。
+- `backend/modules/channels/repository.py`：账号 upsert（按 platform+account_id 幂等）、绑定 upsert/禁用、事件原子插入（`ON CONFLICT(platform,account_id,external_event_id) DO NOTHING`）、会话指针读写、旧事件清理。事件唯一键与表约束一致，重复接收返回既有事件。
+- `backend/modules/channels/wechat/parser.py`：iLink msg → InboundMessage；文本拼接、图片/语音/文件/视频只提取下载/解密描述（URL/encrypt_query_param/aes_key/文件名/声明大小），绝不保留字节；媒体引用按内容去重并截断到 10；稳定 `message_id` → `msg:<id>`，否则 `fp:<sha256>:<窗口桶>`，并记录 event_kind=fingerprint（窗口过后相同文本可再次处理）。
+- `backend/modules/channels/wechat/account.py`：`IlinkTransport` Protocol + `AiohttpTransport`（GET/POST/流式下载，import 不建连）、iLink 头、`QrLoginManager` 扫码状态机（wait/scanned/confirmed/expired、scaned_but_redirect、过期最多刷新 3 次、内存会话有界）、`send_text`（1800 字符分块、块间 1.2s、ret≠0 抛错）。
+- `backend/modules/channels/wechat/listener.py`：每账号一个长轮询 task；真实状态机（starting→running 仅在一次成功轮询后；失败→backoff 并持久化 last_error；errcode=-14→600s 风控退避；账号禁用/缺凭证→error 停止）；游标在消息处理完成后才推进（崩溃最多重复投递，由 channel_events 去重，不静默丢消息）。
+- `backend/modules/channels/wechat/media.py`：`MediaFetcher` Protocol + `HttpMediaFetcher`——CDN 下载流式落盘、大小上限、扩展名白名单、AES-128-ECB 解密、sha256 分块计算；失败明确抛 `MediaFetchError`，不影响文字消息。
+- `backend/modules/channels/api.py`：`ChannelService`——账号/绑定/扫码/监听管理（system.manage），入站 `handle_inbound`：事件幂等插入 → 账号启用 → 非空 → 绑定（JOIN users 校验状态）→ `access.snapshot_principal + chat.use` → 会话解析 → Assistant.submit(source='wechat')；拒绝也写事件。微信命令 /new /history /N /status /rename /rm /help，/model /send /restart 明确停用；未知 / 命令按旧语义交给模型。
+- `backend/modules/channels/routes.py`：`/api/channels/accounts*`、`/listeners`、`/wechat/qr/*`、`/bindings*` 薄路由（认证后调 service，无 SQL）。
+- `backend/modules/assistant/{api,repository}.py`：新增 `get_session`（owner 过滤）、`register_attachment`（附件元信息归 assistant）、`find_session_by_external_chat` 支持 source/channel 作用域（两个机器人账号下同一 openid 不共享会话）、`new_attachment_id`。
+- `backend/bootstrap.py`：wechat_enabled 且有部署密钥时装配 ChannelService 并启动监听；shutdown 逆序关闭 channels。
+- `backend/runtime/hermes/adapter.py`：**顺带修复**——cancel 在没有子 Agent 时不再导入 Hermes `tools.delegate_tool`；确有子 Agent 时先 `ensure_hermes_environment` 再导入。该导入在此前测试中会把 PYTHONPATH 里另一个 `tools` 命名空间包缓存进 `sys.modules`，导致后续 state.db 恢复报 `No module named 'tools.registry'`（本环境实测）。
+- 测试：`tests/contracts/test_wechat.py`（26项：未绑定/禁用/解绑、跨账号同 message_id、稳定 ID 去重、两用户同 ID 都执行、指纹窗口不永久吞、解析无字节、媒体上限、附件与 RuntimeRequest、媒体失败不阻塞/纯媒体失败拒绝、/new 切换、命令停用、扫码凭证加密、监听 running/backoff、禁用账号、缺凭证、内部异常撤事件可重投、跨账号 /N 隔离、SSRF 拒绝、HTTP 路由认证/CRUD/QR）、`tests/assistant/test_channel_identity.py`（7项：绑定定 owner 不信昵称、同 openid 跨账号隔离、account_pk 伪造拒绝、未绑定不继承、重绑立即换 owner、跨端同 owner 会话独立、绑定创建/重启用权限）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage -q
+→ 185 passed in 56.63s（Task 7 新增 33 项）
+python -m compileall -q backend/modules/channels backend/shared/crypto.py
+→ OK
+git diff --check
+→ 无输出（无空白错误）
+```
+
+首次全量运行曾出现 3 个 `test_engine_history` 失败，定位为测试执行顺序 + 本机 PYTHONPATH 存在另一个 `tools` 命名空间包；根因是 `adapter.cancel` 未引导 Hermes 环境就导入 `tools.delegate_tool`。按"陷阱 #3"修复后全绿（非本任务业务代码范围，单独说明）。
+
+### 关键决策
+
+- **事件先落、游标后推**：重复投递由唯一键去重，避免"游标已过、消息未处理"的静默丢失；拒绝事件也持久化，防同一条反复处理。
+- **指纹窗口桶**：`fp:<hash>:<int(now/5s)>` 同时满足"窗口内去重"与"不永久吞相同文本"；指纹包含发送者、聊天、文本与媒体描述，跨用户/跨账号不互相抑制。
+- **会话作用域**：Assistant 会话 `external_chat_id = "<bot_account_id>:<chat_id>"`，并用 `channel_session_cursors` 记住 /new /N 选择；绑定只决定 owner，昵称/openid 不参与归属。
+- **媒体只存引用**：渠道层无 `_pending_images/_session_files` 全局字典；引用 → 磁盘 → attachments 元信息。单条消息最多 10 个引用，下载流式落盘，不把 50MB 文件整体读进内存（解密路径受 50MB 上限约束）。
+- **凭证保护**：bot token AES-GCM 加密后存 `credentials_ref`，对外只出 has_credentials；扫码 `qrcode` 为可选依赖，缺失时返回 qr_content 而不伪造图片。
+- **绑定创建是管理操作**：`bind_user` 一律要求 `system.manage`——任意外部 openid 不能作为自证身份（否则普通用户可抢绑他人微信）；扫码路径 `bind_after_qr` 使用 iLink 真实返回的 `ilink_user_id`，不经该入口。本人只能把**自己的**绑定置为 disabled（解绑），重新启用或操作他人绑定仍需 `system.manage`（commit `5cce711`）。
+- **监听错误状态不被 finally 覆盖**：缺凭证/账号禁用导致的 `error` 在任务退出后保留，只有正常取消/普通退出才落 stopped（commit `5cce711`）。
+- **内部异常撤事件而不是永久吞**：`handle_inbound` 在事件插入后的任何未预期异常都会删除该事件行再返回 `internal`，平台重投时可重新处理；已成功的 run 由 `client_message_id` 幂等命中，不会重复执行（commit `08a4bd7`）。
+- **消息 ID 带发送者作用域**：稳定 ID 去重键改为 `msg:<from_user>:<id>`；账号维度仍由 `channel_events` 唯一键覆盖。这样即使 iLink 的 message_id 只是聊天内唯一，两个用户同 ID 也不会互相吞（commit `08a4bd7`）。
+- **入站 URL 防 SSRF**：媒体下载只允许 `weixin.qq.com`/`wechat.com`/`qpic.cn` 的 https 地址，或由 `encrypt_query_param` 构造的固定 CDN 地址；其他 URL 直接拒绝且不发起请求（commit `08a4bd7`）。
+- **/N 不跨机器人账号**：`_recent_sessions` 与游标复用都校验 `source=wechat` 且 `channel_account_id==当前账号`；`list_sessions` 补选渠道列（commit `08a4bd7`）。
+- **配置接线**：`AppSettings.encryption_secret` 由 `EASYCHAT_ENCRYPTION_SECRET` 显式读取；bootstrap 同时注入 `HttpMediaFetcher`，缺失密钥时打印警告并保持关闭（commit `08a4bd7`）。
+- **事件保留有界**：启动时清理 7 天前且非 `received` 的事件；`received` 保留供人工对账（commit `08a4bd7`）。
+- **投递边界**：本任务只发送命令回复；run 最终答案的微信投递属于 Task 8（投递账本/分块/uncertain），未提前实现第二套发送路径。
+- **路由挂载**：channels 路由构造器已提供，但未在 `create_app` 中挂载；等 Task 15 显式装配，与旧 main.py 保留路由一起切换（沿用 Task 6 的推迟决定）。
+
+### 未验证项
+
+- 真实 iLink 扫码、getupdates 长轮询、sendmessage、CDN 下载与 AES 解密：均需真实凭证，列为 integration，未联调。
+- 渠道侧"媒体引用 → attachments → RuntimeRequest.attachment_ids"已测试；Hermes Adapter 如何把 attachment id 还原成图片 content blocks 未在本任务实现，真实多模态对话未验收。
+- 微信 run 最终答案的投递（分块/失败重试/uncertain）未接，Task 8 完成。
+- `qrcode` 包未安装，QR 图片仅返回内容 URL（前端兼容字段）。
+- 群聊/room 语义仅按 chat_id 归一化，未真实联调。
+- `/model`、`/send`、`/restart` 命令已停用并提示；如后续需要，应在 models/delivery 模块公开接口上重建，不能回到 handler 直连数据库。
+- **channels HTTP 路由尚未挂载**：`build_channels_router` 已实现且有 HTTP 契约测试，但 `create_app` 仍未装配任何模块路由/access 构造（与 Task 6 的 main.py 推迟同一决定）；Task 15 显式装配后才能从真实进程访问账号/扫码接口。
+- **队列满（Busy）目前记 rejected 不自动重试**：需要持久重试队列，留给 Task 8 投递/调度；当前只保证不重复执行。
+- **指纹窗口桶边界**：重投若恰好跨过 `now//window` 边界会产生新事件并可能再执行一次；概率低，完全消除需要滑动窗口查询，列为后续改进。
+
+### schema 版本
+
+`0004_channels`（0001+0002+0003+0004）。
+
+### 下一项
+
+Task 8：投递账本、文本提醒与持久调度（delivery/scheduling，微信文本 Adapter、occurrence 去重、失败不重跑）。
