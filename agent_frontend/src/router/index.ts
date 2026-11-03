@@ -38,8 +38,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/trace',
     name: 'Trace',
-    component: () => import('../views/TraceView.vue'),
-    meta: { title: '可观测性', icon: '', requiresAuth: true, permission: 'trace.view' },
+    component: () => import('../views/UsageView.vue'),
+    meta: { title: '用量与排行', icon: '', requiresAuth: true, permission: 'trace.view' },
   },
   {
     path: '/admin',

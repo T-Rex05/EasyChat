@@ -7,12 +7,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = REPO_ROOT / "agent_frontend"
 SRC = FRONTEND / "src"
-REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community", "/api/memories")
+REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community", "/api/memories",
+               "/api/cron-jobs", "/api/traces")
 REMOVED_ROUTES = ("/knowledge", "/kb-eval", "/graph", "/kg-review", "/communities",
                   "/pool-review", "/paper-reproduction", "/memory-dashboard")
 REMOVED_VIEW_FILES = ("KnowledgeView.vue", "KnowledgeEvalView.vue", "GraphView.vue",
                       "KgReviewView.vue", "CommunityView.vue", "PoolReviewView.vue",
-                      "MemoryItemsView.vue", "MemoryDashboardView.vue", "SkillView.vue")
+                      "MemoryItemsView.vue", "MemoryDashboardView.vue", "SkillView.vue",
+                      "TraceView.vue")
 REMOVED_PACKAGES = ("@vue-flow/core", "graphology", "sigma", "vis-network")
 
 
@@ -38,6 +40,8 @@ def test_router_and_views_removed():
     assert not (SRC / "api" / "memoryItems.ts").exists()
     assert not (SRC / "api" / "memory.ts").exists()
     assert not (SRC / "api" / "skills.ts").exists()
+    assert not (SRC / "api" / "cron.ts").exists()
+    assert not (SRC / "api" / "trace.ts").exists()
 
 
 def test_removed_graph_packages_gone():
