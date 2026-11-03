@@ -43,7 +43,7 @@
 
 ### 基线提交
 
-- baseline commit：`（回填于下一条日志项）`
+- baseline commit：`1d41c2a`（含 1,555 个文件；提交后 `git log` 核验）
 - `git remote -v`：origin → `https://gitee.com/T_Rex_Warrior/easy-chat.git`（未推送，遵交接约束）
 
 ### 下一项
