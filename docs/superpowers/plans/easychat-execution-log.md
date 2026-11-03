@@ -960,3 +960,25 @@ python -m pytest tests/...（新套件） -q → 302 passed
 ### 下一项
 
 Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路由核对；然后整体里程碑四验收。
+
+---
+
+---
+
+## Task 15（继续 3）：记忆页迁移到新 API — 2026-11-03（commit `27da0d3`）
+
+### 已完成
+
+- 新增 `agent_frontend/src/views/MemoryView.vue`：列表、检索（/recall）、新增（/remember，强制来源）、按版本修订、遗忘（墓碑）；不再使用旧 `/api/memories*` 形状。
+- 路由 `/memory` 指向新页，删除 `/memory-dashboard`；侧边栏移除“记忆监控”。
+- 删除 `MemoryItemsView.vue`、`MemoryDashboardView.vue`、`api/memoryItems.ts`、`api/memory.ts`；前端契约测试新增旧路径/文件断言。
+- 验证：`npm run type-check`、`npm run build` 通过；全量 302 passed。
+
+### 未完成
+
+- Skills/Cron(ChatSidebar)/Trace/Admin 前端仍用旧 API 形状；旧 memory-items 后端 controller 未删除（留待 main 切换时统一清理）。
+- 旧后端模块/main.py 未切换。
+
+### 下一项
+
+继续迁移 Skills 页与提醒入口，再删除旧模块并切换 main.py。
