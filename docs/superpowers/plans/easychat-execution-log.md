@@ -662,3 +662,55 @@ python -m ruff check backend/modules/evolution tests/evolution
 ### 下一项
 
 Task 12：候选生成、回放比较、激活与回滚（proposal/validation/adoption、回归 fixture）。
+
+---
+
+---
+
+## Task 12：候选生成、回放比较、激活与回滚 — 2026-11-03 完成（commit `6ee4973`）
+
+**状态：** 已完成（离线验证/采用/回滚全绿；真实模型候选与真实回放未联调）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0009_evolution_validation.sql`：`evolution_validations`（baseline/candidate/report/passed）与 `evolution_adoptions`（adopt/rollback/keep 证据）。
+- `backend/modules/evolution/proposal.py`：`ProposalService` 只调用 `skills.propose`，候选内容由注入 builder 产生，不拼提示词、不写文件。
+- `backend/modules/evolution/validation.py`：固定顺序——schema/版本归属 → baseline 与 candidate 同环境回放 → 必需用例 → 回归/改善判定；`ValidationReport/CaseOutcome/RegressionCase`；无基线不能证明无回归；坏内容不可读即失败。
+- `backend/modules/evolution/adoption.py`：验证通过才 CAS 激活；pin 技能自动采用直接保留原版；陈旧 expected 由 skills.activate 抛 Conflict；验证/采用/回滚写证据；回滚恢复旧 active。
+- `backend/modules/evolution/routes.py`：经验列表 + 显式回滚薄路由。
+- `backend/modules/skills/api.py`：新增 `get_version/read_version_content` 公开读取（仍校验归属与 sha256），验证回放不需要碰内部 repository。
+- 测试：`tests/evolution/test_validation.py`（通过/原版更好/无改善/无基线/回放零副作用）、`test_adoption.py`（采用+回滚、失败保留、pin 不自动改、陈旧指针 Conflict）、`tests/fixtures/evolution/regression.json`（4 用例）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/evolution -q
+→ 22 passed in 7.19s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q
+→ 276 passed in 116.56s
+python -m ruff check backend/modules/evolution tests/evolution
+→ All checks passed!
+```
+
+### 关键决策
+
+- **验证与采用分离**：报告可重放；采用只切 active 指针，证据写 `evolution_adoptions`。
+- **无基线不采用**：新技能没有 baseline 时无法证明“无回归”，验证失败；纯修复候选需目标用例转通过。
+- **自动采用不碰 pin**：pinned 技能即使验证通过也返回 None 并记 keep；用户显式操作走 skills API。
+- **回放零副作用**：replayer 注入纯函数/替身，测试断言没有 deliveries/runs 行。
+- **陈旧父版本**：CAS 冲突向上抛，不覆盖新 active。
+
+### 未验证项
+
+- 真实模型候选生成（复用 Hermes review 提示）未接入；proposal 只接受注入 builder。
+- 真实回放需要无副作用执行器；当前测试用纯函数，Task 13 Runner 验收后才可声明真实自动执行。
+- 验证报告/采用证据的 HTTP 查询与审批 UI 未实现；进化路由未挂载。
+- 观测到激活后失败自动回退的监控循环未实现（仅提供显式 rollback）。
+
+### schema 版本
+
+`0009_evolution_validation`（0001–0009）。
+
+### 下一项
+
+Task 13：脚本 Runner 与权限范围（受限执行契约、假 Runner、Linux 隔离验收保持关闭）。

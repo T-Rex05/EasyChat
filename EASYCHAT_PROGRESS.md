@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 24（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–11**（里程碑一 + 投递/提醒 + 记忆 + 技能版本 + 唯一学习调度） |
-| 下一任务 | **Task 12：候选生成、回放比较、激活与回滚** |
-| 未开始 | Task 12–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **267 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 26（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–12**（里程碑一 ~ 三：渠道/投递/记忆/技能/学习/验证采用） |
+| 下一任务 | **Task 13：脚本 Runner 与权限范围** |
+| 未开始 | Task 13–16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **276 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
 
-最近提交：`401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7 安全加固) `5cce711`(Task 7 加固) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`6ee4973`(Task 12) `cdfb504`(Task 10-11 docs) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -22,7 +22,7 @@
 backend/
   app.py / bootstrap.py           无副作用工厂；lifespan 显式启动
   shared/{context,errors,identifiers,crypto}.py
-  platform/{sqlite,settings,jobs}.py + migrations/0001..0008
+  platform/{sqlite,settings,jobs}.py + migrations/0001..0009
   modules/access/     RBAC、users/roles、Principal、token（35测试）
   modules/usage/      唯一计量入口 usage.begin_call/complete_call/report_usage（12测试）
   modules/models/     模型配置、AES-GCM密钥、选择链（9测试）
@@ -32,7 +32,7 @@ backend/
   modules/scheduling/ once/interval/daily 提醒 + 唯一调度器（7测试）
   modules/memory/     事实/事件/经验、版本、召回、遗忘、幂等信号（29测试）
   modules/skills/     不可变版本、CAS 激活/回滚、pin/归档、内容 hash（25测试）
-  modules/evolution/  唯一学习调度、证据、每日/单次预算（13测试）
+  modules/evolution/  唯一学习调度、证据、每日/单次预算、候选验证/采用（22测试）
   runtime/contracts.py + runtime/hermes/{paths,tools,sessions,usage_bridge,adapter,agent_factory}.py
   integrations/mcp.py WeKnora等MCP窄适配（9测试）
 ```
@@ -70,16 +70,17 @@ backend/
 28. **激活必须 CAS**：`expected_active_version_id` 条件更新；坏版本（文件缺失/hash 不符）在改指针前拒绝，失败保留旧 active。pin 技能只允许用户显式写入，background/evolution 一律拒绝。
 29. **学习不学自己**：`source=evolution` 直接拒绝；学习任务单 worker、暂停前不认领；预算先预留，未知 usage 保留预留不返还。
 30. **预算按项目时区日切**：`evolution_budgets(stat_date,user_id)`；每日 20k/单次 5k 默认可配；超预算任务标 paused，不发下一次 LLM。
+31. **验证先于采用**：无 baseline 不能证明无回归；pin 技能自动采用一律保留原版；采用只 CAS 切 active 指针并写证据，回滚也是 CAS。
+32. **回放必须零副作用**：验证 replayer 由注入替身提供，测试断言不产生 deliveries/runs；真实执行必须等 Task 13 Runner 隔离验收。
 
-## 四、下一个任务（Task 12）的实施要点
+## 四、下一个任务（Task 13）的实施要点
 
-按实施计划原文：`backend/modules/evolution/{proposal,validation,adoption,routes}.py`、`tests/evolution/test_validation.py`、`tests/evolution/test_adoption.py`、`tests/fixtures/evolution/regression.json`。
+按实施计划原文：`backend/integrations/script_runner.py`、`backend/modules/evolution/runner_contracts.py`、`tests/evolution/test_runner_contract.py`、`tests/integration/test_linux_runner.py`。
 
-- 复用 Hermes review 提示策略/来源保护，输出结构化候选；候选只调用 `skills.propose`，不直接写文件或改验证器。
-- 验证顺序固定：schema/能力范围/必需样例 → baseline 与 candidate 同环境回放 → 保留回归用例 → 指标与证据记录；规则型指标优先，模型判断独立记录、不充作硬证据。
-- 自动采用条件：必需用例全过、无确定性回归、至少一项预先定义目标改善；无法比较/只变长/依赖不可用不采用；纯修复候选要求原失败用例转通过且其他不退步。
-- 测试：原版更好保留原版、父版本已变 stale、用户手写/pin 不被自动改、回放不真实投递、对照数据不污染用户会话、激活后观测失败可回滚。
-- 运行 `python -m pytest tests/evolution/test_validation.py tests/evolution/test_adoption.py tests/skills -q` 后提交；Harness² 只借鉴流程，不安装执行器链。
+- 定义 Runner 输入：版本 artifact、工作目录引用、输入 artifact、deadline、memory/output 限制、显式文件/网络/工具能力；返回 exit/timeout/denied、产物与受限日志；不接收整包业务凭证。
+- 先用假 Runner 验收候选流程；Linux 实现选择受限本地 runner 或配置远程 runner 并固定文档；默认无隔离能力时不启用自动执行。
+- 真 Runner 必须验证文件越界、网络越界、环境凭证不可见、超时硬终止、内存/输出限制、子进程回收；验证不能修改源码/鉴权/迁移/技能 active 内容。
+- 生成/静态检查/执行验证三种状态在 UI 和记录中明确区分；未通过真实隔离测试时标注未验收并保持关闭。
 
 ## 五、已知未验证项（不要声称已完成）
 
