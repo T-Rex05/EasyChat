@@ -55,11 +55,11 @@ python -m compileall -q backend/shared backend/runtime backend/modules backend/a
 
 ### 下一项
 
-Task 2：SQLite 平台、版本迁移与首批业务表。
+Task 3：RBAC、用户/角色/部门与会话资源授权。
 
 ---
 
-## Task 2：SQLite平台、版本迁移与首批业务表 — 2026-11-03 完成
+## Task 2：SQLite平台、版本迁移与首批业务表 — 2026-11-03 完成（commit `ee8f903`）
 
 **状态：** 已完成（离线测试全绿，真实临时SQLite）。
 
