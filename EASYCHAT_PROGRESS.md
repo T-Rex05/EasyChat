@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 30（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14**（里程碑一 ~ 四大部分；旧模块/前端与镜像待 Task 15/16） |
-| 下一任务 | **Task 15：前端、API 契约与旧模块删除** |
-| 未开始 | Task 15–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **293 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 32（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14 完成；Task 15 后端装配部分完成（前端/旧模块删除未做）** |
+| 下一任务 | **Task 15 剩余：前端页面/API 收敛、旧模块删除、main.py 切换；之后 Task 16** |
+| 未开始 | Task 15 剩余、Task 16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **299 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑** |
 
-最近提交：`10ffc03`(Task 14) `24c6f77`(Task 13 docs) `5044c61`(Task 13) `32e6ac0`(Task 12 docs) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`986c5d3`(Task 15 装配) `cfd8a41`(Task 14 docs) `10ffc03`(Task 14) `24c6f77`(Task 13 docs) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -75,15 +75,14 @@ backend/
 33. **Runner 默认 disabled**：没有通过真实 Linux 隔离验收前，任何脚本执行请求都返回 denied；子进程+参数过滤不等于安全隔离，自动执行保持关闭。
 34. **邮件/PDF 先 artifact 后投递**：PDF 未启用/缺依赖时明确失败且不建 artifact；SMTP 未启用不建连；密码只存 AES-GCM 密文，发送失败只重试同一文件。
 
-## 四、下一个任务（Task 15）的实施要点
+## 四、Task 15 剩余实施要点
 
-按实施计划原文：`agent_frontend/src/{router,api,stores,views}`、`backend/controller/__init__.py`、`main.py`、旧 controller/service/db、安装元数据与锁；测试 `tests/architecture/test_removed_dependencies.py`、`tests/contracts/test_api_compatibility.py`。
+后端显式装配已完成（`986c5d3`）：新 app 已挂载 access/usage/assistant/channels/memory/skills/evolution，未就绪返回 503；启动自动构造 access/usage。剩余：
 
-- 保留聊天/历史、RBAC 用户角色部门、Token 榜、邮件/PDF、技能、提醒、记忆、运行与进化页面；迁移到模块公开接口，组件内不拼凭证/不执行授权。
-- 删除 KB/图谱/评测/论文/社区/SQL 专用路由与菜单，再检查前端请求不触达已删接口；skill_controller 混合端点按清单拆分，不能整文件误删。
-- 路由自动扫描改为 bootstrap 显式注册；删除旧全局 mapper、旧 provider、图向量/MySQL 启动；模块迁移完成后删除兼容桥，不留两套权威。
-- 删除只验证 KB/图谱/论文的旧测试与样本；跨模块鉴权/用量/文件处理测试迁到新 Interface；核对 testpaths/markers/conftest，默认全量测试不得残留已删模块 import。
-- 全量检索禁用依赖/旧表（backend/rag、graphrag、service/kb、pymysql、DBUtils、redis、neo4j、pymilvus 等）；前端 `npm run type-check`/`npm run build` 与 `pytest tests/architecture tests/contracts -q` 后提交。
+- **前端**：`agent_frontend/node_modules` 不存在，先在可联网环境安装锁定依赖，再收敛聊天/历史、RBAC、Token 榜、邮件/PDF、技能、提醒、记忆、运行/进化页面与菜单；删除 KB/图谱/论文/社区/SQL 页面与请求；执行 `npm run type-check`、`npm run build`。
+- **旧模块删除**：迁移保留路由（cron/skills/email/platform-config 等）到新模块后，切换 main.py 到 `backend.app.create_app`；删除 backend/controller|service|db 的旧 mapper/provider/MySQL 启动与 KB/图谱/论文/社区/SQL 专用路由；删对应旧测试/样本；保持旧库不作为运行时依赖。
+- **契约核对**：新 app OpenAPI 与 144 条保留路由逐条比对；`tests/architecture/test_removed_dependencies.py` 扩展为实际目录不存在/无 import；默认全量测试不得残留已删模块 import。
+- **Task 16**：单 worker Docker/持久卷、资源采样、干净环境启动、恢复验收与最终交付文档。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -99,6 +98,7 @@ backend/
 - 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
 - 脚本 Runner 契约完成但真实 Linux 隔离未验收（Task 13）——自动执行继续保持关闭。
-- 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调；SMTP/收件人路由未挂载。
-- 前端完全未改动；旧 KB/图谱/论文/社区/SQL 模块与旧 mapper/provider 尚未删除（Task 15）。
+- 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调。
+- 新 app 显式路由已装配，但生产启动仍需设置 JWT/Hermes/模型配置；未配置 Runtime 时聊天返回 503（预期）。
+- 前端未迁移，`agent_frontend/node_modules` 不存在，无法离线 type-check/build；旧 KB/图谱/论文/社区/SQL 模块、旧 mapper/provider、旧 main.py 路由仍存在，Task 15 未完成。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。

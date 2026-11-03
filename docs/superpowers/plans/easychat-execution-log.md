@@ -810,3 +810,43 @@ python -m ruff check backend/integrations/pdf.py backend/modules/delivery ...
 ### 下一项
 
 Task 15：前端、API 契约与旧模块删除（显式路由装配、旧 mapper/provider 清理、前端构建验证）。
+
+---
+
+---
+
+## Task 15（部分完成）：显式路由装配与 API 兼容守卫 — 2026-11-03（commit `986c5d3`）
+
+**状态：** 后端装配部分完成；前端迁移、旧模块删除、main.py 切换**尚未完成**，Task 15 不标完成。
+
+### 已完成
+
+- `backend/app.py`：`_LazyModule` 请求期解析模块（未就绪→503）；`_register_explicit_routers` 显式挂载 access/usage/assistant(Web SSE+history)/channels/memory/skills/evolution；不再扫描 `backend/controller`。
+- `backend/bootstrap.py`：启动时自动构造 AccessService（JWT secret 缺省进程内随机）+ UsageService（注入 `lambda principal: access.effective_permissions(principal.user_id)`）；可选 `hermes_enabled` 构造 Runtime；shutdown 释放 access/models/usage，保证再次 lifespan 重建（修复重启幂等测试）。
+- `backend/platform/settings.py`：`jwt_secret`、`hermes_enabled` 显式环境配置。
+- 测试：`tests/contracts/test_api_compatibility.py`（显式路由/health/ready、注册登录、memory/skills/usage、未就绪 503、旧前缀不暴露）、`tests/architecture/test_removed_dependencies.py`（新装配路径不得 import backend.rag/graphrag/service.kb/controller/pymysql/dbutils/redis/neo4j/pymilvus/chromadb）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/contracts/test_api_compatibility.py tests/architecture/test_removed_dependencies.py -q
+→ 6 passed
+python -m pytest tests/...（新套件） -q
+→ 299 passed in 100.85s
+ruff check（app/bootstrap/settings/新测试）→ All checks passed
+```
+
+### 未完成（Task 15 剩余）
+
+- **前端未迁移**：`agent_frontend/node_modules` 不存在，无法离线执行 `npm run type-check/build`；聊天/Token/技能/提醒/记忆/进化页面与菜单未收敛。
+- **旧模块未删除**：`backend/controller|service|db|rag|graphrag` 等仍在；旧 main.py 仍可启动旧系统，未切换；旧 mapper/provider/MySQL 启动未清理。
+- **路由兼容未全量核对**：新 app OpenAPI 与 144 条保留路由的逐条比对未完成；旧测试/样本未删除。
+- main.py 切换与旧桥接删除必须在前端/保留路由迁移后执行，否则会切断 cron/skills/email 等入口（A10）。
+
+### schema 版本
+
+无新迁移（0001–0010）。
+
+### 下一项
+
+继续 Task 15 剩余：前端页面/API 收敛、旧模块删除与 main.py 切换；之后 Task 16 干净镜像/资源/交付。
