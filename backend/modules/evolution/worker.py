@@ -1,0 +1,68 @@
+"""唯一后台学习 worker：单并发认领 evolution.learn，暂停时不再认领。"""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from backend.modules.evolution.api import EvolutionService
+from backend.platform.jobs import JobQueue
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_POLL_INTERVAL = 0.2
+MAX_PER_TICK = 20
+
+
+class EvolutionWorker:
+    def __init__(self, service: EvolutionService, queue: JobQueue, *, poll_interval: float = DEFAULT_POLL_INTERVAL) -> None:
+        self.service = service
+        self.queue = queue
+        self.poll_interval = poll_interval
+        self._task: asyncio.Task | None = None
+        self._stopping = False
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self.queue.recover_expired_leases()
+        self._stopping = False
+        self._task = asyncio.ensure_future(self._run())
+
+    async def stop(self) -> None:
+        self._stopping = True
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, timeout=10)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._task.cancel()
+        self._task = None
+
+    def tick(self) -> int:
+        if self.service.paused():
+            return 0
+        count = 0
+        while count < MAX_PER_TICK:
+            lease = self.queue.claim("evolution-worker", kinds=("evolution.learn",))
+            if lease is None:
+                break
+            payload = lease.payload_json()
+            task_id = str(payload.get("task_id") or "")
+            try:
+                self.service.process_task(task_id)
+            except Exception as exc:  # noqa: BLE001  依赖失败可重试
+                logger.exception("学习任务失败 task=%s", task_id)
+                self.queue.fail(lease, str(exc), retryable=True, retry_delay_seconds=60)
+            else:
+                self.queue.complete(lease)
+            count += 1
+        return count
+
+    async def _run(self) -> None:
+        while not self._stopping:
+            try:
+                self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.exception("进化 worker tick 失败")
+            await asyncio.sleep(self.poll_interval)

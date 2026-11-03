@@ -41,6 +41,7 @@ class ModuleRegistry:
     memory_worker: Any | None = None  # Task 9
     skills: Any | None = None  # Task 10
     evolution: Any | None = None  # Task 11
+    evolution_worker: Any | None = None  # Task 11
 
 
 async def run_startup(registry: ModuleRegistry) -> None:
@@ -133,6 +134,29 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.memory_worker = MemoryWorker(registry.memory, job_queue)
         await registry.memory_worker.start()
 
+        # Task 10：技能资产与不可变版本（内容根目录显式落在 artifacts 下）。
+        from backend.modules.skills.api import SkillService
+
+        registry.skills = SkillService(
+            db, access=registry.access,
+            content_root=registry.settings.artifacts_dir / "skills",
+        )
+
+        # Task 11：唯一学习调度 + 预算。
+        from backend.modules.evolution.api import EvolutionService
+        from backend.modules.evolution.budget import BudgetManager
+        from backend.modules.evolution.worker import EvolutionWorker
+
+        evolution_queue = JobQueue(db)
+        registry.evolution = EvolutionService(
+            db, access=registry.access, queue=evolution_queue,
+            budget=BudgetManager(
+                db, timezone_name=registry.settings.project_timezone,
+            ),
+        )
+        registry.evolution_worker = EvolutionWorker(registry.evolution, evolution_queue)
+        await registry.evolution_worker.start()
+
 
 def _make_run_finished(registry: ModuleRegistry):
     """run 终态与投递请求同事务：先取已落库的最终回复，再入队。"""
@@ -166,6 +190,13 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.evolution_worker is not None:
+        await registry.evolution_worker.stop()
+        registry.evolution_worker = None
+    if registry.evolution is not None:
+        registry.evolution = None
+    if registry.skills is not None:
+        registry.skills = None
     if registry.memory_worker is not None:
         await registry.memory_worker.stop()
         registry.memory_worker = None
