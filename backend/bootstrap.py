@@ -38,6 +38,7 @@ class ModuleRegistry:
     scheduling: Any | None = None  # Task 8
     scheduler: Any | None = None  # Task 8（唯一提醒调度器）
     memory: Any | None = None  # Task 9
+    memory_worker: Any | None = None  # Task 9
     skills: Any | None = None  # Task 10
     evolution: Any | None = None  # Task 11
 
@@ -121,6 +122,17 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.scheduler = Scheduler(registry.scheduling)
         await registry.scheduler.start()
 
+    # Task 9：记忆服务与幂等信号 worker（runtime 桥接见 runtime/hermes/memory_bridge.py）。
+    if registry.access is not None:
+        from backend.modules.memory.api import MemoryService
+        from backend.modules.memory.worker import MemoryWorker
+        from backend.platform.jobs import JobQueue
+
+        job_queue = JobQueue(db)
+        registry.memory = MemoryService(db, access=registry.access, queue=job_queue)
+        registry.memory_worker = MemoryWorker(registry.memory, job_queue)
+        await registry.memory_worker.start()
+
 
 def _make_run_finished(registry: ModuleRegistry):
     """run 终态与投递请求同事务：先取已落库的最终回复，再入队。"""
@@ -154,6 +166,11 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.memory_worker is not None:
+        await registry.memory_worker.stop()
+        registry.memory_worker = None
+    if registry.memory is not None:
+        registry.memory = None
     if registry.scheduler is not None:
         await registry.scheduler.stop()
         registry.scheduler = None

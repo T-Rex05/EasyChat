@@ -20,6 +20,9 @@ _PREFIX_CHANNEL_EVENT = "evt"
 _PREFIX_PART = "part"
 _PREFIX_SCHEDULE = "sch"
 _PREFIX_OCCURRENCE = "occ"
+_PREFIX_MEMORY = "mem"
+_PREFIX_REVISION = "rev"
+_PREFIX_SIGNAL = "sig"
 
 
 def _new_id(prefix: str) -> str:
@@ -56,6 +59,18 @@ def new_schedule_id() -> str:
 
 def new_occurrence_id() -> str:
     return _new_id(_PREFIX_OCCURRENCE)
+
+
+def new_memory_id() -> str:
+    return _new_id(_PREFIX_MEMORY)
+
+
+def new_revision_id() -> str:
+    return _new_id(_PREFIX_REVISION)
+
+
+def new_signal_id() -> str:
+    return _new_id(_PREFIX_SIGNAL)
 
 
 def new_artifact_id() -> str:
