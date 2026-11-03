@@ -38,7 +38,6 @@ LEGACY_FORBIDDEN_IMPORTS: dict[str, str] = {
 LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
     "context/task_state.py",
     "context/strategies/fact_anchor.py",
-    "memory/consolidator.py",
     "service/command_blacklist_service.py",
     "service/cron/cron_service.py",
     "service/delegation/context_enrichment.py",
