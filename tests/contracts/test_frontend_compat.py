@@ -12,7 +12,7 @@ REMOVED_ROUTES = ("/knowledge", "/kb-eval", "/graph", "/kg-review", "/communitie
                   "/pool-review", "/paper-reproduction", "/memory-dashboard")
 REMOVED_VIEW_FILES = ("KnowledgeView.vue", "KnowledgeEvalView.vue", "GraphView.vue",
                       "KgReviewView.vue", "CommunityView.vue", "PoolReviewView.vue",
-                      "MemoryItemsView.vue", "MemoryDashboardView.vue")
+                      "MemoryItemsView.vue", "MemoryDashboardView.vue", "SkillView.vue")
 REMOVED_PACKAGES = ("@vue-flow/core", "graphology", "sigma", "vis-network")
 
 
@@ -37,6 +37,7 @@ def test_router_and_views_removed():
     assert not (SRC / "views" / "paper-reproduction").exists()
     assert not (SRC / "api" / "memoryItems.ts").exists()
     assert not (SRC / "api" / "memory.ts").exists()
+    assert not (SRC / "api" / "skills.ts").exists()
 
 
 def test_removed_graph_packages_gone():

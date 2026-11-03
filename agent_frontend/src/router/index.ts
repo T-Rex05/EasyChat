@@ -20,7 +20,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/skills',
     name: 'Skills',
-    component: () => import('../views/SkillView.vue'),
+    component: () => import('../views/SkillsView.vue'),
     meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create' },
   },
   {
