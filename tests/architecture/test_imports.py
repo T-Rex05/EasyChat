@@ -29,8 +29,6 @@ FORBIDDEN_TOP_MODULES = frozenset(
 # ---- 存量豁免名单（具体路径 + 原因；随迁移逐项删除） --------------------------
 # 旧代码直接 import 禁用基础设施的文件（Task 15 移除对应模块后此名单清空）
 LEGACY_FORBIDDEN_IMPORTS: dict[str, str] = {
-    "db/connection_pool.py": "旧MySQL连接池；Task 15 删除",
-    "db/schema.py": "旧MySQL schema入口；Task 15 删除",
     "tools/tools_decorator.py": "引用backend.rag；R03 移除",
 }
 
