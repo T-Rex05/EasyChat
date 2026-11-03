@@ -36,7 +36,6 @@ LEGACY_FORBIDDEN_IMPORTS: dict[str, str] = {
 
 # 旧代码绕过 runtime 直接 import backend.hermes 的文件（迁移后名单清空）
 LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
-    "hermes_adapter.py",
     "context/task_state.py",
     "context/strategies/fact_anchor.py",
     "memory/consolidator.py",
@@ -55,7 +54,7 @@ LEGACY_DIRS_EXEMPT = (
     "infrastructure", "memory", "observer", "permission", "rag", "service",
     "templates", "tools", "utils", "wechat",
 )
-LEGACY_FILES_EXEMPT = ("hermes_adapter.py", "build_info.py")
+LEGACY_FILES_EXEMPT = ("build_info.py",)
 
 
 def _iter_strict_py_files():
