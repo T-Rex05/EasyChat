@@ -760,3 +760,53 @@ python -m ruff check ...
 ### 下一项
 
 Task 14：邮件/PDF 按需启用与历史任务兼容（SMTP 配置/收件人、PDF artifact、失败只重发文件）。
+
+---
+
+---
+
+## Task 14：邮件/PDF 按需启用与历史任务兼容 — 2026-11-03 完成（commit `10ffc03`）
+
+**状态：** 已完成（离线 SMTP/PDF 能力全绿，假 SMTP/假渲染器；真实发信与真实渲染未联调）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0010_delivery_email.sql`：`email_configs`（单行全局配置，password 只存密文）、`email_recipients`（owner+address 唯一、active）；`deliveries` 补 `subject`。
+- `backend/integrations/pdf.py`：`PdfRenderer` Protocol、`DisabledPdfRenderer`（明确 CapabilityUnavailable）、`SubprocessPdfRenderer`（独立 Python 子进程 + 超时 kill + 临时 HTML 清理，不把 weasyprint 依赖带进主进程）、`build_pdf_renderer`（未启用/缺依赖保持 disabled）。
+- `backend/modules/delivery/smtp.py`：`EmailRepository`（AES-GCM 密码、掩码视图、收件人 CRUD）、`EmailService`（system.config / system.manage 权限）、`SmtpEmailSender`（默认关闭；未启用不建连；文本/PDF 附件；超时→retry、认证/收件人→failed、连接后未知→uncertain；环境凭证不进日志）。
+- `backend/modules/delivery/reports.py`：`ReportService`——先渲染成不可变 artifact 再入投递账本；邮件失败只重试同一文件，不重新渲染。
+- `backend/modules/delivery/{api,contracts,repository}.py`：deliveries 支持 `subject` 与 artifact 附件发送；`_deliver_artifact` 校验产物存在、发送器支持附件，失败分类沿用 sent/retry/uncertain/failed。
+- 测试：`tests/delivery/test_email.py`（配置加密/掩码、system.config 权限、默认不建连、假 SMTP 发送、timeout/auth/uncertain 分类、PDF 附件、缺失附件不发信、收件人权限/停用）、`tests/delivery/test_reports.py`（artifact+邮件投递不重渲染、投递后文件保留、PDF 关闭明确失败且不建 artifact、渲染超时明确失败、能力默认 lazy disabled）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/delivery -q
+→ 27 passed in 7.51s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q
+→ 293 passed in 95.03s
+python -m ruff check backend/integrations/pdf.py backend/modules/delivery ...
+→ All checks passed!
+```
+
+### 关键决策
+
+- **能力默认关闭**：PDF 未启用/缺 weasyprint → disabled，不 import 渲染栈；SMTP 未启用 → `can_deliver=False`，连 socket 都不建立。
+- **生成与投递分离**：先渲染 artifact 并登记 hash/size/MIME，再入投递账本；发送失败重试同一文件，禁止重新渲染或重跑 Agent。
+- **发送结果分类**：连接/超时→retry；认证/收件人拒绝→failed；连接后异常→uncertain；不把“可能已发”记成必达。
+- **凭证保护**：SMTP 密码只存 AES-GCM 密文，视图只出掩码；邮件配置接口要求 system.config，跨用户收件人要求 system.manage。
+
+### 未验证项
+
+- 真实 SMTP 发信（需用户提供测试端点）与真实 PDF 渲染（weasyprint/字体）未联调，均属 integration。
+- SMTP 配置/收件人路由尚未挂载（Task 15）。
+- 旧 PDF 任务格式只做了 artifact/字段兼容，未导入旧库历史任务；迁移策略留到 Task 15。
+- 附件仅支持 PDF；邮件正文分块、退信解析、DKIM 未实现。
+
+### schema 版本
+
+`0010_delivery_email`（0001–0010）。
+
+### 下一项
+
+Task 15：前端、API 契约与旧模块删除（显式路由装配、旧 mapper/provider 清理、前端构建验证）。

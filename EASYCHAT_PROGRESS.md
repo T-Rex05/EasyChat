@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 28（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–13**（里程碑一 ~ 三；Runner 契约完成但真实隔离未验收） |
-| 下一任务 | **Task 14：邮件/PDF 按需启用与历史任务兼容** |
-| 未开始 | Task 14–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **281 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 30（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14**（里程碑一 ~ 四大部分；旧模块/前端与镜像待 Task 15/16） |
+| 下一任务 | **Task 15：前端、API 契约与旧模块删除** |
+| 未开始 | Task 15–16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **293 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
 
-最近提交：`5044c61`(Task 13) `32e6ac0`(Task 12 docs) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`10ffc03`(Task 14) `24c6f77`(Task 13 docs) `5044c61`(Task 13) `32e6ac0`(Task 12 docs) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -22,13 +22,13 @@
 backend/
   app.py / bootstrap.py           无副作用工厂；lifespan 显式启动
   shared/{context,errors,identifiers,crypto}.py
-  platform/{sqlite,settings,jobs}.py + migrations/0001..0009
+  platform/{sqlite,settings,jobs}.py + migrations/0001..0010
   modules/access/     RBAC、users/roles、Principal、token（35测试）
   modules/usage/      唯一计量入口 usage.begin_call/complete_call/report_usage（12测试）
   modules/models/     模型配置、AES-GCM密钥、选择链（9测试）
   modules/assistant/  统一run入口 + 事件总线 + 调度器 + Web兼容路由（21+测试）
   modules/channels/   账号/绑定/事件去重 + wechat/{parser,account,listener,media}（33测试）
-  modules/delivery/   投递账本/分块/重试 + 微信文本 Adapter（8测试）
+  modules/delivery/   投递账本/分块/重试 + 微信文本 + SMTP/PDF 报告（27测试）
   modules/scheduling/ once/interval/daily 提醒 + 唯一调度器（7测试）
   modules/memory/     事实/事件/经验、版本、召回、遗忘、幂等信号（29测试）
   modules/skills/     不可变版本、CAS 激活/回滚、pin/归档、内容 hash（25测试）
@@ -73,15 +73,17 @@ backend/
 31. **验证先于采用**：无 baseline 不能证明无回归；pin 技能自动采用一律保留原版；采用只 CAS 切 active 指针并写证据，回滚也是 CAS。
 32. **回放必须零副作用**：验证 replayer 由注入替身提供，测试断言不产生 deliveries/runs；真实执行必须等 Task 13 Runner 隔离验收。
 33. **Runner 默认 disabled**：没有通过真实 Linux 隔离验收前，任何脚本执行请求都返回 denied；子进程+参数过滤不等于安全隔离，自动执行保持关闭。
+34. **邮件/PDF 先 artifact 后投递**：PDF 未启用/缺依赖时明确失败且不建 artifact；SMTP 未启用不建连；密码只存 AES-GCM 密文，发送失败只重试同一文件。
 
-## 四、下一个任务（Task 14）的实施要点
+## 四、下一个任务（Task 15）的实施要点
 
-按实施计划原文：`backend/integrations/pdf.py`、`backend/modules/delivery/{smtp,reports}.py`、邮件配置/收件人路由迁移、`tests/delivery/test_reports.py`、`tests/delivery/test_email.py`。
+按实施计划原文：`agent_frontend/src/{router,api,stores,views}`、`backend/controller/__init__.py`、`main.py`、旧 controller/service/db、安装元数据与锁；测试 `tests/architecture/test_removed_dependencies.py`、`tests/contracts/test_api_compatibility.py`。
 
-- 保留 SMTP 配置、联系人、渠道选择与报告格式，迁到 SQLite；能力开关及凭证保护保留 RBAC，配置响应不得泄露密码。
-- PDF 生成独立受控进程/队列，先落不可变 artifact；邮件失败只重发该文件；未启用时不 import 渲染栈、不启动 SMTP 连接。
-- 测试新提醒默认文本、老 PDF 任务格式不变、渲染缺依赖明确不可用、渲染超时回收进程、临时文件清理不误删被投递引用产物、发送不确定状态正确。
-- 真实渲染/SMTP 在用户提供测试端点后单列 integration；未授权不发真实邮件。
+- 保留聊天/历史、RBAC 用户角色部门、Token 榜、邮件/PDF、技能、提醒、记忆、运行与进化页面；迁移到模块公开接口，组件内不拼凭证/不执行授权。
+- 删除 KB/图谱/评测/论文/社区/SQL 专用路由与菜单，再检查前端请求不触达已删接口；skill_controller 混合端点按清单拆分，不能整文件误删。
+- 路由自动扫描改为 bootstrap 显式注册；删除旧全局 mapper、旧 provider、图向量/MySQL 启动；模块迁移完成后删除兼容桥，不留两套权威。
+- 删除只验证 KB/图谱/论文的旧测试与样本；跨模块鉴权/用量/文件处理测试迁到新 Interface；核对 testpaths/markers/conftest，默认全量测试不得残留已删模块 import。
+- 全量检索禁用依赖/旧表（backend/rag、graphrag、service/kb、pymysql、DBUtils、redis、neo4j、pymilvus 等）；前端 `npm run type-check`/`npm run build` 与 `pytest tests/architecture tests/contracts -q` 后提交。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -97,6 +99,6 @@ backend/
 - 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
 - 脚本 Runner 契约完成但真实 Linux 隔离未验收（Task 13）——自动执行继续保持关闭。
-- 邮件/PDF 尚未迁移（Task 14）；SMTP 凭证保护与按需渲染未实现。
-- 前端完全未改动。
+- 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调；SMTP/收件人路由未挂载。
+- 前端完全未改动；旧 KB/图谱/论文/社区/SQL 模块与旧 mapper/provider 尚未删除（Task 15）。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。
