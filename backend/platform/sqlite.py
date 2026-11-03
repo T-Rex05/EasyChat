@@ -77,14 +77,23 @@ class Database:
         return self._journal_mode
 
     def _apply_journal_mode(self, conn: sqlite3.Connection) -> str:
-        """设置 journal 模式；WAL 不可用时回退 DELETE（与 Hermes 策略一致）。"""
-        row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
-        mode = row[0] if row else None
-        if mode != "wal":
-            conn.execute("PRAGMA journal_mode=DELETE")
-            row = conn.execute("PRAGMA journal_mode").fetchone()
-            mode = row[0] if row else "delete"
-        return str(mode)
+        """设置 journal 模式；遵循与 Hermes 相同的 WAL-reset bug 规则。
+
+        SQLite 3.45.0–3.51.2 存在 WAL-reset 损坏 bug（修复：3.51.3+ / 回移
+        3.50.7 / 3.44.6）。易损版本不为新库启用 WAL（与 Hermes 行为一致），
+        已是 WAL 的库不做降级；其余文件系统不支持时同样回退 DELETE。
+        """
+        current = conn.execute("PRAGMA journal_mode").fetchone()
+        current_mode = str(current[0]) if current else "delete"
+        if current_mode == "wal":
+            return "wal"  # 不做在线降级
+        if _wal_safe_version(sqlite3.sqlite_version_info):
+            row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            if row and str(row[0]) == "wal":
+                return "wal"
+        conn.execute("PRAGMA journal_mode=DELETE")
+        row = conn.execute("PRAGMA journal_mode").fetchone()
+        return str(row[0]) if row else "delete"
 
     def migrate(self) -> list[str]:
         """执行版本化迁移，返回本次实际应用的版本列表。失败时启动不得继续。"""
@@ -114,6 +123,21 @@ class Database:
 
     def close(self) -> None:
         self._closed = True
+
+
+def _wal_safe_version(version: tuple[int, ...]) -> bool:
+    """SQLite WAL-reset bug 版本守卫（与 Hermes 同规则）。
+
+    易损区间 3.45.0–3.51.2；修复版本 3.51.3+ / 回移 3.50.7 / 3.44.6。
+    """
+    v = (version[0], version[1], version[2])
+    if v >= (3, 51, 3):
+        return True
+    if (3, 44, 6) <= v < (3, 45, 0):
+        return True
+    if (3, 50, 7) <= v < (3, 51, 0):
+        return True
+    return False
 
 
 # ---- 迁移机制 ----------------------------------------------------------------

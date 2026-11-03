@@ -114,6 +114,18 @@ class ModelsRepository:
         finally:
             conn.close()
 
+    def decrypt_api_key(self, config_id: int) -> str:
+        """runtime 专用解密；仅受信任的 runtime Adapter 层调用，不得进日志。"""
+        conn = self.db.connect()
+        try:
+            row = conn.execute("SELECT api_key_encrypted FROM model_configs WHERE id=?", (config_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise NotFoundError(f"模型配置不存在: {config_id}")
+        encrypted = row["api_key_encrypted"] or ""
+        return decrypt_secret(encrypted, self._secret) if encrypted else ""
+
     def create_config(
         self,
         *,

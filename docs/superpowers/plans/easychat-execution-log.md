@@ -249,3 +249,55 @@ python -m ruff check <新代码> → All checks passed!
 ### 下一项
 
 Task 5：Hermes Runtime Adapter 与 SessionDB 恢复。
+
+---
+
+## Task 5：Hermes Runtime Adapter与SessionDB恢复 — 2026-11-03 完成
+
+**状态：** 已完成（离线测试全绿；真实LLM/MCP联调列为integration未验证项）。
+
+### 新建/修改文件
+
+- `backend/runtime/hermes/paths.py`：`ensure_hermes_environment`（sys.path 注入 + HERMES_HOME 设置，幂等；必须在任何 Hermes 模块导入前调用）。
+- `backend/runtime/hermes/tools.py`：安全项目工具注册（时间/待办/提醒/时间解析，经 LangChain `invoke()` 官方入口 + thread_id 注入）；`resolve_enabled_toolsets`（废弃 toolset fail-closed 过滤）。
+- `backend/runtime/hermes/sessions.py`：`SessionMapper`——app.db `(owner_id, app_session_id)→hermes_session_id` 显式映射（owner 条件在 SQL 内）；`recover_conversation` 经 `SessionDB.resolve_session_id + get_messages_as_conversation(repair_alternation=True)` 只读恢复；压缩轮换 id 候选集；state.db 不可打开 → StorageUnavailableError（缺失=新安装无历史，返回空）。
+- `backend/runtime/hermes/usage_bridge.py`：run 前后 `agent.session_*` 计数器差值 → `begin_call/complete_call`（api_calls 存 raw_usage JSON，不重复加总）。
+- `backend/runtime/hermes/adapter.py`：`HermesRuntimeAdapter(ExecutionRuntime)`——execute 桥接（stream_delta/reasoning/step 回调 → 队列 → RuntimeEvent 流：token/thinking/tool_started/completed/failed，每轮挂回调 finally 置 None）；agent 缓存键=(owner, session, model_profile, policy_revision, permission_revision, allowed_tools, skills_digest)；LRU 8/闲置15min、运行中不回收；ContextVar `copy_context()` 传播到工作线程且不污染调用方；cancel 走 `agent.interrupt()` 协作取消（不 asyncio cancel）；usage 差值计量。
+- `backend/runtime/hermes/agent_factory.py`：真实 AIAgent 构建（base_url 规范化/模型后缀剥离/reasoning_config/fallback链/SessionDB 必传/skip_memory=True/`_skill_nudge_interval=0` 关闭 Hermes 原生后台审查）；密钥解密仅在本层。
+- `backend/integrations/mcp.py`：`McpAdapter`——配置归一化（url/凭证引用/allow-exclude glob/超时/结果上限）、错误分类（empty/auth/timeout/connection 明确区分）、refresh 失败保留上一次完整目录、本机健康状态与核心健康隔离（R04）；registrar 可注入（默认 Hermes `register_mcp_servers`）。
+- `backend/tools/tools_decorator.py`：`get_project_tools` 移除 KB/KG/SQL/CodeMode/论文 提前导入（R03/R14），仅保留安全7工具；kg 工具移入惰性 `get_kg_tools()`；实测 import 顶层不再拉起 neo4j/pymilvus/chromadb/pymysql。
+- `backend/platform/sqlite.py`：**journal 模式修正**——实测发现本机 SQLite 3.45.3 存在 WAL-reset 损坏 bug（Hermes 亦回退 DELETE）；平台按同规则加版本守卫（修复版 3.51.3+/回移 3.50.7/3.44.6 才启用 WAL；已是 WAL 不降级）。
+- `backend/modules/models/{api,repository}.py`：新增 `resolve_api_key`（runtime 专用解密，不入日志）。
+- 测试：`tests/contracts/test_runtime.py`（Protocol符合性/事件桥接/失败转事件/缓存键7维隔离/LRU运行中保护/ContextVar传播无泄漏/协作取消/usage差值一次计量）、`tests/contracts/test_mcp.py`（9项）、`tests/assistant/test_engine_history.py`（真实临时state.db：owner隔离/恢复顺序/压缩旧id不重复拼接/损坏明确报错）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/assistant tests/contracts tests/storage tests/access tests/usage tests/models tests/architecture -q（等效全量新套件）
+→ 133 passed in 45.40s
+python -m ruff check backend/runtime backend/integrations ... → All checks passed!
+tools_decorator 导入纯净性：无 neo4j/pymilvus/chromadb/pymysql；get_project_tools=7安全工具
+```
+
+### 关键决策记录
+
+- **避免旁路**（源自对 hermes_adapter.py 的完整测绘，报告存档于会话）：绕过 run_conversation 直接 registry.dispatch 无 toolset 隔离（闸门在 conversation_loop 的 valid_tool_names）；Hermes 包内互用顶层模块名，必须 sys.path 注入且不可与 backend.hermes 混用；线程池必须 copy_context；禁用 asyncio cancel 强杀；per-agent 配置走构造参数不写全局 config.yaml；不传 session_db 等于静默关闭持久化。
+- 会话历史连续性由 agent 绑定的 SessionDB 提供；UI 投影不在 run 时拼接（engine_history 测试覆盖"压缩后不重复"）。
+- **Task 2 决策修正**：WAL 启用加版本守卫（原实现无条件 WAL）；tests/storage 断言随规则更新并记录边界值测试。
+- 一次 run 一个 call_id 的局限：Hermes 无 per-request usage 回调，agent 多次迭代以 raw_usage.api_calls 记录；per-call 拆分列为后续改进（等 Hermes 暴露 per-request hook）。
+- memory/skills 上下文为空可注入（skip_memory=True，原生后台审查关闭）；Task 9/10 通过公开接口桥接。
+
+### 未验证项
+
+- 真实 AIAgent 构造与真实 LLM 对话（需真实模型凭证）——可选 integration。
+- 真实 WeKnora MCP 握手（空结果/401/超时/断线重连已用假registrar覆盖语义）。
+- run_conversation 真实回调行为（屏蔽规则等）与生产流量的兼容——Task 6 Web 闭环联测。
+- skills_digest 当前恒空串（Task 10 接入真实技能版本）。
+
+### schema 版本
+
+`0002_models_key`（无变化）。
+
+### 下一项
+
+Task 6：统一 Assistant、run 状态与 Web 兼容。

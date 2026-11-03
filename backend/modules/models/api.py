@@ -85,6 +85,10 @@ class ModelsService:
     def get_chat_profile(self) -> ModelProfile | None:
         return self.repo.get_active_chat()
 
+    def resolve_api_key(self, config_id: int) -> str:
+        """runtime Adapter 专用：解密密钥。不得写入日志或任何对外响应。"""
+        return self.repo.decrypt_api_key(config_id)
+
     def select_for_run(self, *, auxiliary: bool = False) -> ModelSelection:
         """run 的模型选择：主配置 + 可选辅助链（无可用配置返回空选择，由调用方报错）。"""
         chat = self.repo.get_active_chat()

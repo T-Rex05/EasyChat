@@ -23,16 +23,34 @@ def test_connect_fresh_per_call_with_pragmas(tmp_path):
     c2.close()
 
 
-def test_journal_mode_is_wal(tmp_path):
+def test_journal_mode_follows_wal_safety_rule(tmp_path):
+    """journal 模式遵循 Hermes 的 WAL-reset bug 版本规则（架构 §5.4 实测要求）。
+
+    本机 SQLite 3.45.3 在易损区间 → 新库回退 DELETE；修复版本 → WAL。
+    """
+    import sqlite3 as sq
+
+    from backend.platform.sqlite import _wal_safe_version
+
     db = Database(tmp_path / "app.db")
-    conn = db.connect()
-    conn.execute("PRAGMA journal_mode=WAL").fetchone()
-    conn.close()
     db.migrate()
-    assert db.journal_mode == "wal"
+    expected = "wal" if _wal_safe_version(sq.sqlite_version_info) else "delete"
+    assert db.journal_mode == expected
     check = Database(tmp_path / "app.db").connect()
-    assert check.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert check.execute("PRAGMA journal_mode").fetchone()[0] == expected
     check.close()
+
+
+def test_wal_safe_version_boundaries():
+    from backend.platform.sqlite import _wal_safe_version
+
+    assert _wal_safe_version((3, 51, 3)) is True
+    assert _wal_safe_version((3, 51, 2)) is False
+    assert _wal_safe_version((3, 50, 7)) is True
+    assert _wal_safe_version((3, 50, 6)) is False
+    assert _wal_safe_version((3, 44, 6)) is True
+    assert _wal_safe_version((3, 45, 3)) is False
+    assert _wal_safe_version((3, 52, 0)) is True
 
 
 def test_foreign_keys_enforced(tmp_path):

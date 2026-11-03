@@ -1,4 +1,4 @@
-"""
+﻿"""
 AgentForge - 工具定义模板
 
 使用 LangChain @tool 装饰器定义工具，供 Hermes 调用。
@@ -13,7 +13,6 @@ AgentForge - 工具定义模板
 - get_project_tools(): 返回所有项目自定义工具
 """
 import json
-import os
 from datetime import datetime
 from typing import List, Any, Dict
 
@@ -301,7 +300,6 @@ def todo_add(title: str, description: str, config: RunnableConfig = None) -> str
     Returns:
         str: 添加结果和当前任务列表
     """
-    thread_id = _get_thread_id(config)
     todo_key = _get_todo_key(config)
 
     if todo_key not in _todo_store:
@@ -337,7 +335,6 @@ def todo_update(task_id: str, status: str, config: RunnableConfig = None) -> str
     Returns:
         str: 更新结果
     """
-    thread_id = _get_thread_id(config)
     todo_key = _get_todo_key(config)
 
     if todo_key not in _todo_store or task_id not in _todo_store[todo_key]:
@@ -361,7 +358,6 @@ def todo_get(config: RunnableConfig = None) -> str:
     Returns:
         str: 当前所有任务及其状态
     """
-    thread_id = _get_thread_id(config)
     todo_key = _get_todo_key(config)
 
     if todo_key not in _todo_store or not _todo_store[todo_key]:
@@ -884,75 +880,43 @@ def when_resolve(phrase: str) -> str:
 when_resolve._toolset = "__always_available__"  # 基础工具，所有用户可用
 
 
-# ==================== 知识图谱工具集（Neo4j） ====================
-# 从独立模块导入，包含完整的 KG 查询能力
+def get_kg_tools() -> list:
+    """知识图谱工具（惰性导入）。
 
-from backend.tools.kg_tools import (
-    kg_stats,             # 统计信息（节点/关系/社区数量）
-    kg_search,            # 实体搜索（按名称/类型模糊搜索）
-    kg_entity_detail,     # 实体详情（含关系和时间线）
-    kg_communities,       # 社区查询（层级社区 + 社区报告）
-    kg_quality,           # 质量分析（置信度分布、孤立实体等）
-)
+    R03 后 KG 属移除范围：此函数不再被 get_project_tools 调用，
+    仅为兼容期保留入口；只有显式调用才会导入 neo4j 依赖。
+    """
+    from backend.tools.kg_tools import (
+        kg_stats,             # 统计信息（节点/关系/社区数量）
+        kg_search,            # 实体搜索（按名称/类型模糊搜索）
+        kg_entity_detail,     # 实体详情（含关系和时间线）
+        kg_communities,       # 社区查询（层级社区 + 社区报告）
+        kg_quality,           # 质量分析（置信度分布、孤立实体等）
+    )
+    return [kg_stats, kg_search, kg_entity_detail, kg_communities, kg_quality]
 
 
 # ==================== 工具注册 ====================
 
 def get_project_tools() -> list:
     """
-    获取所有项目自定义工具。
+    获取所有项目自定义工具（安全子集）。
 
-    这些工具会注册到 Hermes ToolRegistry，供 LLM 调用。
+    EasyChat 改造（R03/R14）：KB 检索、KG、Text2SQL、Code Mode、论文复现
+    工具已从默认注册中移除——它们的模块导入必须保持惰性，禁止在聊天链路
+    启动时被拉起。时间/待办/提醒（cron）与时间解析工具保留。
 
     Returns:
         list: 工具列表
     """
-    # 导入 Text2SQL 工具
-    from backend.tools.text_to_sql import sql_db_get_schema, sql_db_query
-
-    # 导入 Code Mode 工具
-    from backend.tools.code_executor import run_python
-    from backend.context.tool_results.tools import context_read, context_search
-
-    # 导入论文复现工具
-    from backend.tools.paper_reproduction import (
-        parse_paper,
-        extract_claim_rubric,
-        discover_repo,
-        docker_sandbox,
-        debug_paper_code,
-        build_evidence_graph
-    )
-
     tools = [
         get_current_time,       # 获取当前时间
-        echo_tool,              # 示例工具（可删除）
         todo_add,               # 添加任务
         todo_update,            # 更新任务状态
         todo_get,               # 获取任务列表
-        cronjob_create,         # 创建定时任务
+        cronjob_create,         # 创建定时任务（Task 8 迁移到新调度后更新后端）
         list_delivery_configs,  # 查询投递配置（创建定时任务前使用）
-        knowledge_search,       # RAG 知识库检索（所有用户可用）
-        kg_stats,               # 知识图谱统计（节点/关系/社区数量）
-        kg_search,              # 知识图谱实体搜索
-        kg_entity_detail,       # 知识图谱实体详情
-        kg_communities,         # 知识图谱社区查询
-        kg_quality,             # 知识图谱质量分析
         when_resolve,           # 自然语言时间解析
-        # Text2SQL 工具（所有用户可用）
-        sql_db_get_schema,      # 查询数据库表结构
-        sql_db_query,           # 执行只读 SQL 查询
-        # Code Mode 工具（所有用户可用）
-        run_python,             # 执行 Python 代码组合调用工具
-        context_read,           # 按权限恢复原始工具结果
-        context_search,         # 在本会话可访问结果中定位证据
-        # 论文复现工具（需要 terminal 和 file 权限）
-        parse_paper,            # 解析学术论文
-        extract_claim_rubric,   # 提取主张和判定准则
-        discover_repo,          # 发现 GitHub 仓库
-        docker_sandbox,         # Docker 沙箱执行
-        debug_paper_code,       # 论文代码调试
-        build_evidence_graph,   # 构建证据图谱
     ]
 
     # =====================================================
