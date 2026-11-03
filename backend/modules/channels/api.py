@@ -300,6 +300,61 @@ class ChannelService:
             account_pk, cursor=cursor, last_error=error, polled_at=utc_now_iso()
         )
 
+    # ---- 投递目标（delivery 模块通过公开方法调用，不碰 channels 内部表） -------------
+
+    def delivery_credentials(self, account_pk: str) -> tuple[ChannelAccount | None, dict[str, str]]:
+        return self.listener_account(account_pk)
+
+    def delivery_target_for_run(self, run: dict[str, Any]) -> dict[str, str] | None:
+        """run 完成时按会话路由解析微信目标；未绑定/禁用返回 None（不投递）。"""
+        route = self.repo.find_session_route(str(run.get("session_id") or ""))
+        if route is None:
+            return None
+        platform = str(route["platform"])
+        account_id = str(route["account_id"])
+        external_user = str(route["external_user_id"])
+        account = self.repo.get_account_by_platform_id(platform, account_id)
+        if account is None or account.status != ACCOUNT_ACTIVE:
+            return None
+        resolved = self.repo.find_active_binding(platform, account_id, external_user)
+        if resolved is None or int(resolved[1].get("status") or 0) != 1:
+            return None
+        return {
+            "kind": platform,
+            "ref": external_user,
+            "channel_account_id": account.id,
+            "context_token": str(route.get("context_token") or ""),
+        }
+
+    def is_delivery_binding_active(self, account_pk: str, external_user_id: str) -> bool:
+        account = self.repo.get_account(account_pk)
+        if account is None or account.status != ACCOUNT_ACTIVE:
+            return False
+        resolved = self.repo.find_active_binding(account.platform, account.account_id, external_user_id)
+        return resolved is not None and int(resolved[1].get("status") or 0) == 1
+
+    async def send_wechat_text(
+        self, *, account_pk: str, external_user_id: str, text: str, context_token: str = ""
+    ) -> None:
+        """投递模块专用发送入口：凭证解析与协议细节留在 channels。"""
+        from backend.modules.channels.wechat.account import send_text
+
+        account, credentials = self.listener_account(account_pk)
+        if account is None or account.status != ACCOUNT_ACTIVE:
+            raise InvalidInputError("渠道账号不可用")
+        token = str(credentials.get("token") or "")
+        base_url = (account.base_url or credentials.get("base_url") or "").rstrip("/")
+        if not token or not base_url:
+            raise InvalidInputError("渠道账号缺少发送凭证")
+        await send_text(
+            self.transport,
+            base_url=base_url,
+            token=token,
+            to_user_id=external_user_id,
+            text=text,
+            context_token=context_token,
+        )
+
     # ---- 入站处理 ----------------------------------------------------------------
 
     async def handle_inbound(self, message: InboundMessage) -> InboundOutcome:
@@ -430,6 +485,10 @@ class ChannelService:
                 and str(existing.get("source") or "") == "wechat"
                 and str(existing.get("channel_account_id") or "") == account.id
             ):
+                self.repo.set_session_cursor(
+                    message.platform, account.account_id, message.external_user_id,
+                    message.external_chat_id, cursor, context_token=message.context_token,
+                )
                 return cursor
         external_chat_key = f"{account.account_id}:{message.external_chat_id}"
         session_id = await self.assistant.get_or_create_session(
@@ -441,7 +500,7 @@ class ChannelService:
         )
         self.repo.set_session_cursor(
             message.platform, account.account_id, message.external_user_id,
-            message.external_chat_id, session_id,
+            message.external_chat_id, session_id, context_token=message.context_token,
         )
         return session_id
 
@@ -472,7 +531,7 @@ class ChannelService:
             )
             self.repo.set_session_cursor(
                 message.platform, account.account_id, message.external_user_id,
-                message.external_chat_id, new_session,
+                message.external_chat_id, new_session, context_token=message.context_token,
             )
             return "✅ 已开启新对话", new_session
         if lowered in ("/status", "/当前"):
@@ -494,7 +553,7 @@ class ChannelService:
                 target = sessions[index - 1]
                 self.repo.set_session_cursor(
                     message.platform, account.account_id, message.external_user_id,
-                    message.external_chat_id, target["id"],
+                    message.external_chat_id, target["id"], context_token=message.context_token,
                 )
                 return f"✅ 已切换到：{target['title'] or target['id'][:16]}", target["id"]
             return f"❌ 序号无效，范围 1-{len(sessions)}", session_id

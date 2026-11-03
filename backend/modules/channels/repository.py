@@ -381,15 +381,31 @@ class ChannelRepository:
         external_user_id: str,
         external_chat_id: str,
         session_id: str,
+        context_token: str = "",
     ) -> None:
         with self.db.transaction() as conn:
             conn.execute(
                 "INSERT INTO channel_session_cursors(platform, account_id, external_user_id, "
-                "external_chat_id, session_id, updated_at) VALUES(?,?,?,?,?,?) "
+                "external_chat_id, session_id, context_token, updated_at) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(platform, account_id, external_user_id, external_chat_id) "
-                "DO UPDATE SET session_id=excluded.session_id, updated_at=excluded.updated_at",
-                (platform, account_id, external_user_id, external_chat_id, session_id, utc_now_iso()),
+                "DO UPDATE SET session_id=excluded.session_id, context_token=excluded.context_token, "
+                "updated_at=excluded.updated_at",
+                (platform, account_id, external_user_id, external_chat_id, session_id,
+                 context_token, utc_now_iso()),
             )
+
+    def find_session_route(self, session_id: str) -> dict[str, Any] | None:
+        """按 Assistant 会话反查渠道路由（run 完成时确定投递目标）。"""
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM channel_session_cursors WHERE session_id=? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def clear_session_cursor(
         self, platform: str, account_id: str, external_user_id: str, external_chat_id: str

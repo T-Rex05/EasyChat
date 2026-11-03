@@ -17,7 +17,6 @@ from backend.modules.channels.contracts import (
     LISTENER_RUNNING,
     LISTENER_STARTING,
     LISTENER_STOPPED,
-    ChannelAccount,
     ListenerState,
 )
 from backend.modules.channels.wechat.account import (

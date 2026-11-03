@@ -17,6 +17,9 @@ _PREFIX_ATTACHMENT = "att"
 _PREFIX_CHANNEL_ACCOUNT = "chn"
 _PREFIX_CHANNEL_BINDING = "bnd"
 _PREFIX_CHANNEL_EVENT = "evt"
+_PREFIX_PART = "part"
+_PREFIX_SCHEDULE = "sch"
+_PREFIX_OCCURRENCE = "occ"
 
 
 def _new_id(prefix: str) -> str:
@@ -41,6 +44,18 @@ def new_job_id() -> str:
 
 def new_delivery_id() -> str:
     return _new_id(_PREFIX_DELIVERY)
+
+
+def new_part_id() -> str:
+    return _new_id(_PREFIX_PART)
+
+
+def new_schedule_id() -> str:
+    return _new_id(_PREFIX_SCHEDULE)
+
+
+def new_occurrence_id() -> str:
+    return _new_id(_PREFIX_OCCURRENCE)
 
 
 def new_artifact_id() -> str:

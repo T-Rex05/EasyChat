@@ -34,7 +34,9 @@ class ModuleRegistry:
     assistant: Any | None = None  # Task 6
     channels: Any | None = None  # Task 7
     delivery: Any | None = None  # Task 8
+    delivery_worker: Any | None = None  # Task 8（唯一投递 worker）
     scheduling: Any | None = None  # Task 8
+    scheduler: Any | None = None  # Task 8（唯一提醒调度器）
     memory: Any | None = None  # Task 9
     skills: Any | None = None  # Task 10
     evolution: Any | None = None  # Task 11
@@ -95,12 +97,73 @@ async def run_startup(registry: ModuleRegistry) -> None:
                 "渠道模块保持关闭（不会以明文保存 bot token）"
             )
 
+    # Task 8：投递账本 + 唯一投递 worker + 唯一提醒调度器。
+    # 没有渠道发送器时不构造（避免“看似启用、实际发不出”）。
+    if registry.channels is not None and registry.assistant is not None:
+        from backend.modules.delivery.api import DeliveryService
+        from backend.modules.delivery.wechat import WeChatTextSender
+        from backend.modules.delivery.worker import DeliveryWorker
+
+        registry.delivery = DeliveryService(
+            db, sender=WeChatTextSender(registry.channels),
+        )
+        registry.delivery_worker = DeliveryWorker(registry.delivery)
+        await registry.delivery_worker.start()
+        registry.assistant.dispatcher.on_run_finished = _make_run_finished(registry)
+
+        from backend.modules.scheduling.api import SchedulingService
+        from backend.modules.scheduling.scheduler import Scheduler
+
+        registry.scheduling = SchedulingService(
+            db, delivery=registry.delivery, access=registry.access,
+            timezone_name=registry.settings.project_timezone,
+        )
+        registry.scheduler = Scheduler(registry.scheduling)
+        await registry.scheduler.start()
+
+
+def _make_run_finished(registry: ModuleRegistry):
+    """run 终态与投递请求同事务：先取已落库的最终回复，再入队。"""
+
+    def on_run_finished(conn, run) -> None:
+        if registry.channels is None or registry.delivery is None:
+            return
+        if str(run.get("source") or "") != "wechat":
+            return
+        target_data = registry.channels.delivery_target_for_run(run)
+        if not target_data:
+            return
+        row = conn.execute(
+            "SELECT content FROM conversations WHERE run_id=? AND role='assistant' "
+            "ORDER BY id DESC LIMIT 1",
+            (run["id"],),
+        ).fetchone()
+        if row is None:
+            return
+        from backend.modules.delivery.contracts import DeliveryTarget
+
+        registry.delivery.enqueue_run_in_transaction(
+            conn, run, DeliveryTarget(**target_data), str(row["content"]),
+        )
+
+    return on_run_finished
+
 
 async def run_shutdown(registry: ModuleRegistry) -> None:
     """lifespan 关闭序列：停止接收→停任务→关Runtime→最终刷计量→释放连接。
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.scheduler is not None:
+        await registry.scheduler.stop()
+        registry.scheduler = None
+    if registry.delivery_worker is not None:
+        await registry.delivery_worker.stop()
+        registry.delivery_worker = None
+    if registry.delivery is not None:
+        registry.delivery = None
+    if registry.scheduling is not None:
+        registry.scheduling = None
     if registry.channels is not None:
         await registry.channels.aclose()
         registry.channels = None

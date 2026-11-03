@@ -21,6 +21,7 @@ from backend.modules.channels.contracts import (
     QR_WAIT,
     QrSessionView,
 )
+from backend.shared.text import split_text  # noqa: F401  渠道发送与投递共用切分规则
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
@@ -321,33 +322,6 @@ class QrLoginManager:
 
 
 # ── 发送 ─────────────────────────────────────────────────────────────────────
-
-
-def split_text(text: str, limit: int = DEFAULT_TEXT_CHUNK) -> list[str]:
-    """按段落/换行切分长文本，块不超过 limit（微信单条显示上限保护）。"""
-    text = text.strip()
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    current = ""
-    for block in text.split("\n\n"):
-        candidate = f"{current}\n\n{block}" if current else block
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current)
-        while len(block) > limit:
-            cut = block.rfind("\n", 0, limit)
-            cut = cut if cut > 0 else limit
-            chunks.append(block[:cut])
-            block = block[cut:].lstrip("\n")
-        current = block
-    if current:
-        chunks.append(current)
-    return chunks
 
 
 async def send_text(
