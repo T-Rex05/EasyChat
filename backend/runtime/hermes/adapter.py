@@ -224,10 +224,17 @@ class HermesRuntimeAdapter(ExecutionRuntime):
             agent.interrupt("用户请求取消")
         except Exception:  # noqa: BLE001
             logger.exception("interrupt 失败 run_id=%s", run_id)
+        subagents = list(getattr(agent, "_active_subagents", []) or [])
+        if not subagents:
+            return  # 没有子 Agent 时不为尽力而为的中断导入 Hermes 内部模块
         try:
+            # 陷阱 #3：必须先引导 sys.path/HERMES_HOME 再导入 Hermes 顶层模块
+            from backend.runtime.hermes.paths import ensure_hermes_environment
+
+            ensure_hermes_environment(self.hermes_home)
             from tools.delegate_tool import interrupt_subagent  # noqa: PLC0415
 
-            for sid in list(getattr(agent, "_active_subagents", []) or []):
+            for sid in subagents:
                 interrupt_subagent(sid)
         except Exception:  # noqa: BLE001  子Agent中断为尽力而为
             pass

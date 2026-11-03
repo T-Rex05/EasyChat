@@ -16,6 +16,8 @@ from backend.runtime.contracts import RuntimeEvent, RuntimeRequest
 
 # 测试专用 JWT 密钥（64位，满足弱密钥拒绝规则）
 TEST_JWT_SECRET = "e" * 64
+# 测试专用渠道凭证加密密钥（不与生产共享）
+TEST_ENCRYPTION_SECRET = "k" * 64
 
 
 class FakeClock:
@@ -74,12 +76,15 @@ class TestRig:
     db: Database | None = None
     access: object | None = None  # Task 3: AccessService（字符串标注避免导入细节泄漏）
     assistant: object | None = None  # Task 6: AssistantService
+    channels: object | None = None  # Task 7: ChannelService
     _closed: bool = False
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
+        if self.channels is not None:
+            await self.channels.aclose()
         if self.assistant is not None:
             await self.assistant.aclose()
         await self.runtime.aclose()
@@ -136,6 +141,25 @@ class TestRig:
     async def start_assistant(self) -> None:
         assert self.assistant is not None
         await self.assistant.start()
+
+    def attach_channels(self, *, transport=None, media_fetcher=None, media_dir=None):
+        """装配 ChannelService（Task 7）：默认 FakeTransport，不触网。"""
+        from backend.modules.channels.api import ChannelService
+        from tests.support.wechat import FakeTransport
+
+        assert self.assistant is not None, "attach_assistant() 后才能 attach_channels"
+        assert self.access is not None
+        self.channels = ChannelService(
+            self.db,
+            assistant=self.assistant,
+            access=self.access,
+            encryption_secret=TEST_ENCRYPTION_SECRET,
+            transport=transport or FakeTransport(),
+            media_fetcher=media_fetcher,
+            media_dir=media_dir,
+            clock=self.clock,
+        )
+        return self.channels
 
     async def drain_runs(self, *, max_polls: int = 600) -> None:
         """推进调度直到无 queued/running/cancel_requested；超限直接失败。"""

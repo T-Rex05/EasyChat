@@ -77,8 +77,17 @@ class AssistantService:
         channel_account_id: str = "",
         title: str = "",
     ) -> str:
-        """按外部会话标识解析（旧 thread_id 格式迁移）；归属 owner 唯一。"""
-        existing = self.repo.find_session_by_external_chat(principal.user_id, external_chat_id)
+        """按外部会话标识解析（旧 thread_id 格式迁移）；归属 owner 唯一。
+
+        传入 source/channel_account_id 时按渠道隔离解析：不同机器人账号下的
+        同一 external_chat_id 不会命中同一会话。
+        """
+        existing = self.repo.find_session_by_external_chat(
+            principal.user_id,
+            external_chat_id,
+            source=source,
+            channel_account_id=channel_account_id,
+        )
         if existing is not None:
             return str(existing["id"])
         return await self.create_session(
@@ -88,6 +97,13 @@ class AssistantService:
 
     async def list_sessions(self, principal: Principal, limit: int = 50, offset: int = 0) -> list[dict]:
         return self.repo.list_sessions(principal.user_id, limit=limit, offset=offset)
+
+    async def get_session(self, principal: Principal, session_id: str) -> dict | None:
+        """按 owner 读取会话元数据；不存在/不属于该 owner 时返回 None。"""
+        try:
+            return self.repo.get_session(session_id, owner_id=principal.user_id)
+        except NotFoundError:
+            return None
 
     async def session_messages(self, principal: Principal, session_id: str) -> list[dict]:
         """UI 投影消息（仅 owner；投影不是模型历史）。"""
@@ -102,6 +118,31 @@ class AssistantService:
             return [dict(r) for r in rows]
         finally:
             conn.close()
+
+    async def register_attachment(
+        self,
+        principal: Principal,
+        *,
+        file_name: str,
+        file_path: str,
+        mime: str = "",
+        file_size: int = 0,
+        sha256: str = "",
+        session_id: str = "",
+    ) -> str:
+        """登记渠道收到/生成的文件引用（大内容在文件系统，DB 只存元信息）。"""
+        principal = self.access.validate_principal(principal)
+        if not file_name or not file_path:
+            raise InvalidInputError("附件缺少文件名或路径")
+        return self.repo.create_attachment(
+            owner_id=principal.user_id,
+            file_name=file_name[:255],
+            file_path=file_path,
+            file_size=max(0, int(file_size)),
+            mime=mime[:120],
+            sha256=sha256,
+            session_id=session_id,
+        )
 
     # ---- 提交 ------------------------------------------------------------------
 

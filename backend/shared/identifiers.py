@@ -13,6 +13,10 @@ _PREFIX_CALL = "call"
 _PREFIX_JOB = "job"
 _PREFIX_DELIVERY = "dlv"
 _PREFIX_ARTIFACT = "art"
+_PREFIX_ATTACHMENT = "att"
+_PREFIX_CHANNEL_ACCOUNT = "chn"
+_PREFIX_CHANNEL_BINDING = "bnd"
+_PREFIX_CHANNEL_EVENT = "evt"
 
 
 def _new_id(prefix: str) -> str:
@@ -41,6 +45,22 @@ def new_delivery_id() -> str:
 
 def new_artifact_id() -> str:
     return _new_id(_PREFIX_ARTIFACT)
+
+
+def new_attachment_id() -> str:
+    return _new_id(_PREFIX_ATTACHMENT)
+
+
+def new_channel_account_id() -> str:
+    return _new_id(_PREFIX_CHANNEL_ACCOUNT)
+
+
+def new_channel_binding_id() -> str:
+    return _new_id(_PREFIX_CHANNEL_BINDING)
+
+
+def new_channel_event_id() -> str:
+    return _new_id(_PREFIX_CHANNEL_EVENT)
 
 
 def is_valid_id(value: str, *, prefix: str | None = None) -> bool:

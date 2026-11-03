@@ -63,12 +63,35 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.access.seed()
         await registry.assistant.start()
 
+    # Task 7：渠道模块（默认 wechat_enabled=False，不启动任何监听）。
+    # 组装需要部署密钥（凭证加密）；缺失时明确跳过而不是以明文落库。
+    if (
+        registry.settings.wechat_enabled
+        and registry.assistant is not None
+        and registry.access is not None
+    ):
+        secret = str(registry.settings.extra.get("encryption_secret") or "")
+        if secret:
+            from backend.modules.channels.api import ChannelService
+
+            registry.channels = ChannelService(
+                db,
+                assistant=registry.assistant,
+                access=registry.access,
+                encryption_secret=secret,
+                media_dir=registry.settings.artifacts_dir / "channels",
+            )
+            await registry.channels.start_listeners()
+
 
 async def run_shutdown(registry: ModuleRegistry) -> None:
     """lifespan 关闭序列：停止接收→停任务→关Runtime→最终刷计量→释放连接。
 
     后续任务按逆序补充；整个流程保持幂等。
     """
+    if registry.channels is not None:
+        await registry.channels.aclose()
+        registry.channels = None
     if registry.assistant is not None:
         await registry.assistant.aclose()
         registry.assistant = None

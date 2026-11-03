@@ -70,15 +70,71 @@ class AssistantRepository:
         finally:
             conn.close()
 
-    def find_session_by_external_chat(self, owner_id: int, external_chat_id: str) -> dict[str, Any] | None:
+    def find_session_by_external_chat(
+        self,
+        owner_id: int,
+        external_chat_id: str,
+        *,
+        source: str | None = None,
+        channel_account_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """按可信 owner + 外部会话标识解析会话。
+
+        source/channel_account_id 用于渠道隔离：两个机器人账号下的同一 openid
+        不共享会话；Web 不传渠道账号（规范为空串）。
+        """
+        sql = "SELECT * FROM sessions WHERE owner_id=? AND external_chat_id=? AND active=1"
+        params: list[Any] = [owner_id, external_chat_id]
+        if source is not None:
+            sql += " AND source=?"
+            params.append(source)
+        if channel_account_id is not None:
+            sql += " AND channel_account_id=?"
+            params.append(normalize_channel_scope(channel_account_id))
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        conn = self.db.connect()
+        try:
+            row = conn.execute(sql, params).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    # ---- 附件（用户附件元信息归 assistant；大内容只存文件路径） ------------------
+
+    def create_attachment(
+        self,
+        *,
+        owner_id: int,
+        file_name: str,
+        file_path: str,
+        file_size: int,
+        mime: str,
+        sha256: str,
+        session_id: str = "",
+        run_id: str | None = None,
+        file_type: int = 0,
+    ) -> str:
+        from backend.shared.identifiers import new_attachment_id
+
+        attachment_id = new_attachment_id()
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO attachments(id, owner_id, session_id, run_id, file_name, file_path, "
+                "file_size, mime, file_type, sha256, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (attachment_id, owner_id, session_id, run_id, file_name, file_path,
+                 int(file_size), mime, int(file_type), sha256, utc_now_iso()),
+            )
+        return attachment_id
+
+    def get_attachment(self, attachment_id: str, *, owner_id: int) -> dict[str, Any]:
         conn = self.db.connect()
         try:
             row = conn.execute(
-                "SELECT * FROM sessions WHERE owner_id=? AND external_chat_id=? AND active=1 "
-                "ORDER BY created_at DESC LIMIT 1",
-                (owner_id, external_chat_id),
+                "SELECT * FROM attachments WHERE id=? AND owner_id=?", (attachment_id, owner_id)
             ).fetchone()
-            return dict(row) if row else None
+            if row is None:
+                raise NotFoundError(f"附件不存在: {attachment_id}")
+            return dict(row)
         finally:
             conn.close()
 
