@@ -18,9 +18,9 @@
 
 ## 已经完成与尚未完成
 
-已完成：Task 0–14、Task 16（单 worker 镜像构建/启动、SPA、Hermes 启用启动、资源采样、operations 文档）；Task 15 的显式装配、前端收敛、提醒/邮件/投递/模型配置 API、记忆页、Skills 版本页、提醒页已完成。新架构测试 **302 passed**，前端 type-check/build 通过，Docker 构建与容器 smoke 通过；逐任务证据见 `docs/superpowers/plans/easychat-execution-log.md`，进度见 `EASYCHAT_PROGRESS.md`。
+已完成：Task 0–14、Task 16（单 worker 镜像构建/启动、SPA、Hermes 启用启动、资源采样、operations 文档）；Task 15 的显式装配、前端收敛、提醒/邮件/投递/模型配置 API、记忆页、Skills 版本页、提醒页、用量页已完成。新架构测试 **302 passed**，前端 type-check/build 通过，Docker 构建与容器 smoke 通过；逐任务证据见 `docs/superpowers/plans/easychat-execution-log.md`，进度见 `EASYCHAT_PROGRESS.md`。
 
-未完成：Task 15 收尾（ChatSidebar 旧 Cron、Trace/Admin 旧形状、旧后端删除、main.py 切换、144 路由核对）；真实 LLM/微信/MCP/SMTP/PDF 未联调；Runner 隔离未验收，自动执行保持关闭；新仓库未推送。
+未完成：Task 15 收尾（Admin 平台/邮箱迁移、旧后端删除、main.py 切换、144 路由核对）；真实 LLM/微信/MCP/SMTP/PDF 未联调；Runner 隔离未验收，自动执行保持关闭；新仓库未推送。
 
 没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
 

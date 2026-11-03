@@ -1004,3 +1004,24 @@ Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路�
 ### 下一项
 
 处理 ChatSidebar 旧 Cron 入口与 Trace/Admin 旧形状，随后删除旧模块并切换 main.py。
+
+---
+
+---
+
+## Task 15（继续 5）：移除旧 Cron 侧栏、迁移用量页 — 2026-11-03（commit `64ad70d`）
+
+### 已完成
+
+- `ChatSidebar.vue` 重写为纯历史列表（加载/分页/重命名/删除/新对话），移除旧 Cron 标签、创建/编辑/执行结果弹窗与 `/api/cron-jobs` 调用；删除 `api/cron.ts`。
+- 新增 `UsageView.vue`：我的每日用量、Token 排行、最近调用（`/api/usage/*`）；路由 `/trace` 改为“用量与排行”，删除旧 `TraceView.vue`/`api/trace.ts`。
+- 前端契约测试新增 `/api/cron-jobs`、`/api/traces` 与旧文件断言；全量 302 passed，type-check/build 通过。
+
+### 未完成
+
+- Admin 平台配置/部门(data-layers)/个人邮箱仍用旧接口；Config SMTP 测试仍用 `/api/platform-config/email/test`。
+- 旧后端模块/main.py 未切换；144 路由核对未完成。
+
+### 下一项
+
+迁移 Admin 平台配置/邮箱到新 channels/email API，随后切换 main.py 并删除旧模块。
