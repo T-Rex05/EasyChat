@@ -200,3 +200,25 @@ async def test_binding_rejects_disabled_user_and_missing_account(env):
     with pytest.raises(NotFoundError):
         rig.channels.bind_user(admin, platform="wechat", account_id="missing-bot",
                                external_user_id="wx_missing", user_id=admin.user_id)
+
+
+async def test_binding_creation_and_reactivation_require_manage(env):
+    rig, _ = env
+    admin = _admin(rig)
+    user = _user(rig)
+    account = _register(rig, admin, "bot-perm", "tp")
+    # 普通用户不能用任意 openid 自绑（外部 id 不是身份证明）
+    with pytest.raises(ForbiddenError):
+        rig.channels.bind_user(user, platform="wechat", account_id=account.account_id,
+                               external_user_id="wx_claim", user_id=user.user_id, account_pk=account.id)
+    binding = rig.channels.bind_user(admin, platform="wechat", account_id=account.account_id,
+                                     external_user_id="wx_claim", user_id=user.user_id, account_pk=account.id)
+    rig.channels.set_binding_status(admin, binding.id, "disabled")
+    # 本人可以解绑，但不能把管理员禁用的绑定重新启用
+    with pytest.raises(ForbiddenError):
+        rig.channels.set_binding_status(user, binding.id, "active")
+    # 本人对自己仍启用的绑定执行解绑是允许的
+    other = rig.channels.bind_user(admin, platform="wechat", account_id=account.account_id,
+                                   external_user_id="wx_self_off", user_id=user.user_id, account_pk=account.id)
+    disabled = rig.channels.unbind(user, other.id)
+    assert disabled.status == "disabled"

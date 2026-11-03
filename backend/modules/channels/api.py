@@ -225,11 +225,10 @@ class ChannelService:
         account_pk: str = "",
     ) -> ChannelBinding:
         principal = self.access.validate_principal(actor)
+        # 绑定创建是管理操作：外部 openid 不能作为自证身份，避免用户抢绑他人微信。
+        # 扫码路径 bind_after_qr 使用真实扫码返回的 ilink_user_id，不经此入口。
+        self.access.require_permission(principal, "system.manage")
         target_id = user_id if user_id is not None else principal.user_id
-        if target_id != principal.user_id:
-            self.access.require_permission(principal, "system.manage")
-        else:
-            self.access.require_permission(principal, "chat.use")
         target = self.access.snapshot_principal(int(target_id))  # 禁用用户不能获得绑定
         account = (
             self._require_account(account_pk)
@@ -250,7 +249,9 @@ class ChannelService:
         binding = self.repo.get_binding(binding_id)
         if binding is None:
             raise NotFoundError(f"绑定不存在: {binding_id}")
-        if binding.user_id != principal.user_id:
+        if binding.user_id == principal.user_id and status == BINDING_DISABLED:
+            pass  # 本人可解绑自己；重新启用或操作他人绑定需要 system.manage
+        else:
             self.access.require_permission(principal, "system.manage")
         self.repo.set_binding_status(binding_id, status)
         updated = self.repo.get_binding(binding_id)

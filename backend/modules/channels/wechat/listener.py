@@ -130,13 +130,18 @@ class WeChatListener:
                     delay = self.backoff[min(failures - 1, len(self.backoff) - 1)]
                     await asyncio.sleep(delay)
         finally:
-            self._states[account_pk] = ListenerState(
-                account_id=account_pk,
-                status=LISTENER_STOPPED,
-                since=self.clock(),
-                last_error=self.status(account_pk).last_error,
-                polls=self._polls(account_pk),
-            )
+            current = self._states.get(account_pk)
+            # 明确错误（缺凭证/账号禁用）保留 error 状态，供 UI/运维看见；
+            # 正常取消或异常退出才落 stopped。
+            if current is None or current.status != LISTENER_ERROR:
+                self._states[account_pk] = ListenerState(
+                    account_id=account_pk,
+                    status=LISTENER_STOPPED,
+                    since=self.clock(),
+                    last_error=current.last_error if current else "",
+                    polls=current.polls if current else 0,
+                    last_poll_at=current.last_poll_at if current else None,
+                )
 
     async def poll_once(self, account_pk: str) -> int:
         """执行一次 getupdates；返回本次处理的入站消息数（测试直接调用）。"""
