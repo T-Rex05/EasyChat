@@ -7,28 +7,31 @@ import type { ChatSession } from '@/types/chat'
  * 获取用户的会话列表
  */
 export async function getUserSessions(
-  userId: string | number,
+  _userId: string | number,
   offset: number = 0,
   limit: number = 50,
-  sessionType: string = 'conversation'
+  _sessionType: string = 'conversation'
 ): Promise<{ sessions: ChatSession[]; has_more: boolean }> {
-  const response = await request.get('/api/data/sessions', {
-    params: {
-      user_id: userId,
-      offset,
-      limit,
-      session_type: sessionType,
-    },
-  })
-
-  return response.data
+  const response = await request.get<{ sessions: any[]; offset: number; limit: number }>(
+    '/api/history', { params: { offset, limit } },
+  )
+  const sessions = (response.data.sessions || []).map((s) => ({
+    id: s.session_id || s.id || '',
+    title: s.title || '',
+    source: s.source,
+    user_question: s.title || '',
+    create_time: s.created_at,
+    update_time: s.updated_at,
+    is_schedule: 0,
+  }))
+  return { sessions, has_more: sessions.length >= limit }
 }
 
 /**
  * 删除会话
  */
 export async function deleteSession(chatId: string): Promise<void> {
-  await request.delete(`/api/data/sessions/${encodeURIComponent(chatId)}`)
+  await request.delete(`/api/history/${encodeURIComponent(chatId)}`)
 }
 
 /**

@@ -48,12 +48,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '系统管理', icon: '', requiresAuth: true, permission: 'system.manage' },
   },
   {
-    path: '/audit-log',
-    name: 'AuditLog',
-    component: () => import('../views/AuditLogView.vue'),
-    meta: { title: '操作审计', icon: '', requiresAuth: true, permission: 'terminal.audit' },
-  },
-  {
     path: '/config',
     name: 'Config',
     component: () => import('../views/ConfigView.vue'),

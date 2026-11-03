@@ -8,13 +8,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = REPO_ROOT / "agent_frontend"
 SRC = FRONTEND / "src"
 REMOVED_API = ("/api/kb", "/api/graph", "/api/paper", "/api/community", "/api/memories",
-               "/api/cron-jobs", "/api/traces", "/api/data-layers", "/api/admin/pool")
+               "/api/cron-jobs", "/api/traces", "/api/data-layers", "/api/admin/pool",
+               "/api/data/sessions")
 REMOVED_ROUTES = ("/knowledge", "/kb-eval", "/graph", "/kg-review", "/communities",
                   "/pool-review", "/paper-reproduction", "/memory-dashboard")
 REMOVED_VIEW_FILES = ("KnowledgeView.vue", "KnowledgeEvalView.vue", "GraphView.vue",
                       "KgReviewView.vue", "CommunityView.vue", "PoolReviewView.vue",
                       "MemoryItemsView.vue", "MemoryDashboardView.vue", "SkillView.vue",
-                      "TraceView.vue")
+                      "TraceView.vue", "AuditLogView.vue")
 REMOVED_PACKAGES = ("@vue-flow/core", "graphology", "sigma", "vis-network")
 
 

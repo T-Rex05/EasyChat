@@ -46,6 +46,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     """Task 15：显式注册新模块路由，不扫描 backend/controller。"""
     from backend.modules.access.routes import build_access_router
     from backend.modules.assistant.routes import build_web_chat_router
+    from backend.modules.assistant.compat import build_assistant_compat_router
     from backend.modules.channels.routes import build_channels_router
     from backend.modules.delivery.routes import build_delivery_router
     from backend.modules.delivery.smtp import build_email_compat_router, build_email_router
@@ -61,6 +62,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_usage_router(_LazyModule(registry, "usage"), authenticate))
     app.include_router(build_models_router(_LazyModule(registry, "models"), authenticate))
     app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate))
+    app.include_router(build_assistant_compat_router(authenticate))
     app.include_router(build_channels_router(_LazyModule(registry, "channels"), authenticate))
     app.include_router(build_scheduling_router(
         _LazyModule(registry, "scheduling"), _LazyModule(registry, "channels"), authenticate,

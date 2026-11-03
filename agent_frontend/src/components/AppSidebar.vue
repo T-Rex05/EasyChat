@@ -152,7 +152,7 @@ const menuItems = computed(() => {
 const MENU_GROUP_RULES: { label: string; paths: string[] }[] = [
   { label: '对话与观测', paths: ['/chat', '/trace'] },
   { label: '技能与记忆', paths: ['/skills', '/memory', '/schedules'] },
-  { label: '系统', paths: ['/admin', '/audit-log', '/config'] },
+  { label: '系统', paths: ['/admin', '/config'] },
 ]
 
 const menuGroups = computed(() => {

@@ -60,6 +60,9 @@ async def test_register_login_and_memory_ownership(client):
     assert (await c.get("/api/memory", headers=headers)).status_code == 200
     assert (await c.get("/api/skills", headers=headers)).status_code == 200
     assert (await c.get("/api/usage/ranking", headers=headers)).status_code == 200
+    assert (await c.get("/api/history", headers=headers)).status_code == 503
+    assert (await c.get("/chat/exec-approval/pending", headers=headers)).json()["pending"] is False
+    assert (await c.post("/api/chat/upload-images", headers=headers)).status_code == 503
     assert (await c.get("/api/deliveries", headers=headers)).status_code == 200
     # 未配置部署密钥/渠道时，邮件模块明确 503；配置后普通用户 403
     assert (await c.get("/api/email/config", headers=headers)).status_code == 503
