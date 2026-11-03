@@ -556,3 +556,109 @@ python -m ruff check backend/modules/memory backend/runtime/hermes/memory_bridge
 ### 下一项
 
 Task 10：个人技能、不可变版本与 Hermes 写入桥接（skills 模块、激活 compare-swap、pin/归档、路径与 hash 校验）。
+
+---
+
+---
+
+## Task 10：个人技能、不可变版本与 Hermes 写入桥接 — 2026-11-03 完成（commit `ce3eaf4`）
+
+**状态：** 已完成（离线版本/激活/回滚/权限全绿；真实 Hermes 工具写入路径尚未接线）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0007_skills.sql`：`skills`（owner/name 唯一、origin、pinned、archived、active_version_id）、`skill_versions`（版本序号唯一、content_path/hash、parent、source、status）。
+- `backend/modules/skills/contracts.py`：`SkillView/SkillVersionView/SkillSnapshot`；来源/状态常量；200KB 内容上限、64 字符名。
+- `backend/modules/skills/versions.py`：`SkillContentStore`——版本文件路径只由模块生成的 `skl_/skv_` ID 决定；临时文件 + fsync + `os.replace`；已存在版本拒绝覆盖；读取校验 sha256；拒绝绝对路径/`..`/符号链接/越界。
+- `backend/modules/skills/repository.py`：技能/版本写入口；`ensure_skill`、`create_version` 版本序号条件分配、`compare_and_swap_active` 条件更新、pin/归档、按 owner 列表、读取版本。
+- `backend/modules/skills/api.py`：`propose`（文件先写、元数据后提交；background/evolution 不得改 pinned；跨 owner 需 skill.manage）、`activate`（先校验版本归属与文件 hash，再 CAS）、`rollback`、`set_pinned/set_archived`、`list/read_active_content/list_for_runtime`；运行时快照固定版本+内容。
+- `backend/runtime/hermes/skills_bridge.py`：`SkillsBridge` 只调 skills 公开接口，无 Hermes import。
+- `backend/modules/skills/routes.py`：列表/详情/propose/activate/rollback/pin+archive 薄路由。
+- `backend/bootstrap.py`：装配 SkillService（内容根 `artifacts/skills`）。
+- 测试：`tests/skills/test_versions.py`（不可变文件/显式激活、陈旧指针冲突、回滚、恶意名/路径/符号链接、篡改 hash 阻止激活与读取、缺失文件不破坏旧 active、pin 阻止自动来源、owner/manage 权限、重启恢复、归档、大小限制、parent 归属）、`tests/skills/test_hermes_bridge.py`（桥接只走公开接口/快照 owner 过滤/无 Hermes import）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/skills -q
+→ 25 passed in 7.47s
+python -m ruff check backend/modules/skills backend/runtime/hermes/skills_bridge.py tests/skills
+→ All checks passed!
+```
+
+### 关键决策
+
+- **内容路径与用户 name 解耦**：路径由 `skill_id/version_id` 生成，name 只做展示/唯一键；伪造 content_path 会在读取时越界/hash 校验失败。
+- **先文件后元数据**：中断只留孤立文件，不覆盖有效版本；active 指针是 DB 权威，坏版本激活前先验 hash，失败不改变旧指针。
+- **CAS 激活**：`expected_active_version_id` 条件更新，陈旧期望返回 Conflict，不静默覆盖。
+- **pin/归档**：background/evolution 不能改 pinned；用户显式写入仍可；归档不删内容，只从运行时列表隐藏。
+
+### 未验证项
+
+- **File/Terminal/CodeMode/Runner 受保护路径规则尚未接线**：`SkillContentStore` 已拒绝篡改/越界，但通用工具还没有统一的“禁止直接写技能 active 内容”的 guard；需在 Task 13 受限 Runner 或工具层补上。
+- Hermes 原生 `skill_manage` 与后台 review 仍走旧写入路径；SkillsBridge 已提供 propose/activate，但 Adapter 尚未注入，Task 15 前不得声称三条写入口已统一。
+- 既有 `skill_usage` 侧写数据未迁移/未读兼容；本任务只建立新技能/版本权威。
+- 技能 HTTP 路由尚未挂载（Task 15）。
+- 真实并发多进程激活只测到同进程模拟的陈旧期望。
+
+### schema 版本
+
+`0007_skills`（0001–0007）。
+
+### 下一项
+
+Task 11：唯一学习调度、证据与预算（evolution 模块、去重、暂停/撤权、预算预留核销）。
+
+---
+
+---
+
+## Task 11：唯一学习调度、证据与预算 — 2026-11-03 完成（commit `401ba91`）
+
+**状态：** 已完成（离线学习调度/预算全绿；真实 LLM 学习与候选生成留给 Task 12）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0008_evolution.sql`：`evolution_tasks`（owner+source_event 唯一、证据 JSON、预算字段、状态）、`evolution_experiences`（经验/条件/反例/置信度/来源）、`evolution_budgets`（按上海日期 + 用户唯一，reserved/used）。
+- `backend/modules/evolution/contracts.py`：`LearningEvidence/LearningResult/EvolutionTaskView/ExperienceView`；`SYSTEM_USER_ID=0`；明确禁止 `source=evolution` 自触发。
+- `backend/modules/evolution/budget.py`：每日 20k/单次 5k 默认；发送前预留、已知 usage 释放+计入、未知 usage 保留预留；按项目时区日切；跨实例持久化。
+- `backend/modules/evolution/repository.py`：任务幂等插入（同 owner/source_event 一条）、证据读取、状态/预算更新、经验写入、暂停开关（app_settings）。
+- `backend/modules/evolution/evidence.py`：默认确定性 learner（不调用模型）把反馈整理为经验；用户确认与模型推断分列。
+- `backend/modules/evolution/api.py`：`enqueue_feedback`（chat.use；自触发拒绝）、`enqueue_system_feedback`（owner=0）、`pause/resume`、`process_task`（暂停不处理、禁用/撤权拒绝、超预算 paused、未知 usage 保留预留、经验写入）。
+- `backend/modules/evolution/worker.py`：唯一 `evolution.learn` worker，单并发 claim；暂停时不认领；lease 恢复沿用 JobQueue。
+- `backend/bootstrap.py`：装配 EvolutionService/Worker + BudgetManager；shutdown 逆序停止。
+- 测试：`tests/evolution/test_signals.py`（重复反馈只学一次、禁用/撤权阻止、暂停、自触发拒绝、系统主体、过期 lease 恢复）、`tests/evolution/test_budget.py`（预留/核销、未知 usage、日/单次上限、日切、持久化、超预算不发 learner）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/evolution -q
+→ 13 passed in 3.71s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q
+→ 267 passed in 88.76s
+python -m ruff check backend/modules/evolution tests/evolution
+→ All checks passed!
+```
+
+### 关键决策
+
+- **唯一后台并发**：单 EvolutionWorker；暂停开关在 claim 前检查，避免“暂停后仍认领”。
+- **不学自己**：`source='evolution'` 直接拒绝；学习完成不递归入队。
+- **预算先预留**：LLM 调用前 reserve；未知 usage 保留预留直到对账，不立即返还；超预算任务标 paused 而不是继续调用。
+- **系统主体**：`SYSTEM_USER_ID=0` 显式传入，不猜 user_id=1；系统任务跳过用户权限校验但仍走预算。
+- **证据可追溯**：任务保存 run/source/feedback/反例；经验记录 `source_type`，模型自评不当用户事实。
+
+### 未验证项
+
+- 真实 LLM 学习/候选生成：Task 12；默认 learner 只做确定性整理，tokens_used=0。
+- 暂停任务不会在恢复后自动重新入队（当前需新信号或手动处理）；超预算 paused 同样需人工/后续策略。
+- 学习预算与 usage 模块的真实 token 计量尚未对接（Task 12 接真实调用时需沿用唯一计量入口）。
+- 进化 HTTP 路由尚未挂载（Task 15）。
+
+### schema 版本
+
+`0008_evolution`（0001–0008）。
+
+### 下一项
+
+Task 12：候选生成、回放比较、激活与回滚（proposal/validation/adoption、回归 fixture）。

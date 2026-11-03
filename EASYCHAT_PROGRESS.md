@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 21（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–9**（里程碑一 + 投递/提醒 + 记忆） |
-| 下一任务 | **Task 10：个人技能、不可变版本与 Hermes 写入桥接** |
-| 未开始 | Task 10–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory -q` —— **229 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 24（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–11**（里程碑一 + 投递/提醒 + 记忆 + 技能版本 + 唯一学习调度） |
+| 下一任务 | **Task 12：候选生成、回放比较、激活与回滚** |
+| 未开始 | Task 12–16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **267 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
 
-最近提交：`bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7 安全加固) `5cce711`(Task 7 加固) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7 安全加固) `5cce711`(Task 7 加固) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -22,7 +22,7 @@
 backend/
   app.py / bootstrap.py           无副作用工厂；lifespan 显式启动
   shared/{context,errors,identifiers,crypto}.py
-  platform/{sqlite,settings,jobs}.py + migrations/0001..0006
+  platform/{sqlite,settings,jobs}.py + migrations/0001..0008
   modules/access/     RBAC、users/roles、Principal、token（35测试）
   modules/usage/      唯一计量入口 usage.begin_call/complete_call/report_usage（12测试）
   modules/models/     模型配置、AES-GCM密钥、选择链（9测试）
@@ -31,6 +31,8 @@ backend/
   modules/delivery/   投递账本/分块/重试 + 微信文本 Adapter（8测试）
   modules/scheduling/ once/interval/daily 提醒 + 唯一调度器（7测试）
   modules/memory/     事实/事件/经验、版本、召回、遗忘、幂等信号（29测试）
+  modules/skills/     不可变版本、CAS 激活/回滚、pin/归档、内容 hash（25测试）
+  modules/evolution/  唯一学习调度、证据、每日/单次预算（13测试）
   runtime/contracts.py + runtime/hermes/{paths,tools,sessions,usage_bridge,adapter,agent_factory}.py
   integrations/mcp.py WeKnora等MCP窄适配（9测试）
 ```
@@ -64,17 +66,20 @@ backend/
 24. **记忆写入必须带来源**：`source_refs` 为空直接拒绝（服务层校验，不依赖路由）；模型推断与用户确认分列 `source_type`，假设/转述不得写成用户事实。
 25. **遗忘是墓碑而非只删一行**：清空正文并删除全部 revisions，`forget_rules` 只存 sha256；按 memory_id 遗忘时同时登记 content/source_ref 哈希，阻止旧消息重提取。
 26. **召回有硬上限**：候选 80、top5、2000 token；archived 只有查询含“上次/以前/之前/还记得”等旧事提示时才进入候选；0 条明确无结果，不调用模型编造。
+27. **技能内容路径只由模块 ID 决定**：`skl_/skv_` 决定 `skill_id/version_id.md`，用户 name 不参与路径；写入先临时文件+fsync+replace，已存在版本拒绝覆盖，读取必须校验 sha256。
+28. **激活必须 CAS**：`expected_active_version_id` 条件更新；坏版本（文件缺失/hash 不符）在改指针前拒绝，失败保留旧 active。pin 技能只允许用户显式写入，background/evolution 一律拒绝。
+29. **学习不学自己**：`source=evolution` 直接拒绝；学习任务单 worker、暂停前不认领；预算先预留，未知 usage 保留预留不返还。
+30. **预算按项目时区日切**：`evolution_budgets(stat_date,user_id)`；每日 20k/单次 5k 默认可配；超预算任务标 paused，不发下一次 LLM。
 
-## 四、下一个任务（Task 10）的实施要点
+## 四、下一个任务（Task 12）的实施要点
 
-按实施计划原文：`backend/modules/skills/{api,contracts,repository,versions,routes}.py`、`backend/runtime/hermes/skills_bridge.py`、`tests/skills/test_versions.py`、`tests/skills/test_hermes_bridge.py`。
+按实施计划原文：`backend/modules/evolution/{proposal,validation,adoption,routes}.py`、`tests/evolution/test_validation.py`、`tests/evolution/test_adoption.py`、`tests/fixtures/evolution/regression.json`。
 
-- 抽取现有个人技能读取/编辑，删除社区与内容池依赖；有效技能列表按权限和 owner 筛选，不得用 owner_id=1 猜公共归属。
-- 新候选写不可变内容路径 + hash，元数据记录父版本/来源；activate 用 expected_active_version 比较交换；文件和 DB 中断时保留旧 active，孤立文件延迟清理。
-- 三个写入口（Web 编辑、skill_manage、后台 review）统一走 skills API；不能绕过版本直接编辑当前激活目录；运行时读取固定版本快照，更新只影响下一轮。
-- 对 File/Terminal/CodeMode/Runner 设置受保护路径规则，运行时不可直接改技能不可变内容或 active 指针；编辑意图转成受版本管理的提案。
-- 测试 pin/用户手写保护、并发候选激活失败不覆盖、版本回退、恶意路径/符号链接越界、内容指纹不符拒绝、重启恢复。
-- 运行 `python -m pytest tests/skills -q` 与全量新套件后提交；记录既有 skill_usage 侧写数据的迁移/只读兼容方式。
+- 复用 Hermes review 提示策略/来源保护，输出结构化候选；候选只调用 `skills.propose`，不直接写文件或改验证器。
+- 验证顺序固定：schema/能力范围/必需样例 → baseline 与 candidate 同环境回放 → 保留回归用例 → 指标与证据记录；规则型指标优先，模型判断独立记录、不充作硬证据。
+- 自动采用条件：必需用例全过、无确定性回归、至少一项预先定义目标改善；无法比较/只变长/依赖不可用不采用；纯修复候选要求原失败用例转通过且其他不退步。
+- 测试：原版更好保留原版、父版本已变 stale、用户手写/pin 不被自动改、回放不真实投递、对照数据不污染用户会话、激活后观测失败可回滚。
+- 运行 `python -m pytest tests/evolution/test_validation.py tests/evolution/test_adoption.py tests/skills -q` 后提交；Harness² 只借鉴流程，不安装执行器链。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -83,7 +88,9 @@ backend/
 - 渠道附件只到 `RuntimeRequest.attachment_ids`；Hermes Adapter 尚未把 attachment 还原为图片 content blocks，真实多模态对话未验收。
 - 微信 run 最终答案已接入投递账本（Task 8），但真实发送未联调；队列满（Busy）当前只记 rejected，没有持久重试队列。
 - 记忆只接受显式信号/remember；真实 LLM 自动提取未联调，MemoryBridge 尚未注入 Hermes Adapter。
-- 渠道/提醒/投递/记忆 HTTP 路由尚未挂载，Task 15 显式装配后提供入口；旧 main.py 的 cron 仍在旧进程，未自动迁移。
+- 技能：File/Terminal/CodeMode/Runner 的受保护路径 guard 尚未接线；Hermes skill_manage/后台 review 仍走旧写路径；`skill_usage` 旧侧写未迁移；SkillsBridge 尚未注入 Runtime。
+- 学习：真实 LLM 学习/候选生成是 Task 12；paused（暂停/超预算）任务不会自动重新入队。
+- 渠道/提醒/投递/记忆/技能/进化 HTTP 路由尚未挂载，Task 15 显式装配后提供入口；旧 main.py 的 cron 仍在旧进程，未自动迁移。
 - 指纹窗口桶边界：重投恰好跨过 5s 桶边界时可能再执行一次；完全消除需滑动窗口查询，列为后续改进。
 - 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
