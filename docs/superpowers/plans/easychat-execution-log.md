@@ -59,6 +59,51 @@ Task 2：SQLite 平台、版本迁移与首批业务表。
 
 ---
 
+## Task 2：SQLite平台、版本迁移与首批业务表 — 2026-11-03 完成
+
+**状态：** 已完成（离线测试全绿，真实临时SQLite）。
+
+### 新建文件
+
+- `backend/platform/sqlite.py`：`Database`（每操作新建连接、`foreign_keys=ON`、`busy_timeout=5000`、WAL + 文件系统回退DELETE）；`transaction()`（BEGIN IMMEDIATE 短事务，退出提交/回滚并关连接）；`run_migrations`（版本化迁移，**禁用 executescript**——它会隐式提交挂起事务破坏原子性，改用 `sqlite3.complete_statement` 拆语句逐条执行）；`MigrationError`（checksum 不一致失败）；`foreign_key_check`。
+- `backend/platform/settings.py`：`AppSettings` 自 bootstrap 迁入（新增 state_db_path 非空校验）、`default_settings()`、`settings_from_environment()`；bootstrap 保留再导出。
+- `backend/platform/jobs.py`：`JobQueue`——幂等入队（dedup_key 全局唯一，任意状态同键复用同一任务，同业务信号永不重跑）、短事务认领（两认领者不重复）、条件更新 complete/fail/cancel（过期 lease 失效保护）、`recover_expired_leases`（attempts 保留不重置）；状态机 pending→leased→succeeded/retry_wait/failed/cancelled。
+- `backend/platform/migrations/0001_core.sql`：首批表——access(users/roles/role_permissions/user_permissions/permission_defs，列语义沿用旧MySQL schema)、channels(channel_accounts/channel_bindings/channel_events，UNIQUE(platform,account_id,external_event_id))、assistant(sessions/runs/conversations/attachments；runs 唯一键含非空 `channel_account_scope`)、usage(llm_calls/daily_user_stats，UNIQUE(stat_date,user_id,source))、models(model_configs)、平台(app_settings/jobs)。时间 UTC ISO 文本，jobs 调度字段 REAL epoch。种子仅 timezone 系统默认值（幂等 ON CONFLICT DO NOTHING）。
+- `tests/storage/test_sqlite.py|test_migrations.py|test_jobs.py`：29 项行为测试。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/storage tests/architecture tests/contracts/test_app_factory.py -q
+→ 50 passed in 5.43s
+python -m ruff check backend/platform tests/storage backend/bootstrap.py → All checks passed!
+PRAGMA 实测（Python 3.12.8 / sqlite3 3.45.3, Windows NTFS）：
+  journal_mode=wal, foreign_keys=1, busy_timeout=5000, 迁移后表数=19（含schema_migrations）
+```
+
+### 关键决策记录
+
+- **journal 模式选 WAL**：与内嵌 Hermes state.db 策略一致（`hermes_state.py` 注释明确 WAL+回退）；两库是不同文件，WAL 为库级设置互不影响。文件系统不支持时自动回退 DELETE 并记录实际模式。
+- **迁移原子性**：`executescript` 会先 COMMIT 挂起事务（实测 `cannot commit - no transaction is active`），迁移执行改为逐条 `execute`；失败 ROLLBACK 撤销整个迁移，`schema_migrations` 无记录，`Database.ready` 保持 False。
+- **jobs 幂等语义**：dedup_key 任意状态同键返回同一任务 ID（succeeded 后重复入队不产生新任务）；新业务信号必须携带新事件 ID 构造 dedup_key。
+- 部门现状核实：旧 MySQL schema（67 张表）**无 departments 表**，仅 `admin.departments` 权限键登记于旧 permission registry；按"保留现状"处理（不新增不删除），Task 3 迁移权限种子时沿用此口径。
+- 修复：工厂离线测试原用 `default_settings()` 跑 lifespan 会在仓库根创建 data/ 目录——改用 tmp 路径并清理污染。
+
+### 未验证项
+
+- Linux 目标环境的 WAL 行为与 Hermes 兼容在 Task 16 干净镜像验证。
+- jobs 在多进程部署下的行为未验证（架构明确单worker进程内串行只覆盖本进程）。
+
+### schema 版本
+
+`0001_core`（checksum 记录于 app.db `schema_migrations`；迁移清单见 `backend/platform/migrations/`）。
+
+### 下一项
+
+Task 3：RBAC、用户/角色/部门与会话资源授权。
+
+---
+
 ## Task 0：源基线、依赖及协议盘点 — 2026-11-03 完成
 
 **状态：** 已完成（离线静态盘点，无产品行为改动）。

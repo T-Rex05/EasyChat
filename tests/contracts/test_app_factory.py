@@ -84,11 +84,11 @@ def test_import_backend_app_is_offline_and_dotenv_free():
     assert "OFFLINE_OK" in proc.stdout
 
 
-def test_factory_run_is_offline():
+def test_factory_run_is_offline(tmp_path):
     """拦截出站连接原语后，create_app + lifespan + 请求正常完成（无真实网络）。
 
     不替换 socket.socket 本身——asyncio 事件循环内部需要创建自用 socket；
-    这里只拦截面向外部的连接入口。
+    这里只拦截面向外部的连接入口。lifespan 用 tmp 路径，不污染仓库目录。
     """
     import socket
 
@@ -102,7 +102,7 @@ def test_factory_run_is_offline():
     socket.create_connection = _no_create_connection
     asyncio.open_connection = _no_open_connection
     try:
-        app = create_app(default_settings())
+        app = create_app(_tmp_settings(tmp_path))
         with TestClient(app) as client:
             assert client.get("/healthz").json() == {"status": "ok"}
             assert client.get("/readyz").json() == {"status": "ready"}
