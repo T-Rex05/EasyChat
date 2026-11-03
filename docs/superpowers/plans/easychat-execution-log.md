@@ -982,3 +982,25 @@ Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路�
 ### 下一项
 
 继续迁移 Skills 页与提醒入口，再删除旧模块并切换 main.py。
+
+---
+
+---
+
+## Task 15（继续 4）：Skills 版本页与提醒页 — 2026-11-03（commit `25b0eb7`、`0b6bf64`）
+
+### 已完成
+
+- 新增 `SkillsView.vue`：列表/详情、按名称 propose 新版本、CAS activate、版本历史回滚、pinned/archive；删除旧 `SkillView.vue` 与 `api/skills.ts`（旧分类/文件树/技能池接口不再调用）。
+- 新增 `SchedulesView.vue`：创建 once/daily/interval 提醒（默认微信目标或显式邮箱）、暂停/启用、删除、实例记录；路由/侧边栏“提醒”。
+- 后端补 `DELETE /api/schedules/{id}`：真正删除计划（occurrence 级联），区别于 `cancel` 仅停用；`SchedulingService.remove` 做 owner/system.manage 校验。
+- 测试：API 兼容新增创建邮箱目标提醒→删除→列表消失；全量 302 passed；前端 type-check/build 通过。
+
+### 未完成
+
+- ChatSidebar 内嵌的旧 Cron UI 仍调用 `/api/cron-jobs`（含 agent 报告语义），尚未迁移/移除；Trace/Admin 仍有旧形状入口。
+- 旧后端模块/main.py 未切换。
+
+### 下一项
+
+处理 ChatSidebar 旧 Cron 入口与 Trace/Admin 旧形状，随后删除旧模块并切换 main.py。

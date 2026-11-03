@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 40（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14、Task 16 完成；Task 15：装配/前端收敛/提醒邮件投递模型 API/记忆页迁移完成；旧模块删除与 main.py 切换未做** |
-| 下一任务 | **Task 15 收尾：Skills/提醒入口迁移、旧模块删除、main.py 切换、路由核对** |
+| 提交数 | 42（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–14、Task 16 完成；Task 15：装配/前端收敛/提醒邮件投递模型 API/记忆页/Skills/提醒页完成；旧模块删除与 main.py 切换未做** |
+| 下一任务 | **Task 15 收尾：ChatSidebar 旧 Cron、Trace/Admin 旧形状、旧模块删除、main.py 切换** |
 | 未开始 | Task 15 收尾 |
 | 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **302 passed**；前端 type-check/build 通过；Docker 构建/启动/Hermes ready 已验证 |
 
-最近提交：`27da0d3`(Task 15 记忆页) `94dbf38`(SPA/Hermes 镜像修正) `979187d`(Task 16 部署) `0367cca`(Task 15 模型路由) `80f0327`(Task 15 前端/API) `986c5d3`(Task 15 装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`0b6bf64`(提醒页/删除) `25b0eb7`(Skills 页) `27da0d3`(记忆页) `94dbf38`(SPA/Hermes) `979187d`(Task 16) `0367cca`(模型路由) `80f0327`(前端/API) `986c5d3`(装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -86,7 +86,7 @@ Task 16 已完成：单 worker 镜像 `docker build` 成功（496MB），容器 
 Task 15 剩余：
 - **旧后端删除/main.py 切换**：先迁移仍保留的旧入口（cron 表达式、文件上传、审计/部门、host whitelist/command blacklist），再把 main.py 切到 `backend.server:app`；删除旧 controller/service/db/rag/graphrag、旧 mapper/provider、MySQL/Redis 启动；删旧测试与样本，确保默认测试无旧模块 import。
 - **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录（当前约 130 条旧路由未迁移）。
-- **前端补充**：Skills/Cron 入口仍用旧 API 形状；提醒/进化/投递管理页面（新 API 已就绪）；旧 memory-items 后端 controller 待 main 切换时删除。
+- **前端补充**：ChatSidebar 旧 Cron 与 Trace/Admin 仍有旧形状；提醒/进化/投递管理页面（新 API 已就绪）；旧 memory-items 后端 controller 待 main 切换时删除。
 
 ## 五、已知未验证项（不要声称已完成）
 
