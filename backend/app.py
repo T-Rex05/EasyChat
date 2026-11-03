@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.bootstrap import AppSettings, ModuleRegistry, default_settings, run_shutdown, run_startup
 from backend.shared.errors import AppError, CapabilityUnavailableError
@@ -117,5 +119,10 @@ def create_app(
     async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
         status, payload = error_to_response(exc)
         return JSONResponse(payload, status_code=status)
+
+    # 生产镜像把前端 dist 放到 /app/static；API 路由已先注册，挂载在最后不吞接口。
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    if (static_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="spa")
 
     return app

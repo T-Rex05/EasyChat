@@ -20,8 +20,9 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY docker/requirements-core.txt ./requirements-core.txt
-RUN pip install --no-cache-dir -r requirements-core.txt
+COPY docker/requirements-core.txt docker/requirements-hermes.txt ./
+RUN pip install --no-cache-dir -r requirements-core.txt \
+    && pip install --no-cache-dir -r requirements-hermes.txt
 
 COPY backend/ ./backend/
 COPY --from=frontend /web/dist ./static

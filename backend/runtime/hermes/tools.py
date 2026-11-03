@@ -65,10 +65,10 @@ def register_safe_project_tools(thread_context_provider: Any) -> int:
         schema = _tool_schema(tool)
         registry.register(
             name,
-            description=schema.get("description", ""),
-            parameters=schema.get("parameters", {"type": "object", "properties": {}}),
-            handler=_make_handler(tool, thread_context_provider),
             toolset=toolset,
+            schema=schema,
+            handler=_make_handler(tool, thread_context_provider),
+            description=schema.get("description", ""),
         )
         _registered_tools.add(name)
         registered += 1
