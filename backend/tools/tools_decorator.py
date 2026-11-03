@@ -1,4 +1,4 @@
-﻿"""
+"""
 AgentForge - 工具定义模板
 
 使用 LangChain @tool 装饰器定义工具，供 Hermes 调用。
@@ -904,7 +904,7 @@ def get_project_tools() -> list:
 
     EasyChat 改造（R03/R14）：KB 检索、KG、Text2SQL、Code Mode、论文复现
     工具已从默认注册中移除——它们的模块导入必须保持惰性，禁止在聊天链路
-    启动时被拉起。时间/待办/提醒（cron）与时间解析工具保留。
+    启动时被拉起。时间/待办/时间解析工具保留；提醒通过新调度 HTTP/页面管理。
 
     Returns:
         list: 工具列表
@@ -914,8 +914,6 @@ def get_project_tools() -> list:
         todo_add,               # 添加任务
         todo_update,            # 更新任务状态
         todo_get,               # 获取任务列表
-        cronjob_create,         # 创建定时任务（Task 8 迁移到新调度后更新后端）
-        list_delivery_configs,  # 查询投递配置（创建定时任务前使用）
         when_resolve,           # 自然语言时间解析
     ]
 

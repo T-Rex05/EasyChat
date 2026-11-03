@@ -36,8 +36,6 @@ LEGACY_FORBIDDEN_IMPORTS: dict[str, str] = {
 LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
     "context/task_state.py",
     "context/strategies/fact_anchor.py",
-    "service/cron/cron_service.py",
-    "service/delegation/context_enrichment.py",
     "tools/code_executor.py",
     "tools/kg_tools.py",
     "tools/tools_decorator.py",
@@ -46,9 +44,7 @@ LEGACY_HERMES_IMPORTS: tuple[str, ...] = (
 
 # 旧目录整体：仅受“路由不得直接 import pymysql/redis”约束，其余规则待迁移
 LEGACY_DIRS_EXEMPT = (
-    "agents", "config", "context", "db", "graphrag", "hooks",
-    "infrastructure", "memory", "observer", "permission", "rag", "service",
-    "templates", "tools", "utils", "wechat",
+    "config", "context", "permission", "templates", "tools", "utils",
 )
 LEGACY_FILES_EXEMPT = ("build_info.py",)
 
@@ -182,9 +178,7 @@ def test_route_files_do_not_import_db_drivers_anywhere():
     for p in _iter_all_backend_py_files():
         rel = _rel(p)
         if rel.startswith(LEGACY_DIRS_EXEMPT) or rel in LEGACY_FILES_EXEMPT:
-            # 旧目录里只有真正的路由文件仍需满足本规则
-            if not rel.startswith("controller"):
-                continue
+            continue
         tree = _parse(p)
         for mod, lineno in _imports_of(tree):
             if mod.split(".")[0] in {"pymysql", "redis"}:
