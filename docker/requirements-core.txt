@@ -1,0 +1,9 @@
+# EasyChat 新架构核心依赖（无 MySQL/Redis/Neo4j/Milvus/RAG）
+# Hermes 运行时在 EASYCHAT_HERMES_ENABLED=true 时需要额外 LLM 依赖；默认关闭。
+fastapi==0.121.0
+uvicorn[standard]==0.38.0
+pydantic>=2.13.4
+httpx>=0.27.0
+cryptography>=41.0.0
+aiohttp>=3.9.0
+tzdata>=2024.1

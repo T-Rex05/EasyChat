@@ -40,13 +40,10 @@ backend/hermes/.home/
 Thumbs.db
 desktop.ini
 
-# ── Node（前端开发文件，构建在 Docker 内完成） ──
+# ── Node（node_modules 不进上下文；源码/锁文件必须进前端构建阶段） ──
 node_modules/
-agent_frontend/src/
-agent_frontend/package.json
-agent_frontend/package-lock.json
-agent_frontend/vite.config.js
-agent_frontend/index.html
+agent_frontend/node_modules/
+agent_frontend/dist/
 agent_frontend/.vite/
 
 # ── Git ──
@@ -60,6 +57,7 @@ README.md
 Makefile
 *.md
 !agent_frontend/README.md
+!docs/architecture/operations.md
 
 # ── 示例代码 ──
 examples/
