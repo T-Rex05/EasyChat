@@ -18,9 +18,9 @@
 
 ## 已经完成与尚未完成
 
-已完成：Task 0–14、Task 16（单 worker 镜像构建/启动、SPA、Hermes 启用启动、资源采样、operations 文档）；Task 15 的显式装配、前端收敛、提醒/邮件/投递/模型配置 API、记忆页、Skills 版本页、提醒页、用量页、平台/邮箱/Admin 迁移已完成。新架构测试 **303 passed**，前端 type-check/build 通过，Docker 构建与容器 smoke 通过；逐任务证据见 `docs/superpowers/plans/easychat-execution-log.md`，进度见 `EASYCHAT_PROGRESS.md`。
+已完成：Task 0–16 全部完成。新架构测试 **303 passed**，前端 type-check/build 通过，Docker 镜像构建/容器 SPA/`/readyz`/Hermes 启用 ready 验证通过；旧 controller/service/db/rag/graphrag 等业务模块已删除，`main.py` 已切到 `backend.server:app`。逐任务证据见 `docs/superpowers/plans/easychat-execution-log.md`，进度见 `EASYCHAT_PROGRESS.md`。
 
-未完成：Task 15 收尾（chat/session/history 与 AuditLog 旧形状、旧后端删除、main.py 切换、144 路由核对）；真实 LLM/微信/MCP/SMTP/PDF 未联调；Runner 隔离未验收，自动执行保持关闭；新仓库未推送。
+未完成（真实外联/部署验收，不属于代码任务）：真实 LLM/微信/MCP/SMTP/PDF 未联调；Runner 真实隔离未验收，自动执行保持关闭；新仓库未推送。
 
 没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
 
@@ -64,7 +64,8 @@
 ```text
 请在 E:\PythonCode\EasyChat 按 EASYCHAT_PROGRESS.md 的当前进度继续实施。
 先读 EASYCHAT_PROGRESS.md、架构规范、实施计划和 easychat-execution-log.md，
-从未完成任务的下一项开始（当前为 Task 8），每阶段完成必要测试和本地提交，
+从本文件与 `EASYCHAT_PROGRESS.md` 的未验证项开始，优先做真实环境验收（LLM/微信/MCP/SMTP/PDF、Runner 隔离），
+不要重复已完成的 Task 0–16 代码迁移。任何变更仍需本地测试和提交，
 更新 easychat-execution-log.md 与 EASYCHAT_PROGRESS.md。
 不要修改 E:\PythonCode\AgentForge，不使用旧生产凭证，不自动推送。
 严格保留RBAC、Token排行榜、个人技能库、微信提醒和执行记录，

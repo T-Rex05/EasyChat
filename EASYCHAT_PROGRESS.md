@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 44（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–14、Task 16 完成；Task 15：装配/前端收敛/提醒邮件投递模型 API/记忆/Skills/提醒/用量/平台/邮箱/Admin 完成；chat/session 旧形状与旧模块删除未做** |
-| 下一任务 | **Task 15 收尾：chat/session/history、AuditLog、旧模块删除、main.py 切换** |
-| 未开始 | Task 15 收尾 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **303 passed**；前端 type-check/build 通过；Docker 构建/启动/Hermes ready 已验证 |
+| 提交数 | 57（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–16 全部完成**（新架构/API/前端/旧模块删除/单 worker 镜像/资源与交付文档） |
+| 下一任务 | 无；真实外联验收见未验证项 |
+| 未开始 | 无（真实 LLM/微信/MCP/SMTP/PDF、Runner 隔离验收除外） |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q` —— **303 passed**；前端 type-check/build 通过；Docker 镜像构建/SPA/Hermes ready/RSS 82.8MiB 已验证 |
 
-最近提交：`b3ca11d`(平台/邮箱/Admin) `64ad70d`(旧 Cron/用量) `0b6bf64`(提醒) `25b0eb7`(Skills) `27da0d3`(记忆) `94dbf38`(SPA/Hermes) `979187d`(Task 16) `0367cca`(模型路由) `80f0327`(前端/API) `986c5d3`(装配) `10ffc03`(Task 14) `5044c61`(Task 13) `6ee4973`(Task 12) `401ba91`(Task 11) `ce3eaf4`(Task 10) `bebd4cd`(Task 9) `ba1c79f`(Task 8) `08a4bd7`(Task 7) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`74a41c5`(删除 service/permission) `2ae1b36`(删除 db) `327a3ef`/`b97d27e`/`679d6df`/`6d92dee`(旧模块删除) `c108987`(删除 controller/main) `4249d8b`(main 切换) `acdaae6`(session/audit) `b3ca11d`(平台/邮箱/Admin) `64ad70d`(Cron/用量) `0b6bf64`(提醒) `25b0eb7`(Skills) `27da0d3`(记忆) `94dbf38`(SPA/Hermes) `979187d`(Task 16) `0367cca`(模型路由) `80f0327`(前端/API) `986c5d3`(装配) `10ffc03`(Task 14)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -79,14 +79,11 @@ backend/
 37. **镜像 Hermes 依赖与 ToolRegistry 签名**：`docker/requirements-hermes.txt` 必装 openai/langchain-core/tiktoken/loguru/pytz；vendored Hermes 的 `register(name, toolset, schema, handler...)` 不接受 parameters/description 旧参数，Task 5 的调用已按实际 signature 修正。
 38. **SPA 挂载顺序**：`app.mount("/", StaticFiles(static, html=True))` 必须在所有 API 路由之后；仅当 `static/index.html` 存在，工厂测试无静态目录时不挂载。
 
-## 四、Task 15 剩余（唯一未完成任务）
+## 四、Task 15/16 完成摘要
 
-Task 16 已完成：单 worker 镜像 `docker build` 成功（496MB），容器 `/healthz`/`/readyz`/SPA 200，注册/登录/memory/skills 200；`EASYCHAT_HERMES_ENABLED=true` 容器 ready；空载 RSS 40.44MiB；compose config OK；`tests/resources` 通过。详见 `docs/architecture/operations.md`。
-
-Task 15 剩余：
-- **旧后端删除/main.py 切换**：先迁移仍保留的旧入口（cron 表达式、文件上传、审计/部门、host whitelist/command blacklist），再把 main.py 切到 `backend.server:app`；删除旧 controller/service/db/rag/graphrag、旧 mapper/provider、MySQL/Redis 启动；删旧测试与样本，确保默认测试无旧模块 import。
-- **144 路由核对**：新 OpenAPI 与 fixture 逐条比对，保留/移除/兼容迁移记录（当前约 130 条旧路由未迁移）。
-- **前端补充**：chat/session/history 仍用旧 `/api/data/sessions` 与上传/反馈/exec-approval；AuditLogView 仍用旧 admin 操作接口；进化/投递管理暂无页面。
+- **Task 15**：main.py 已切到 `backend.server:app`；旧 controller/service/db/rag/graphrag/infrastructure/observer/memory/permission/hermes_adapter/hooks/wechat/agents 全部删除；旧 HTTP 面收敛为新 app 显式 73 条路由；前端已迁移到新 API（聊天/历史/RBAC/用量/记忆/技能/提醒/邮件/模型/平台绑定）；上传/反馈/exec-approval 明确 503/空结果；旧前缀由契约测试守卫。
+- **Task 16**：单 worker 镜像构建成功，容器 `/healthz`/`/readyz`/SPA 200；Hermes 开启容器 ready；空载 RSS 82.8MiB（Hermes 开启），目标 <1GiB；compose config OK；`tests/resources` 通过。详见 `docs/architecture/operations.md`。
+- **有意收敛**：KB/图谱/论文/社区/SQL/旧审计/旧 cron 引擎等能力移除；旧 144 路由未逐条保留，改为 73 条显式路由，属已记录的范围决策。
 
 ## 五、已知未验证项（不要声称已完成）
 
@@ -95,16 +92,14 @@ Task 15 剩余：
 - 渠道附件只到 `RuntimeRequest.attachment_ids`；Hermes Adapter 尚未把 attachment 还原为图片 content blocks，真实多模态对话未验收。
 - 微信 run 最终答案已接入投递账本（Task 8），但真实发送未联调；队列满（Busy）当前只记 rejected，没有持久重试队列。
 - 记忆只接受显式信号/remember；真实 LLM 自动提取未联调，MemoryBridge 尚未注入 Hermes Adapter。
-- 技能：File/Terminal/CodeMode/Runner 的受保护路径 guard 尚未接线；Hermes skill_manage/后台 review 仍走旧写路径；`skill_usage` 旧侧写未迁移；SkillsBridge 尚未注入 Runtime。
+- 技能：File/Terminal/CodeMode/Runner 的受保护路径 guard 尚未接线；真实 Hermes skill_manage 写路径未联调；SkillsBridge 注入 Runtime 的真实写回未验收。
 - 学习：真实 LLM 学习/候选生成是 Task 12；paused（暂停/超预算）任务不会自动重新入队。
-- 渠道/提醒/投递/记忆/技能/进化 HTTP 路由尚未挂载，Task 15 显式装配后提供入口；旧 main.py 的 cron 仍在旧进程，未自动迁移。
 - 指纹窗口桶边界：重投恰好跨过 5s 桶边界时可能再执行一次；完全消除需滑动窗口查询，列为后续改进。
-- 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
+- 旧 144 路由未逐条保留：新 app 收敛为 73 条显式路由；KB/图谱/论文/社区/SQL/旧审计/旧 cron 引擎为有意移除，保留路由契约由测试覆盖。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
 - 脚本 Runner 契约完成但真实 Linux 隔离未验收（Task 13）——自动执行继续保持关闭。
 - 邮件/PDF 已实现离线能力（Task 14），真实 SMTP 发信与真实 PDF 渲染未联调。
 - 新 app 显式路由已装配；未配置 Runtime 时聊天 503（预期）；生产需设置 JWT/Hermes/模型配置。
-- 前端 type-check/build 已通过，但真实浏览器联调未做；提醒/进化/投递暂无专门页面。
-- Docker 镜像已构建/启动/Hermes ready/SPA 访问通过；真实 LLM API 调用未联调（镜像无模型凭证），空载 RSS 40.44MiB 仅为空闲值，非压力测试。
-- Task 15 旧模块删除/main.py 切换未完成，仓库仍保留旧代码。
+- 前端 type-check/build 已通过，但真实浏览器联调未做；进化/投递暂无专门页面。
+- Docker 镜像已构建/启动/Hermes ready/SPA 访问通过；真实 LLM API 调用未联调（镜像无模型凭证），空载 RSS 82.8MiB（Hermes 开启）仅为空闲值，非压力测试。
 - `AgentForge` 源目录未动；未使用任何旧生产凭证；未推送。

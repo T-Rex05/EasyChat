@@ -1047,3 +1047,39 @@ Task 15 收尾：迁移/删除旧路由与旧模块、切换 main.py、144 路�
 ### 下一项
 
 迁移 chat/session/history 与 AuditLog，随后切换 main.py 并删除旧模块。
+
+---
+
+---
+
+## Task 15（完成）：入口切换、旧模块删除与最终核对 — 2026-11-03（`acdaae6`…`74a41c5`）
+
+### 已完成
+
+- `main.py` 改为新架构入口（`backend.server:app`），不再扫描 controller/启动 MySQL；`python main.py` 与新 app 一致。
+- 删除旧 `backend/controller`（全部旧 HTTP 路由）、`backend/service`（cron/delegation/skill/模型路由/SSE 旧服务等）、`backend/db`（MySQL mapper/schema）、`backend/rag`、`backend/graphrag`、`backend/infrastructure`（Redis/Neo4j/Milvus）、`backend/observer`、`backend/memory`、`backend/permission`、旧 `hermes_adapter.py`、`hooks/wechat/agents`。
+- 保留 `backend/hermes`（vendored）、`backend/runtime`（新 Adapter）、`backend/tools`（项目安全工具）、`backend/utils/context/config/templates`（Hermes 运行支撑）；不再含旧业务权威。
+- 移除默认工具中未迁移的 `cronjob_create`/`list_delivery_configs`，提醒统一走新 `/api/schedules`；避免调用已删 service。
+- 前端 chat/session 改用 `/api/history`；上传/反馈/exec-approval 显式 503/空结果；删除 AuditLog 旧页与路由。
+- 路由面：旧 154 条 keep/keep-migrate 路由随旧 controller 移除，新 app 显式 **73** 条路由覆盖登录/RBAC/聊天/历史/渠道/提醒/投递/邮件/模型/记忆/技能/进化/用量；旧前缀由测试保证不再出现。
+
+### 实际验证
+
+```
+python -c "import main" → 73 routes
+python -m pytest tests/architecture tests/contracts ... -q → 303 passed
+npm run type-check → 通过；npm run build → ✓
+docker build → 成功；容器 /readyz ready、GET / 200
+EASYCHAT_HERMES_ENABLED=true 容器 → ready（删除旧 service/db 后仍可启动）
+容器空载 RSS（Hermes 开启）→ 82.8MiB
+```
+
+### 说明/限制
+
+- 旧 144 条路由未逐条保留；按新架构收敛为 73 条显式路由，旧前缀/旧页面契约测试通过。属有意的能力收敛（KB/图谱/论文/社区/SQL/旧审计等移除）。
+- `backend/context/tools/utils/config/templates` 作为 Hermes 运行支撑保留，不属于旧业务权威。
+- 真实 LLM/微信/MCP/SMTP/PDF 仍未联调；Runner 隔离未验收。
+
+### schema 版本
+
+`0010_delivery_email`（0001–0010）。
