@@ -194,3 +194,58 @@ python -m compileall -q backend/modules/access → OK
 ### 下一项
 
 Task 4：模型配置与唯一用量计量入口。
+
+---
+
+## Task 4：模型配置与唯一用量计量入口 — 2026-11-03 完成
+
+**状态：** 已完成（离线测试全绿）。
+
+### 新建文件
+
+- `backend/modules/usage/contracts.py`：`NormalizedUsage`（provider 无关规范化；input=未含缓存输入；prompt=input+cache_read+cache_write；未知字段 None + usage_complete 标志）、`UsageRecord`、`SYSTEM_OWNER_ID=0`、`VALID_SOURCES={chat,memory,evolution,schedule}`。
+- `backend/modules/usage/repository.py`：llm_calls 明细 + daily_user_stats **同事务**写入；`stat_date_for` 按 Asia/Shanghai（zoneinfo，tzdata 已装）转换；日汇总一律走差额 UPSERT（`ON CONFLICT DO UPDATE ... + excluded`）；`cleanup_calls_before` 只删明细不动汇总。
+- `backend/modules/usage/api.py`：`UsageService`——`begin_call`（请求前分配唯一 call_id；真实重试=新 call_id）、`complete_call`（条件更新 `completed_at IS NULL`，同 call_id 重复回调不重复计）、`report_usage`（晚到/修正按新旧差额一次应用）、`record_call`（组合建账）；查询：明细本人可见、他人/全量需 trace.manage；排行保留 trace.view 语义，输出兼容旧字段（rank/user_id/username/total_tokens/api_calls/active_days）并新增 sources 分布。
+- `backend/modules/usage/routes.py`：`/api/usage/ranking|calls|calls/{id}|me/daily`，注入式 authenticate。
+- `backend/modules/models/{contracts,repository,api}.py`：chat/auxiliary/fallback 选择；密钥 AES-256-GCM 密文入库（派生盐与旧 crypto_utils 一致，存量密文可解），对外仅掩码；`select_for_run` 不要求管理权限；本机有界健康计数（无 Redis 熔断同步）；`SYSTEM_USER_ID=0` 显式系统主体。
+- `backend/platform/migrations/0002_models_key.sql`：`api_key_ref` → `api_key_encrypted` 改名（0001 已提交不可改，遵循 checksum 纪律）。
+- `tests/usage/test_calls.py|test_ranking.py`、`tests/models/test_configs.py`。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/models tests/usage tests/access tests/storage tests/architecture tests/contracts/test_app_factory.py tests/contracts/test_auth.py -q
+→ 106 passed
+python -m ruff check <新代码> → All checks passed!
+迁移验证：applied=['0001','0002']，model_configs 列含 api_key_encrypted
+```
+
+### 计量负责人映射（Task 4 清单要求）
+
+| 模型调用入口 | 计量负责人 | source |
+|---|---|---|
+| Web/微信聊天主模型（Task 5 runtime 接线） | runtime adapter 在请求前 begin_call、回调 complete_call | chat |
+| 记忆提取/整理 | memory 模块调用方（auxiliary 选择） | memory |
+| 进化评估/整理 | evolution worker | evolution |
+| 定时/提醒生成 | scheduling 触发的 run | schedule |
+| 旧 traced_llm / trace_observer | **不迁移直写路径**；旧 observer 对 daily_user_stats 的累加随模块退役删除（Task 15），迁移期不并存两套写入口 | - |
+
+### 关键决策记录
+
+- 日汇总以差额 UPSERT 为唯一写入方式：complete_call 首次累加；report_usage 按 (新-旧) 差额修正；重复提交差额为 0。同回调两次只计一次、NULL 补全一次加量、重试两次计两次均有测试。
+- stat_date 按项目时区 Asia/Shanghai 从 UTC 时间转换（UTC 17:00 → 上海次日，已测）；时区规则变更必须重算对应区间汇总（架构 §5.2，实现注释已标注）。
+- 系统主体 owner_id=0，排行显示"系统任务"，绝不归属 user_id=1（已测）。
+- llm_calls 是计量权威，日汇总是可解释投影；清理明细不影响排行（已测）。重建汇总需覆盖全部明细保留区间。
+
+### 未验证项
+
+- usage routes 未接入 app 工厂（Task 6 显式装配时统一挂载）。
+- Hermes 真实请求的 usage 映射（缓存/推理 token）在 Task 5 usage_bridge 联测；本模块的 NormalizedUsage 映射函数（旧 trace_usage 语义）迁移在 Task 5 完成。
+
+### schema 版本
+
+`0002_models_key`（0001 + 0002）。
+
+### 下一项
+
+Task 5：Hermes Runtime Adapter 与 SessionDB 恢复。
