@@ -18,9 +18,9 @@
 
 ## 已经完成与尚未完成
 
-已完成：Task 0–7（源码基线、公开契约/无副作用工厂、SQLite 平台与迁移、RBAC、唯一计量/模型、Hermes Runtime Adapter、统一 Assistant/Web 兼容、微信渠道离线链路）。新架构测试当前 **185 passed**；逐任务证据、commit 与未验证项见 `docs/superpowers/plans/easychat-execution-log.md`，当前进度与交接要点见 `EASYCHAT_PROGRESS.md`。
+已完成：Task 0–8（源码基线、公开契约/无副作用工厂、SQLite 平台与迁移、RBAC、唯一计量/模型、Hermes Runtime Adapter、统一 Assistant/Web 兼容、微信渠道离线链路、投递账本与持久提醒）。新架构测试当前 **200 passed**；逐任务证据、commit 与未验证项见 `docs/superpowers/plans/easychat-execution-log.md`，当前进度与交接要点见 `EASYCHAT_PROGRESS.md`。
 
-未完成：Task 8–16（投递/提醒、记忆、技能、进化、脚本 Runner、旧模块删除、前端与镜像交付）；真实 LLM/微信/MCP/SMTP 未联调；新仓库未推送。旧方案文档仅补了历史版本提示，新增架构/任务文档不代表未完成任务已实现。
+未完成：Task 9–16（记忆、技能、进化、脚本 Runner、邮件/PDF、旧模块删除、前端与镜像交付）；真实 LLM/微信/MCP/SMTP 未联调；新仓库未推送。旧方案文档仅补了历史版本提示，新增架构/任务文档不代表未完成任务已实现。
 
 没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
 

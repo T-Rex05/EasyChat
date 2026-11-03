@@ -439,3 +439,61 @@ git diff --check
 ### 下一项
 
 Task 8：投递账本、文本提醒与持久调度（delivery/scheduling，微信文本 Adapter、occurrence 去重、失败不重跑）。
+
+---
+
+---
+
+## Task 8：投递账本、文本提醒与持久调度 — 2026-11-03 完成（commit `ba1c79f`）
+
+**状态：** 已完成（离线投递/提醒闭环全绿，FakeSender；真实微信/SMTP 发送未联调）。
+
+### 新建/修改文件
+
+- `backend/platform/migrations/0005_delivery.sql`：`artifacts`（不可变产物引用）、`deliveries`（目标/内容/去重键/状态/重试时刻）、`delivery_parts`（分块 seq 唯一、已发块保留）、`scheduled_jobs`（once/interval/daily + next_run_at）、`scheduled_occurrences`（每计划 scheduled_at 唯一）；`channel_session_cursors` 补 `context_token`。
+- `backend/shared/text.py`：渠道发送与投递共用的 1800 字符切分；`channels/wechat/account.py` 改为复用，避免两套规则漂移。
+- `backend/modules/delivery/contracts.py`：`DeliveryTarget`、`SendResult`（sent/retry/uncertain/failed）、`DeliverySender` Protocol、`DeliveryLease/View`。
+- `backend/modules/delivery/repository.py`：账本写入口；`enqueue_in_transaction` 供助手完成事务与提醒 tick 复用；认领/终态/重试/分块/SQLite 事务内恢复 sending→uncertain；artifacts 最小写读。
+- `backend/modules/delivery/api.py`：`DeliveryService`——同 dedup_key 只建一条；发送前 `can_deliver`（解绑/禁用立即停止）；分块逐条发送、已发送块跳过；retry 只重发失败块；uncertain 不自动重发；`enqueue_run_in_transaction` 与 run 终态同事务。
+- `backend/modules/delivery/worker.py`：唯一投递 worker；启动时 `recover_inflight`，周期 `tick`，单次最多 100 条，异常不终止循环。
+- `backend/modules/delivery/wechat.py`：`WeChatTextSender` 通过 channels 公开方法校验绑定并发送；异常→uncertain。
+- `backend/modules/scheduling/{contracts,repository,api,scheduler}.py`：计划 CRUD/权限（cron.create）、once/interval/daily、到期只生成最新未完成实例并记录 missed、occurrence 唯一、tick 内“实例+投递”同事务；`Scheduler` 唯一生命周期入口。
+- `backend/modules/channels/`：会话游标保存/刷新 `context_token`、`find_session_route`、`delivery_target_for_run`、绑定有效性检查、`send_wechat_text` 公开发送入口（投递模块不碰 channels 私有表/协议）。
+- `backend/bootstrap.py`：装配 DeliveryService/Worker/Scheduler；run 完成回调在 assistant 终态事务内取已落库最终回复并写投递请求；shutdown 逆序停 scheduler→worker→channels→assistant。
+- 测试：`tests/delivery/test_delivery.py`（8项：成功一次、分块失败续发、uncertain 不重发、解绑停止、dedup、重启 sending→uncertain、run 完成同事务且重试不重跑、owner 隔离）、`tests/delivery/test_schedule.py`（7项：once 精确一次、interval 错过只补最新、daily 时区、禁用不发、重启不重复、owner/权限、非法输入）。
+
+### 实际命令与结果
+
+```
+python -m pytest tests/delivery -q
+→ 15 passed in 3.68s
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery -q
+→ 200 passed in 59.94s
+python -m ruff check backend/modules/delivery backend/modules/scheduling backend/modules/channels backend/shared/text.py backend/bootstrap.py
+→ All checks passed!
+```
+
+### 关键决策
+
+- **生成与投递分离**：delivery 只保存/重发已确定内容；run 完成回调在 `finish_run_with_projection` 事务内入队，失败重试不会再次调用 Runtime（测试用 `execute_count` 断言）。
+- **分块续发**：`delivery_parts` 以 `(delivery_id, seq)` 唯一；已发送块在重试时跳过，避免重复发送前几段。
+- **uncertain 语义**：发送异常/结果未知进入 `uncertain`，不自动重发；进程重启时 `sending` 同样转 uncertain，不假装必达。
+- **错过收敛**：interval/daily 到期只生成“最新未完成实例”，`missed` 记录跳过次数；occurrence 唯一键保证重复 tick/重启不重复。
+- **提醒目标**：计划保存 kind/ref/channel_account_id；发送前仍校验绑定有效，解绑/禁用后不再发送。
+- **唯一调度器**：Scheduler 只在 bootstrap 启动一次；旧 main.py 的 cron 仍在旧进程，等 Task 15 切换时迁移/删除，不新增第二套后台循环。
+
+### 未验证项
+
+- 真实微信文本发送（Task 7 的 send_text + 本模块 Worker）与真实 SMTP（Task 14）：均需真实凭证，integration 未联调。
+- 渠道 HTTP/提醒路由尚未挂载；提醒只能由 service/测试触发，Task 15 显式装配后提供入口。
+- 邮件/PDF 目标、artifact 发送、分块附件尚未实现（Task 14）。
+- 旧 cron 任务没有自动迁移；现有提醒仅覆盖新 API 创建的 once/interval/daily。
+- 调度精度为 tick 间隔（默认 1s），未做多进程协调（单 worker 设计）。
+
+### schema 版本
+
+`0005_delivery`（0001–0005）。
+
+### 下一项
+
+Task 9：事实/事件/经验记忆、纠正与遗忘（memory 模块、20 条脱敏用例、中文检索与来源）。

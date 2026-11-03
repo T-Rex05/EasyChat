@@ -8,13 +8,13 @@
 |---|---|
 | 分支 | `main`（未推送，origin=gitee，遵约束不自动 push） |
 | 工作树 | 干净（本文档提交后 `git status --short` 为空） |
-| 提交数 | 17（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
-| 已完成 | **Task 0–7**（里程碑一全部完成，含微信渠道离线链路） |
-| 下一任务 | **Task 8：投递账本、文本提醒与持久调度** |
-| 未开始 | Task 8–16 |
-| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage -q` —— **185 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
+| 提交数 | 19（基线起每任务一个提交 + 加固/日志提交 + 本进度文档更新） |
+| 已完成 | **Task 0–8**（里程碑一全部完成 + 投递/提醒） |
+| 下一任务 | **Task 9：事实/事件/经验记忆、纠正与遗忘** |
+| 未开始 | Task 9–16 |
+| 测试 | `python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery -q` —— **200 passed**；**旧 tests/ 下大量遗留测试仍引用已删依赖/MySQL，不能整体跑，Task 15 才清理** |
 
-最近提交：`08a4bd7`(Task 7 安全加固) `5cce711`(Task 7 加固) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
+最近提交：`ba1c79f`(Task 8) `08a4bd7`(Task 7 安全加固) `5cce711`(Task 7 加固) `72aa14c`(Task 7) `1105e38`(Task 6) `47dbcd6`(Task 5) `09fe0db`(Task 4) `ba8964e`(Task 3) `ee8f903`(Task 2) `6f418e5`(Task 1) `1d41c2a`(基线)
 
 ## 二、已完成模块（新架构，全部有测试）
 
@@ -22,12 +22,14 @@
 backend/
   app.py / bootstrap.py           无副作用工厂；lifespan 显式启动
   shared/{context,errors,identifiers,crypto}.py
-  platform/{sqlite,settings,jobs}.py + migrations/0001..0004
+  platform/{sqlite,settings,jobs}.py + migrations/0001..0005
   modules/access/     RBAC、users/roles、Principal、token（35测试）
   modules/usage/      唯一计量入口 usage.begin_call/complete_call/report_usage（12测试）
   modules/models/     模型配置、AES-GCM密钥、选择链（9测试）
   modules/assistant/  统一run入口 + 事件总线 + 调度器 + Web兼容路由（21+测试）
   modules/channels/   账号/绑定/事件去重 + wechat/{parser,account,listener,media}（33测试）
+  modules/delivery/   投递账本/分块/重试 + 微信文本 Adapter（8测试）
+  modules/scheduling/ once/interval/daily 提醒 + 唯一调度器（7测试）
   runtime/contracts.py + runtime/hermes/{paths,tools,sessions,usage_bridge,adapter,agent_factory}.py
   integrations/mcp.py WeKnora等MCP窄适配（9测试）
 ```
@@ -55,27 +57,29 @@ backend/
 18. **媒体只存引用**：解析器不下载、不保留字节；单条消息最多 10 个引用，下载流式落盘并限 50MB；`attachments` 元信息经 `assistant.register_attachment` 写入。不要再加 `_pending_images` 之类的无界全局缓存。
 19. **媒体下载防 SSRF**：只允许 `weixin.qq.com`/`wechat.com`/`qpic.cn` 的 https 地址或固定 CDN 下载地址；入站消息里的任意 URL 不得直接抓取。
 20. **稳定消息 ID 带发送者作用域**（`msg:<from_user>:<id>`），账号维度另由唯一键覆盖；否则平台 ID 若只在聊天内唯一，会把另一个用户的同 ID 消息吞掉。
+21. **生成与投递分离**：投递只保存/重发已确定内容；run 完成回调必须在 assistant 终态事务内写 `deliveries`（同事务），失败重试不得再次调用 Runtime。
+22. **分块续发**：`delivery_parts` 的 `(delivery_id, seq)` 唯一，已发送块重试时跳过；进程重启时 `sending` 记录转 `uncertain`，不能盲目重发。
+23. **提醒只补最新实例**：`scheduled_occurrences` 的 `(schedule_id, scheduled_at)` 唯一；错过多个周期只处理最新一个并记 `missed`，不补发无限历史。
 
-## 四、下一个任务（Task 8）的实施要点
+## 四、下一个任务（Task 9）的实施要点
 
-按实施计划原文：`backend/modules/delivery/{api,contracts,repository,worker}.py`、`backend/modules/scheduling/{api,repository,scheduler,routes}.py`，测试 `tests/delivery/test_delivery.py`、`tests/delivery/test_schedule.py`。
+按实施计划原文：`backend/modules/memory/{api,contracts,repository,extractor,retrieval,forgetting,routes}.py`、`backend/runtime/hermes/memory_bridge.py`、`tests/memory/test_{retrieval,revision,forgetting}.py`、`tests/fixtures/memory/cases.json`。
 
-- 先建目标/不可变产物引用/delivery+parts 状态；应用最终结果保存后再投递，失败只重试同一结果，不重跑 Runtime。
-- `deliveries` 状态机 pending→sending→sent/retry_wait/uncertain/failed；job lease 不等于外部 exactly-once；确认丢失且无幂等键 → uncertain，不能假装必达。
-- 调度：到期写唯一 occurrence（每计划 scheduled_at 唯一），重启不重复生成；错过默认只处理最新未完成实例并记录，不无限补发。
-- 微信文本 Adapter 复用 Task 7 的 `IlinkTransport`/`send_text`；Task 7 只发送了命令回复，**run 最终答案投递尚未接**，Task 8 补上（不要在 assistant 或 channels 里再写一套发送）。
-- 把旧 cron 调用迁到统一 Assistant/Delivery，删重叠后台任务启动；调度器只有一个生命周期入口（bootstrap 显式启动）。
-- 必须测试：发送成功、有限失败、uncertain、分块失败恢复、解绑后不继续发、投递失败时 Runtime 执行次数不增加。
-- 运行 `python -m pytest tests/delivery -q` 后提交；真实 SMTP/微信发送仍单列 integration。
+- 先以真实来源消息建 20 条脱敏用例（“上次直播担心什么”、别名/时间、相似事件、短期指令、长期偏好、archived 冷记忆、权限隔离、缺失来源）；固定一部分只作回归，不拿去生成候选。
+- 单 SQLite 记忆模型 + `revisions/feedback/forget_rules`；写入/修改要求 `expected_version`；用户确认与模型推断分开记录，不只留一段总结。
+- 检索：有限候选、相关性排序、2000 token 预算、top5 与来源；中文短词/同义扩展有可测回退；候选 0 条明确“无结果”，不调用模型编造用户往事。
+- 接入“明确记住/忘记/纠正/阶段完成”信号为幂等 jobs；forget 阻止旧消息重提取并处理衍生摘要/经验；墓碑不保留要删除的原文。
+- Runtime MemoryProvider 桥接只走公开 memory 接口；旧 provider/Dreaming 失效；运行 `python -m pytest tests/memory -q` 与聊天回归后提交。
 
 ## 五、已知未验证项（不要声称已完成）
 
 - 真实 LLM 对话、真实 WeKnora MCP：integration，未联调。
-- 真实微信 iLink 扫码/getupdates/sendmessage/CDN 下载解密：integration，未联调；`tests/contracts/test_wechat.py` 全部是 FakeTransport。
+- 真实微信 iLink 扫码/getupdates/sendmessage/CDN 下载解密、真实 SMTP：integration，未联调；渠道/投递测试全部用 FakeTransport/FakeSender。
 - 渠道附件只到 `RuntimeRequest.attachment_ids`；Hermes Adapter 尚未把 attachment 还原为图片 content blocks，真实多模态对话未验收。
-- 微信 run 最终答案投递、提醒、失败重试：Task 8。队列满（Busy）当前只记 rejected，没有持久重试队列。
+- 微信 run 最终答案已接入投递账本（Task 8），但真实发送未联调；队列满（Busy）当前只记 rejected，没有持久重试队列。
+- 渠道/提醒/投递 HTTP 路由尚未挂载，Task 15 显式装配后提供入口；旧 main.py 的 cron 仍在旧进程，未自动迁移。
 - 指纹窗口桶边界：重投恰好跨过 5s 桶边界时可能再执行一次；完全消除需滑动窗口查询，列为后续改进。
-- 新工厂 OpenAPI 与 144 条保留路由的比对、channels 路由挂载：Task 15 显式装配后做。
+- 新工厂 OpenAPI 与 144 条保留路由的比对：Task 15 显式装配后做。
 - `tool_finished` 事件尚未桥接（Hermes step 回调语义所限）。
 - 脚本 Runner 真实隔离验收（Task 13）未做——在此之前脚本"自动执行"必须保持关闭。
 - 前端完全未改动。
