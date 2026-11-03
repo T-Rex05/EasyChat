@@ -67,6 +67,15 @@ async def test_register_login_and_memory_ownership(client):
         "text": "喝水", "every_seconds": 60,
     })
     assert no_target.status_code == 503
+    created = await c.post("/api/schedules", headers=headers, json={
+        "title": "日报", "text": "读一遍日报", "daily_at": "09:00",
+        "target_kind": "email", "target_ref": "nobody@example.com",
+    })
+    assert created.status_code == 200
+    schedule_id = created.json()["schedule"]["schedule_id"]
+    assert (await c.delete(f"/api/schedules/{schedule_id}", headers=headers)).status_code == 200
+    remaining = await c.get("/api/schedules", headers=headers)
+    assert all(s["schedule_id"] != schedule_id for s in remaining.json()["schedules"])
 
 
 async def test_assistant_route_reports_unavailable_without_runtime(client):

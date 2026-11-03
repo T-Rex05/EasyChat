@@ -24,6 +24,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create' },
   },
   {
+    path: '/schedules',
+    name: 'Schedules',
+    component: () => import('../views/SchedulesView.vue'),
+    meta: { title: '提醒', icon: '', requiresAuth: true, permission: 'cron.create' },
+  },
+  {
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryView.vue'),

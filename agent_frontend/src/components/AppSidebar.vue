@@ -107,6 +107,10 @@ const menuItems = computed(() => {
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`,
     },
     {
+      path: '/schedules', title: '提醒', perm: 'cron.create',
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>`,
+    },
+    {
       path: '/trace', title: '可观测性', perm: 'trace.view',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
     },
@@ -147,7 +151,7 @@ const menuItems = computed(() => {
 // 分组：对话与观测 / 技能与记忆 / 系统
 const MENU_GROUP_RULES: { label: string; paths: string[] }[] = [
   { label: '对话与观测', paths: ['/chat', '/trace'] },
-  { label: '技能与记忆', paths: ['/skills', '/memory'] },
+  { label: '技能与记忆', paths: ['/skills', '/memory', '/schedules'] },
   { label: '系统', paths: ['/admin', '/audit-log', '/config'] },
 ]
 

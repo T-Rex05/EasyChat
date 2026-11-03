@@ -85,6 +85,13 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
         principal = _principal(authorization)
         return {"schedule": _schedule_dict(service.set_enabled(principal, schedule_id, body.enabled))}
 
+    @router.delete("/{schedule_id}")
+    async def cancel_schedule(schedule_id: str,
+                              authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        service.remove(principal, schedule_id)
+        return {"ok": True, "deleted": schedule_id}
+
     @router.get("/{schedule_id}/occurrences")
     async def occurrences(schedule_id: str,
                           authorization: Annotated[str | None, Header()] = None):

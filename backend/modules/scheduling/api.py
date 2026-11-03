@@ -116,6 +116,13 @@ class SchedulingService:
     def cancel(self, actor, schedule_id: str) -> ScheduleView:
         return self.set_enabled(actor, schedule_id, False)
 
+    def remove(self, actor, schedule_id: str) -> None:
+        principal = self.access.validate_principal(actor)
+        schedule = self.repo.get(schedule_id)
+        if schedule.owner_id != principal.user_id:
+            self.access.require_permission(principal, "system.manage")
+        self.repo.delete(schedule_id)
+
     def occurrences(self, actor, schedule_id: str, limit: int = 20) -> list[OccurrenceView]:
         principal = self.access.validate_principal(actor)
         schedule = self.repo.get(schedule_id)

@@ -108,6 +108,12 @@ class SchedulingRepository:
         finally:
             conn.close()
 
+    def delete(self, schedule_id: str) -> None:
+        with self.db.transaction() as conn:
+            cur = conn.execute("DELETE FROM scheduled_jobs WHERE id=?", (schedule_id,))
+            if cur.rowcount != 1:
+                raise NotFoundError(f"提醒计划不存在: {schedule_id}")
+
     def set_enabled(self, schedule_id: str, enabled: bool) -> None:
         with self.db.transaction() as conn:
             cur = conn.execute(
