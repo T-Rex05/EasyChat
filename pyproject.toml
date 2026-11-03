@@ -63,3 +63,7 @@ target-version = "py310"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: 真实依赖联调（真实MCP/SMTP/微信/Linux Runner），默认排除",
+    "resources: 目标镜像资源测量，默认排除",
+]
