@@ -30,6 +30,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '提醒', icon: '', requiresAuth: true, permission: 'cron.create' },
   },
   {
+    path: '/ledger',
+    name: 'Ledger',
+    component: () => import('../views/LedgerView.vue'),
+    meta: { title: '账单', icon: '📄', requiresAuth: true, permission: 'ledger.view' },
+  },
+  {
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryView.vue'),

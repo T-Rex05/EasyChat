@@ -72,12 +72,13 @@ class AnalyzeBody(BaseModel):
     request_id: str = ""
 
 
-class CandidateBody(BaseModel):
-    payload: dict[str, Any]
-
-
 class CandidateConfirmBody(BaseModel):
     corrections: dict[str, str] | None = None
+
+
+class ReportBody(BaseModel):
+    plan: dict[str, Any]
+    format: str = "markdown"
 
 
 def _import_payload(view: ImportView) -> dict[str, Any]:
@@ -414,6 +415,14 @@ def build_ledger_router(service: LedgerService, authenticate: Any) -> APIRouter:
         result = service.analyze(principal, body.plan, request_id=body.request_id)
         return _analysis_payload(result)
 
+    @router.post("/reports")
+    async def create_report(
+        body: ReportBody,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        principal = _principal(authorization)
+        return await service.create_report(principal, body.plan, fmt=body.format)
+
     @router.get("/analyses")
     async def list_analyses(
         limit: int = Query(default=50, ge=1, le=200),
@@ -435,11 +444,11 @@ def build_ledger_router(service: LedgerService, authenticate: Any) -> APIRouter:
     @router.post("/images/{file_id}/candidates")
     async def create_candidate(
         file_id: str,
-        body: CandidateBody,
         authorization: Annotated[str | None, Header()] = None,
     ):
+        """服务端识别：客户端只给 file_id，不能自报金额/置信度。"""
         principal = _principal(authorization)
-        return await service.save_image_candidate(principal, file_id, body.payload)
+        return await service.extract_image_candidate(principal, file_id)
 
     @router.post("/candidates/{extraction_id}/confirm")
     async def confirm_candidate(

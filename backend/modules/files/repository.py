@@ -17,7 +17,6 @@ from backend.modules.files.contracts import (
 from backend.platform.sqlite import Database, utc_now_iso
 from backend.shared.identifiers import (
     new_extraction_id,
-    new_file_id,
     new_file_reference_id,
     new_upload_receipt_id,
 )
@@ -216,6 +215,21 @@ class FileRepository:
         try:
             row = conn.execute("SELECT * FROM stored_files WHERE id=?", (file_id,)).fetchone()
             return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def list_expired(
+        self, *, retention_policy: str, before: str, limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """按留存策略列出到期文件（供 lifecycle 清理；不跨模块暴露）。"""
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM stored_files WHERE retention_policy=? AND created_at<? "
+                "AND status<>'deleted' ORDER BY created_at LIMIT ?",
+                (retention_policy, before, int(limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 

@@ -1,4 +1,4 @@
-"""账本服务：导入状态机、去重提交、退款核对、受控统计与图片候选。
+﻿"""账本服务：导入状态机、去重提交、退款核对、受控统计与图片候选。
 
 边界（设计 §4/§10）：
 - 只有本模块写 ledger_* 表；routes/LLM 工具只调用本服务；
@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+import tempfile
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Mapping, Sequence
 
 from backend.modules.access.api import AccessService
@@ -59,8 +62,10 @@ from backend.modules.ledger.extraction import (
     apply_corrections,
     candidate_from_vision,
     candidate_payload,
+    extract_candidate,
     is_ready_for_confirmation,
 )
+from backend.modules.ledger.reports import render_report, render_report_html
 from backend.modules.ledger.normalization import (
     classify_event_role,
     clean_text,
@@ -78,7 +83,12 @@ from backend.modules.ledger.repository import LedgerRepository
 from backend.platform.jobs import JobQueue
 from backend.platform.sqlite import Database, utc_now_iso
 from backend.shared.context import Principal
-from backend.shared.errors import InvalidInputError, NotFoundError
+from backend.shared.errors import (
+    CapabilityUnavailableError,
+    InvalidInputError,
+    NotFoundError,
+    StorageUnavailableError,
+)
 from backend.shared.identifiers import new_extraction_id
 
 logger = logging.getLogger(__name__)
@@ -139,6 +149,7 @@ def _transaction_view(row: Mapping[str, Any]) -> TransactionView:
         category_id=row.get("category_id"),
         verification=str(row.get("verification") or "parsed"),
         revision=int(row.get("revision") or 1),
+        note=str(row.get("note") or ""),
     )
 
 
@@ -177,6 +188,8 @@ class LedgerService:
         timezone: str = DEFAULT_TIMEZONE,
         max_rows: int = MAX_COMMIT_ROWS,
         clock=None,
+        vision: Any = None,
+        pdf: Any = None,
     ) -> None:
         self.db = db
         self.repo = LedgerRepository(db)
@@ -186,6 +199,23 @@ class LedgerService:
         self.timezone = timezone
         self.max_rows = max_rows
         self.clock = clock or (lambda: None)
+        # 视觉 Adapter 由部署方注入；未配置时识别接口明确报错而不是编造数据。
+        self.vision = vision
+        self.pdf = pdf
+
+    def now(self) -> datetime:
+        """当前时间（可注入假时钟，供意图路由解析“上个月”等相对时间）。"""
+        value = self.clock()
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=ZoneInfo(self.timezone))
+        if isinstance(value, str) and value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=ZoneInfo(self.timezone))
+        return datetime.now(ZoneInfo(self.timezone))
 
     # ---- 权限与取数 ----------------------------------------------------------------
 
@@ -315,10 +345,16 @@ class LedgerService:
             )
         except Exception as exc:  # noqa: BLE001  解析失败必须落状态，不能静默
             logger.warning("账单解析失败 import=%s: %s", import_id, exc)
+            retryable = isinstance(exc, (StorageUnavailableError, OSError))
             self.repo.update_import(
-                import_id, state=IMPORT_FAILED, error=str(exc)[:500],
+                import_id,
+                state=IMPORT_SAVED if retryable else IMPORT_FAILED,
+                error=str(exc)[:500],
                 row_counts={"rows": 0},
             )
+            if retryable:
+                # 存储暂不可用（磁盘/权限/挂载）不应永久失败：回退到 saved 让 worker 重试
+                raise
             return _import_view(self.repo.get_import(import_id, owner_id=owner_id))
 
         self.repo.delete_source_rows(import_id)
@@ -639,6 +675,8 @@ class LedgerService:
     def get_transaction(self, principal: Principal, transaction_id: str) -> dict[str, Any]:
         principal = self._principal(principal, "ledger.view")
         row = self.repo.get_transaction(transaction_id, owner_id=principal.user_id)
+        if row.get("deleted_at"):
+            raise NotFoundError(f"交易不存在: {transaction_id}")
         sources = self.repo.sources_for_transaction(transaction_id, owner_id=principal.user_id)
         links = self.repo.links_for_refund(transaction_id, owner_id=principal.user_id)
         originals = self.repo.links_for_original(transaction_id, owner_id=principal.user_id)
@@ -985,6 +1023,59 @@ class LedgerService:
             evidence=evidence,
         )
 
+    async def create_report(
+        self, principal: Principal, raw_plan: Mapping[str, Any], *,
+        fmt: str = "markdown",
+    ) -> dict[str, Any]:
+        """生成账单报告并落到 files（报告编排只做排版，数字全部来自受控统计）。"""
+        principal = self._principal(principal, "ledger.export")
+        result = self.analyze(principal, raw_plan)
+        if fmt == "pdf":
+            content, mime, suffix = await self._render_pdf(result)
+        else:
+            content, mime, suffix = render_report(result, fmt=fmt)
+        stamp = utc_now_iso()[:10]
+        saved = await self.files.save_report(
+            principal, [content],
+            original_name=f"账单报告-{stamp}.{suffix}", declared_mime=mime,
+            request_id=f"ledger-report:{result.analysis_id}:{fmt}",
+        )
+        self.repo.set_analysis_report(
+            result.analysis_id, owner_id=principal.user_id, file_id=saved.file.file_id,
+        )
+        self.files.link(
+            principal, saved.file.file_id, "analysis", result.analysis_id,
+        )
+        return {
+            "analysis_id": result.analysis_id,
+            "file_id": saved.file.file_id,
+            "original_name": saved.file.original_name,
+            "mime": mime,
+            "size_bytes": saved.file.size_bytes,
+            "metrics": [
+                {"name": m.name, "amount_minor": m.amount_minor} for m in result.metrics
+            ],
+            "coverage": asdict(result.coverage),
+        }
+
+    async def _render_pdf(self, result: AnalysisResult) -> tuple[bytes, str, str]:
+        """PDF 走现有 PdfRenderer 能力；未启用时明确报错，不返回假文件。"""
+        renderer = self.pdf
+        if renderer is None or getattr(renderer, "capability", "disabled") == "disabled":
+            raise InvalidInputError(
+                "PDF 导出未启用（未安装渲染依赖或配置关闭）；可改用 markdown/csv 报告"
+            )
+        html = render_report_html(result)
+        with tempfile.TemporaryDirectory(prefix="ledger-pdf-") as tmp:
+            destination = Path(tmp) / "report.pdf"
+            try:
+                await renderer.render(html, destination)
+                return destination.read_bytes(), "application/pdf", "pdf"
+            except CapabilityUnavailableError as exc:
+                raise InvalidInputError(f"PDF 导出不可用: {exc}") from exc
+            except OSError as exc:
+                raise InvalidInputError(f"PDF 渲染失败: {exc}") from exc
+
     def get_analysis(self, principal: Principal, analysis_id: str) -> dict[str, Any]:
         principal = self._principal(principal, "ledger.view")
         return self.repo.get_analysis(analysis_id, owner_id=principal.user_id)
@@ -1059,23 +1150,46 @@ class LedgerService:
         record = self.files.get(principal, image_file_id)
         if record.kind != KIND_IMAGE:
             raise InvalidInputError("只有图片文件可以生成识别候选")
-        candidate_id = new_extraction_id()
         candidate = candidate_from_vision(
-            candidate_id=candidate_id, image_file_id=image_file_id, payload=payload,
-            timezone=self.timezone, default_currency=record.currency if hasattr(record, "currency") else "CNY",
+            candidate_id=new_extraction_id(), image_file_id=image_file_id,
+            payload=payload, timezone=self.timezone,
+            default_currency=str(getattr(record, "currency", "") or "CNY"),
         )
+        return self._store_candidate(principal, image_file_id, candidate)
+
+    def _store_candidate(
+        self, principal: Principal, image_file_id: str, candidate: ImageCandidate,
+    ) -> dict[str, Any]:
+        data = candidate_payload(candidate)
         extraction_id = self.files.record_extraction(
             principal, image_file_id, extractor=IMAGE_EXTRACTOR,
             extractor_version=IMAGE_EXTRACTOR_VERSION,
             input_hash=hashlib.sha256(
-                str(payload.get("text") or "").encode("utf-8")
+                str(candidate.raw_text or "").encode("utf-8")
             ).hexdigest()[:32],
             state="candidate",
-            quality={"candidate": candidate_payload(candidate)},
+            quality={"candidate": data},
         )
-        data = candidate_payload(candidate)
         data["extraction_id"] = extraction_id
         return data
+
+    async def extract_image_candidate(
+        self, principal: Principal, image_file_id: str,
+    ) -> dict[str, Any]:
+        """服务端调用视觉 Adapter 生成候选；客户端不能自报 confidence。"""
+        principal = self._principal(principal, "ledger.import")
+        if self.vision is None:
+            raise InvalidInputError("未配置图片识别服务，暂不能自动识别截图")
+        record = self.files.get(principal, image_file_id)
+        if record.kind != KIND_IMAGE:
+            raise InvalidInputError("只有图片文件可以生成识别候选")
+        candidate = await extract_candidate(
+            self.vision, image_path=self.files.internal_path(principal, image_file_id),
+            image_file_id=image_file_id, candidate_id=new_extraction_id(),
+            timezone=self.timezone,
+            default_currency=str(getattr(record, "currency", "") or "CNY"),
+        )
+        return self._store_candidate(principal, image_file_id, candidate)
 
     def confirm_image_candidate(
         self, principal: Principal, extraction_id: str, *,

@@ -417,8 +417,8 @@ class LedgerRepository:
             active.execute(
                 "INSERT INTO ledger_transactions(id, owner_id, account_id, provider, external_id, "
                 "event_role, identity_key, amount_minor, currency, direction, tx_type, merchant, "
-                "product, occurred_at, status, status_key, category_id, verification, revision, "
-                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "product, note, occurred_at, status, status_key, category_id, verification, revision, "
+                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     transaction_id, owner_id, account_id,
                     str(transaction.get("provider") or "wechat"),
@@ -431,6 +431,7 @@ class LedgerRepository:
                     str(transaction.get("tx_type") or ""),
                     str(transaction.get("merchant") or ""),
                     str(transaction.get("product") or ""),
+                    str(transaction.get("note") or ""),
                     str(transaction["occurred_at"]),
                     str(transaction.get("status") or ""),
                     str(transaction.get("status_key") or "unknown"),

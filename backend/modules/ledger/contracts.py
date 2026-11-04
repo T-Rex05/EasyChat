@@ -297,6 +297,7 @@ class TransactionView:
     category_id: str | None
     verification: str
     revision: int
+    note: str = ""
 
 
 @dataclass(frozen=True, slots=True)

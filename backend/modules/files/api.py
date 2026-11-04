@@ -51,7 +51,6 @@ from backend.modules.files.validation import inspect_zip, validate_image_size
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
 from backend.shared.errors import (
-    AppError,
     ForbiddenError,
     InvalidInputError,
     NotFoundError,

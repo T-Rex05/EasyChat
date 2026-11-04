@@ -122,6 +122,7 @@ async def run_startup(registry: ModuleRegistry) -> None:
 
     if registry.access is not None and registry.files is not None:
         # 增量 F4/F5：账本导入解析与统计（唯一 worker + JobQueue，不阻塞 Web）
+        from backend.integrations.pdf import build_pdf_renderer
         from backend.modules.ledger.api import LedgerService
         from backend.modules.ledger.worker import LedgerWorker
         from backend.platform.jobs import JobQueue
@@ -130,6 +131,7 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.ledger = LedgerService(
             db, access=registry.access, files=registry.files, queue=ledger_queue,
             timezone=registry.settings.project_timezone,
+            pdf=build_pdf_renderer(registry.settings),
         )
         registry.ledger_worker = LedgerWorker(registry.ledger, ledger_queue)
         await registry.ledger_worker.start()

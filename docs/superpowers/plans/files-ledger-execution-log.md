@@ -1,4 +1,4 @@
-# Files & Ledger 增量执行日志（F0–F11）
+﻿# Files & Ledger 增量执行日志（F0–F11）
 
 工作目录：`E:\PythonCode\EasyChat`。原项目 `E:\PythonCode\AgentForge` 未修改、未读取其真实数据。
 本日志只记录增量功能（files/ledger），旧主体 Task 0–16 的证据仍在 `easychat-execution-log.md`，本文件不覆盖它。
@@ -156,3 +156,75 @@ python -m pytest tests/ledger tests/files tests/contracts tests/architecture -q 
 - 删除批次：未提交可删（同时解除 import 引用、保留原件），已提交拒绝并提示逐笔删除。
 
 下一步：F6 图片识别候选与人工校对的 HTTP 层、F7 指标/分类、F8 分析接口、F9 意图路由。
+
+---
+
+## F6–F8 — HTTP 层、分类规则、分析查询与后台 worker（2026-11-04）
+
+- 路由 `backend/modules/ledger/routes.py`（`/api/ledger/*`）：导入登记/解析/预览/提交/删除、来源行分页、交易列表/详情/修正/删除、分类与规则 CRUD、退款候选/关联/确认/解除、`/analyze`、`/reports`、`/analyses`、`/images/{file_id}/candidates`、`/candidates/{id}/confirm`。路由只做参数与权限转发，无业务 SQL。
+- 服务层：`LedgerService` 补齐 `import_summary`、`list_source_rows`、分类/规则、交易修正（写 `ledger_changes` 审计、`revision` 递增）、`suggest_refunds`、`save_image_candidate`/`confirm_image_candidate`（低置信字段必须显式纠正；未配置视觉服务返回 422 而非伪造结果）。
+- 提交路径保持单事务：`find_transaction/insert_transaction/update_transaction/link_source` 均可复用外层连接；重叠导出先查身份键再决定 insert/merge，避免唯一约束冲突。
+- worker：`ledger.parse` 任务成功/失败/重试语义；存储不可用（`StorageUnavailableError`/`OSError`）回到 `saved` 并 `retry_wait`，确定性的格式错误才标 `failed`，防止把临时 IO 故障当坏文件。
+- 迁移修正：`0012` 发布后发现 `note` 字段遗漏，**未改已发布迁移**，追加 `0013_ledger_note.sql`（`ALTER TABLE ledger_transactions ADD COLUMN note ...`）。
+
+```powershell
+python -m pytest tests/ledger -q                                   # 168 passed
+python -m pytest tests/contracts/test_ledger_api.py -q             # 12 passed
+python -m pytest tests/ledger tests/contracts -q                   # 265 passed
+python -m ruff check backend/modules/ledger tests/ledger           # All checks passed
+```
+
+## F9 — 意图路由与工具面
+
+- `backend/modules/ledger/intent.py`：规则分类（导入/查询/修正/报告/退款核对/未知）＋确定性时间解析（本月/上月/今年/去年/最近 N 天/`YYYY年M月`），查询默认口径 `consumption_net`，提到“流水/现金”切换口径。
+- 模型端口 `PlannerPort` 只允许返回 QueryPlan；模型返回未知字段（如 `sql`）时由 `analyze` 的白名单校验拒绝，**不执行任何模型生成的 SQL**。
+- `backend/modules/ledger/tools.py`：5 个受控工具（导入预览/统计/修正/报告/退款候选），参数 schema 无 SQL/code 字段；**提交账单不暴露为工具**，必须人工确认。`handle_message` 把“用户原话 + 文件/交易上下文”落到服务调用。
+- 金额、去重、退款净额全部由服务端受控代码计算；工具只转发。
+
+```powershell
+python -m pytest tests/ledger/test_intent.py -q     # 11 passed
+python -m ruff check backend/modules/ledger tests/ledger   # All checks passed
+```
+
+## F10 — 报告、导出与前端账单页
+
+- `backend/modules/ledger/reports.py`：Markdown/CSV 排版 + PDF 用 HTML；数字全部来自 `AnalysisResult`，报告文件经 `FileService.save_report` 落库并 `link(analysis)`，`ledger_analyses.report_file_id` 留痕。
+- PDF 复用 `PdfRenderer`（未启用/未安装渲染依赖时明确报 `InvalidInputError`，不返回空文件）。
+- 前端：`agent_frontend/src/views/LedgerView.vue` + `src/api/ledger.ts` + 路由 `/ledger`（权限 `ledger.view`）；覆盖上传→核验（控制总额/新增/更新/未变）→提交→按口径统计→报告下载→交易分类修正→退款候选确认→截图候选人工确认。
+
+```powershell
+python -m pytest tests/ledger/test_reports.py -q    # 5 passed
+cd agent_frontend; npm run type-check               # 通过（无输出）
+cd agent_frontend; npm run build                    # ✓ built in 12.71s（LedgerView 13.63 kB）
+```
+
+## F11 — 留存清理、容量水位、备份恢复与运维文档
+
+- `backend/modules/files/lifecycle.py`：`derived_7d` 到期且**无引用**才清理（先标记 deleted 再删 blob）；原件 `permanent` 永不清理；配额或用磁盘水位不足时拒绝新保存，不删旧原件。
+- `backend/platform/backup.py` + `scripts/files_ledger_backup.py`：SQLite backup API 一致性快照 + ready 文件逐一 sha256 校验 + manifest；先写 `.partial` 再原子改名；`verify` 检查 DB integrity、文件 hash、manifest 覆盖；`restore` 默认 dry-run，`--apply` 前把现有库改名保留。
+- `docs/architecture/files-ledger-operations.md`：数据布局、状态机/对账、留存与删除范围、配额、备份/恢复命令与已知限制。
+
+```powershell
+python -m pytest tests/files/test_lifecycle.py -q   # 5 passed
+python -m pytest tests/storage/test_backup.py -q    # 6 passed
+python -m pytest tests/ledger tests/files tests/storage tests/contracts -q   # 360 passed
+python -m ruff check backend/modules/ledger backend/modules/files tests/ledger tests/files/test_lifecycle.py tests/storage/test_backup.py   # All checks passed
+```
+
+下一步：全量回归（`python -m pytest -q`）与最终验收报告；前端移动端与真实微信/视觉服务联调仍未做。
+
+## 最终回归（2026-11-04）
+
+```powershell
+python -m pytest tests/access tests/architecture tests/assistant tests/contracts tests/delivery tests/evolution tests/files tests/fixtures tests/ledger tests/memory tests/models tests/resources tests/skills tests/storage tests/usage -q
+# 543 passed in 217.73s
+python -m ruff check backend/modules/ledger backend/modules/files backend/platform/backup.py backend/bootstrap.py tests/ledger tests/files/test_lifecycle.py tests/storage/test_backup.py tests/contracts/test_ledger_api.py scripts/files_ledger_backup.py
+# All checks passed!
+cd agent_frontend; npm run type-check   # 通过
+cd agent_frontend; npm run build        # ✓ built in 12.71s
+```
+
+- 直接运行 `python -m pytest -q` 会在 `tests/test_*.py` 的 17 个历史文件上收集失败
+  （`ModuleNotFoundError: backend.service` 等，Task 15 删除旧模块后遗留），属**既有**问题，
+  本次改动未触碰；模块化测试目录全绿。
+- 未做：真实微信账单导出文件解析、真实视觉服务、真实 SMTP/微信投递、移动端专项验收、多实例部署。
