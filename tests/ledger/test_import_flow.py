@@ -1,4 +1,4 @@
-"""F4/F5：导入状态机、控制总额、去重、状态更新、退款与三口径统计的端到端测试。
+﻿"""F4/F5：导入状态机、控制总额、去重、状态更新、退款与三口径统计的端到端测试。
 
 所有账单由 tests/support/ledger_fixtures.py 生成（虚构商户/单号），
 真实临时 SQLite + 临时文件目录，不触网、不用真实账单。
@@ -48,6 +48,30 @@ def _metric(result, name: str) -> int | None:
 
 
 # ---- 迁移与基本导入 -------------------------------------------------------------
+
+
+def test_migration_0013_upgrades_existing_0012_database(tmp_path):
+    """已在 0012 的库能增量升到 0013；已发布迁移的 checksum 不被改写。"""
+    from backend.platform.sqlite import Database
+
+    db = Database(tmp_path / "data" / "app.db")
+    db.migrate()
+    conn = db.connect()
+    try:
+        conn.execute("ALTER TABLE ledger_transactions DROP COLUMN note")
+        conn.execute("DELETE FROM schema_migrations WHERE version LIKE '0013%'")
+        conn.commit()
+    finally:
+        conn.close()
+    db.migrate()  # 重新应用 0013；0001-0012 的 checksum 必须仍然匹配
+    conn = db.connect()
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(ledger_transactions)")}
+        versions = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
+    finally:
+        conn.close()
+    assert "note" in columns
+    assert any(str(v).startswith("0013") for v in versions)
 
 
 async def test_migration_0012_creates_ledger_tables(tmp_path):

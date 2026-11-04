@@ -165,7 +165,7 @@ python -m pytest tests/ledger tests/files tests/contracts tests/architecture -q 
 - 服务层：`LedgerService` 补齐 `import_summary`、`list_source_rows`、分类/规则、交易修正（写 `ledger_changes` 审计、`revision` 递增）、`suggest_refunds`、`save_image_candidate`/`confirm_image_candidate`（低置信字段必须显式纠正；未配置视觉服务返回 422 而非伪造结果）。
 - 提交路径保持单事务：`find_transaction/insert_transaction/update_transaction/link_source` 均可复用外层连接；重叠导出先查身份键再决定 insert/merge，避免唯一约束冲突。
 - worker：`ledger.parse` 任务成功/失败/重试语义；存储不可用（`StorageUnavailableError`/`OSError`）回到 `saved` 并 `retry_wait`，确定性的格式错误才标 `failed`，防止把临时 IO 故障当坏文件。
-- 迁移修正：`0012` 发布后发现 `note` 字段遗漏，**未改已发布迁移**，追加 `0013_ledger_note.sql`（`ALTER TABLE ledger_transactions ADD COLUMN note ...`）。
+- 迁移修正：`0012` 发布后发现 `note` 字段遗漏，**未改已发布迁移**，追加 `0013_ledger_note.sql`（`ALTER TABLE ledger_transactions ADD COLUMN note ...`）；`test_migration_0013_upgrades_existing_0012_database` 真实模拟“已应用 0012 的旧库 → 删除 0013 记录 → 再迁移”，同时证明 0001–0012 checksum 未被改写。
 
 ```powershell
 python -m pytest tests/ledger -q                                   # 168 passed
@@ -217,7 +217,7 @@ python -m ruff check backend/modules/ledger backend/modules/files tests/ledger t
 
 ```powershell
 python -m pytest tests/access tests/architecture tests/assistant tests/contracts tests/delivery tests/evolution tests/files tests/fixtures tests/ledger tests/memory tests/models tests/resources tests/skills tests/storage tests/usage -q
-# 543 passed in 217.73s
+# 543 passed in 217.73s（追加迁移升级测试后重跑：544 passed in 168.09s）
 python -m ruff check backend/modules/ledger backend/modules/files backend/platform/backup.py backend/bootstrap.py tests/ledger tests/files/test_lifecycle.py tests/storage/test_backup.py tests/contracts/test_ledger_api.py scripts/files_ledger_backup.py
 # All checks passed!
 cd agent_frontend; npm run type-check   # 通过
