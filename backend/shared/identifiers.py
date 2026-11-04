@@ -25,6 +25,19 @@ _PREFIX_REVISION = "rev"
 _PREFIX_SIGNAL = "sig"
 _PREFIX_SKILL = "skl"
 _PREFIX_SKILL_VERSION = "skv"
+_PREFIX_FILE = "fil"
+_PREFIX_FILE_REF = "fref"
+_PREFIX_UPLOAD_RECEIPT = "upr"
+_PREFIX_EXTRACTION = "fex"
+_PREFIX_LEDGER_ACCOUNT = "lac"
+_PREFIX_LEDGER_IMPORT = "lim"
+_PREFIX_LEDGER_ROW = "lrw"
+_PREFIX_LEDGER_TX = "ltx"
+_PREFIX_LEDGER_REFUND = "lrf"
+_PREFIX_LEDGER_CATEGORY = "lct"
+_PREFIX_LEDGER_RULE = "lru"
+_PREFIX_LEDGER_CHANGE = "lch"
+_PREFIX_LEDGER_ANALYSIS = "lan"
 
 
 def _new_id(prefix: str) -> str:
@@ -89,6 +102,58 @@ def new_artifact_id() -> str:
 
 def new_attachment_id() -> str:
     return _new_id(_PREFIX_ATTACHMENT)
+
+
+def new_file_id() -> str:
+    return _new_id(_PREFIX_FILE)
+
+
+def new_file_reference_id() -> str:
+    return _new_id(_PREFIX_FILE_REF)
+
+
+def new_upload_receipt_id() -> str:
+    return _new_id(_PREFIX_UPLOAD_RECEIPT)
+
+
+def new_extraction_id() -> str:
+    return _new_id(_PREFIX_EXTRACTION)
+
+
+def new_ledger_account_id() -> str:
+    return _new_id(_PREFIX_LEDGER_ACCOUNT)
+
+
+def new_ledger_import_id() -> str:
+    return _new_id(_PREFIX_LEDGER_IMPORT)
+
+
+def new_source_row_id() -> str:
+    return _new_id(_PREFIX_LEDGER_ROW)
+
+
+def new_transaction_id() -> str:
+    return _new_id(_PREFIX_LEDGER_TX)
+
+
+def new_refund_link_id() -> str:
+    return _new_id(_PREFIX_LEDGER_REFUND)
+
+
+def new_category_id() -> str:
+    return _new_id(_PREFIX_LEDGER_CATEGORY)
+
+
+def new_category_rule_id() -> str:
+    return _new_id(_PREFIX_LEDGER_RULE)
+
+
+def new_ledger_change_id() -> str:
+    return _new_id(_PREFIX_LEDGER_CHANGE)
+
+
+def new_analysis_id() -> str:
+    return _new_id(_PREFIX_LEDGER_ANALYSIS)
 
 
 def new_channel_account_id() -> str:

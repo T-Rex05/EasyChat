@@ -74,3 +74,36 @@ python -m pytest tests/architecture tests/contracts tests/access tests/assistant
 - 真实 OCR/视觉服务未联调（F6 用 FakeVision）。
 
 下一步：F1 统一文件模型与 `0011_files.sql`。
+
+---
+
+## F1 — 统一文件模型与 0011 迁移
+
+- 迁移：`0011_files.sql`（新增 `stored_files`、`upload_receipts`、`file_references`、`file_extractions`；旧 `attachments`/`artifacts` 追加 `stored_file_id`）。已提交的 0001–0010 checksum 未改。
+- 代码：`backend/modules/files/{contracts,repository,local_store,api}.py`；权限新增 `file.upload/read/delete`（admin+user 默认授予，跨 owner 仍需 `system.manage`）。
+- 关键规则：owner 由 Principal 决定；外部 metadata 不能指定 owner/storage_key；同 owner 同 sha256 复用文件但每次上传独立收据；跨 owner 不去重；删除一条引用不删共享原件；FileRecord 不含绝对路径。
+- 测试命令与结果：
+
+```powershell
+python -m pytest tests/files -q        # F1+F2 合并后 30 passed
+python -m pytest tests/storage tests/architecture tests/access -q   # 61 passed
+```
+
+## F2 — 流式保存、崩溃恢复与受限读取
+
+- `save_stream`/`ingest_local_path`/`save_bytes`/`save_derived`/`save_report` 分块写 `.part` + sha256，flush/fsync 后同文件系统原子 rename，再短事务提交 ready+收据+引用；移动后复核 hash。
+- 失败路径：超限、上游流中断、写盘 ENOSPC、移动失败、hash 不一致、提交事务失败都标 `failed` 且不留半成品，不返回“已保存”。
+- `reconcile`：按收据预期 key/hash 补提交或标 failed；`finalizing` 文件 hash 一致补 ready；ready 但物理缺失标 `missing`；孤立文件只报告不删除。
+- 校验：路径穿越/绝对路径/符号链接逃逸拒绝；类型伪装按内容签名判定；XLSX/ZIP 条目数与展开总量上限、越界条目拒绝；图片像素上限。
+- 说明：`store.finalize` 在 Windows 跳过父目录 fsync（`_fsync_dir` 仅 POSIX），已在此记录，运维文档 F11 复述。
+
+```powershell
+python -m pytest tests/files/test_metadata.py tests/files/test_persistence.py -q
+# 30 passed
+```
+
+提交：`feat(files): unify file model with streaming save and crash recovery (F1/F2)`
+（F1 与 F2 共用同一条保存代码路径，合并为一次提交；两套测试分别覆盖元数据与持久化/恢复边界。）
+
+下一步：F3 旧附件/报告桥接与微信/Web 接入。
+

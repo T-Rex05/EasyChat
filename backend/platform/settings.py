@@ -41,6 +41,11 @@ class AppSettings:
         if not self.artifacts_dir:
             raise ValueError("artifacts_dir 不能为空")
 
+    @property
+    def files_root(self) -> Path:
+        """文件权威根目录：与 app.db 同目录（staging 与最终位置需同文件系统）。"""
+        return Path(self.data_db_path).parent
+
 
 def default_settings() -> AppSettings:
     """显式默认配置：相对路径常量，不做任何文件系统访问。仅用于工厂缺省与测试。"""

@@ -29,6 +29,16 @@ PERMISSION_DEFS: tuple[dict, ...] = (
     {"key": "trace.manage",    "label": "查看全部用户", "group_name": "trace",  "group_label": "可观测",  "sort_order": 20, "description": "跨用户查看Trace明细"},
     {"key": "evolution.view",  "label": "查看进化记录", "group_name": "evolution", "group_label": "进化", "sort_order": 10, "description": "查看学习任务与候选版本记录"},
     {"key": "evolution.manage", "label": "进化管理",  "group_name": "evolution", "group_label": "进化", "sort_order": 20, "description": "批准/回滚候选版本与调整预算"},
+    # 文件权威（增量需求 R17/F1）：上传/读取/删除分开授权；跨 owner 仍需 system.manage
+    {"key": "file.upload",     "label": "上传文件",   "group_name": "file",    "group_label": "文件",    "sort_order": 10, "description": "保存微信/Web 上传的原件"},
+    {"key": "file.read",       "label": "读取文件",   "group_name": "file",    "group_label": "文件",    "sort_order": 20, "description": "查看/下载本人有权访问的文件"},
+    {"key": "file.delete",     "label": "删除文件",   "group_name": "file",    "group_label": "文件",    "sort_order": 30, "description": "按明确范围删除原件或引用"},
+    # 账单账本（增量需求 R18/F4–F10）
+    {"key": "ledger.view",     "label": "查看账本",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 10, "description": "查看本人账本、导入批次与候选"},
+    {"key": "ledger.import",   "label": "导入账单",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 20, "description": "建立候选并提交账本导入"},
+    {"key": "ledger.edit",     "label": "修正账目",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 30, "description": "修正分类/备注等可编辑字段"},
+    {"key": "ledger.export",   "label": "导出报告",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 40, "description": "导出分析报告与明细"},
+    {"key": "ledger.manage",   "label": "管理账本",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 50, "description": "跨用户管理账本数据与删除范围"},
 )
 
 ALL_PERMISSION_KEYS: frozenset[str] = frozenset(d["key"] for d in PERMISSION_DEFS)
@@ -40,11 +50,15 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
         "memory.view", "memory.edit", "terminal.audit", "cron.create",
         "system.manage", "system.config", "trace.view", "trace.manage",
         "evolution.view", "evolution.manage",
+        "file.upload", "file.read", "file.delete",
+        "ledger.view", "ledger.import", "ledger.edit", "ledger.export", "ledger.manage",
     ),
     "user": (
         "chat.use", "skill.create",
         "memory.view", "memory.edit",
         "cron.create", "trace.view",
+        "file.upload", "file.read", "file.delete",
+        "ledger.view", "ledger.import", "ledger.edit", "ledger.export",
     ),
 }
 

@@ -77,6 +77,9 @@ class TestRig:
     access: object | None = None  # Task 3: AccessService（字符串标注避免导入细节泄漏）
     assistant: object | None = None  # Task 6: AssistantService
     channels: object | None = None  # Task 7: ChannelService
+    files: object | None = None  # 增量 F1: FileService
+    ledger: object | None = None  # 增量 F4: LedgerService
+    ledger_queue: object | None = None  # 增量 F5: JobQueue
     _closed: bool = False
 
     async def aclose(self) -> None:
@@ -160,6 +163,20 @@ class TestRig:
             clock=self.clock,
         )
         return self.channels
+
+    def attach_files(self, *, min_free_bytes: int = 0, delete_hook=None):
+        """装配 FileService（增量 F1）：真实临时 SQLite + 临时文件根目录。"""
+        from backend.modules.files.api import FileService
+        from backend.modules.files.local_store import LocalFileStore
+
+        assert self.db is not None, "make_rig(seed_access=True) 后才能 attach_files"
+        assert self.access is not None
+        store = LocalFileStore(self.settings.files_root)
+        self.files = FileService(
+            self.db, access=self.access, store=store,
+            min_free_bytes=min_free_bytes, delete_hook=delete_hook,
+        )
+        return self.files
 
     async def drain_runs(self, *, max_polls: int = 600) -> None:
         """推进调度直到无 queued/running/cancel_requested；超限直接失败。"""
