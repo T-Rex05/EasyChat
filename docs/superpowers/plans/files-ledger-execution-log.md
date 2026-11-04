@@ -126,3 +126,33 @@ python -m pytest tests/contracts tests/delivery tests/assistant tests/architectu
 下一步：F4 账本 schema 与纯解析器。
 
 
+
+---
+
+## F4 — 账本 schema、纯解析器与账本服务骨架
+
+- 迁移 `0012_ledger.sql`（新增 10 表：`ledger_accounts`/`ledger_imports`/`ledger_source_rows`/`ledger_categories`/`ledger_transactions`/`ledger_transaction_sources`/`ledger_refund_links`/`ledger_category_rules`/`ledger_changes`/`ledger_analyses`；0011 之前 checksum 未改）。
+- 纯解析器 `backend/modules/ledger/parsers/`：表头按内容识别（说明行数量可变）、UTF-8/GB18030/TSV/引号内换行、控制总额与起止时间提取、坏行保留 `errors` 不丢弃、`max_rows` 截断、微信与通用 CSV 分流（通用必须显式列映射，不猜列）。
+- 归一化：金额整数分（`1,234.5`/`¥12.34`/负数）、时间（含 Excel 序列号）、状态 key、事件角色（**只看类型/商品/方向，不看状态文本**，避免“已全额退款”把原支付翻成退款导致身份漂移）、长单号按字符串保留并标记可靠性。
+- 身份：`external_id:<acct>|<role>|<id>`（含事件角色，同一单号的原单与退款不互相覆盖），无可靠单号时退化指纹；控制总额闸门（不一致必须显式 `confirm_mismatch`）。
+- 服务骨架 `LedgerService`：导入状态机（saved→parsing→validated/needs_review→committed/failed）、JobQueue `ledger.parse` + 单 worker、提交（事务内去重/状态更新/来源关联/退款匹配）、三口径 SQL 编译（`QueryPlan` 白名单校验 + 全参数化，不接受模型 SQL）、图片候选（FakeVision 接口）。
+
+```powershell
+python -m pytest tests/ledger -q     # 138 passed（identity 35 / query 40 / extraction 23 / parsers 21 / import_flow 19）
+python -m ruff check backend/modules/ledger tests/ledger   # All checks passed
+python .tmp_check_ledger_migration.py                       # 12 个迁移全部应用；fk: []；10 张 ledger 表
+python -m pytest tests/ledger tests/files tests/contracts tests/architecture -q   # 285 passed
+```
+
+- 迁移验证脚本是一次性临时文件，运行后已删除；正式断言在 `tests/ledger/test_import_flow.py::test_migration_0012_creates_ledger_tables`。
+
+## F5 — 导入提交、去重、状态更新与退款匹配（端到端）
+
+- 同一 `(owner, file, parser, version)` 复用同一批次；重复登记已提交批次不会重解析。
+- 提交在单事务内完成：`find → insert/merge → link_source`（`LedgerRepository._tx` 可复用调用方连接，避免自锁），`request_id` 幂等返回 `duplicate=True`。
+- 重叠导出只新增未见过的交易；后一份导出把同一交易状态改为退款时只更新状态不产生重复行。
+- 退款匹配：同单号/备注引用 → `confirmed` 建 `ledger_refund_links`；容量校验按原支付金额（已确认合计不得超出）。
+- 三口径已用真实 SQLite 验证：`statement_flow`（退款不冲减支出）/`consumption_net`（扣本期关联退款）/`period_cash_outflow`（跨期退款抵本期流出），并用“9 月消费、10 月退款”用例证明三者数值确实不同。
+- 删除批次：未提交可删（同时解除 import 引用、保留原件），已提交拒绝并提示逐笔删除。
+
+下一步：F6 图片识别候选与人工校对的 HTTP 层、F7 指标/分类、F8 分析接口、F9 意图路由。

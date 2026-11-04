@@ -32,6 +32,7 @@ _PREFIX_EXTRACTION = "fex"
 _PREFIX_LEDGER_ACCOUNT = "lac"
 _PREFIX_LEDGER_IMPORT = "lim"
 _PREFIX_LEDGER_ROW = "lrw"
+_PREFIX_LEDGER_SOURCE = "lsr"
 _PREFIX_LEDGER_TX = "ltx"
 _PREFIX_LEDGER_REFUND = "lrf"
 _PREFIX_LEDGER_CATEGORY = "lct"
@@ -134,6 +135,10 @@ def new_source_row_id() -> str:
 
 def new_transaction_id() -> str:
     return _new_id(_PREFIX_LEDGER_TX)
+
+
+def new_transaction_source_id() -> str:
+    return _new_id(_PREFIX_LEDGER_SOURCE)
 
 
 def new_refund_link_id() -> str:

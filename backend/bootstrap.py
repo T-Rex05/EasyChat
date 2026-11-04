@@ -120,6 +120,20 @@ async def run_startup(registry: ModuleRegistry) -> None:
             store=LocalFileStore(registry.settings.files_root),
         )
 
+    if registry.access is not None and registry.files is not None:
+        # 增量 F4/F5：账本导入解析与统计（唯一 worker + JobQueue，不阻塞 Web）
+        from backend.modules.ledger.api import LedgerService
+        from backend.modules.ledger.worker import LedgerWorker
+        from backend.platform.jobs import JobQueue
+
+        ledger_queue = JobQueue(db)
+        registry.ledger = LedgerService(
+            db, access=registry.access, files=registry.files, queue=ledger_queue,
+            timezone=registry.settings.project_timezone,
+        )
+        registry.ledger_worker = LedgerWorker(registry.ledger, ledger_queue)
+        await registry.ledger_worker.start()
+
     # Task 7：渠道模块（默认 wechat_enabled=False，不启动任何监听）。
     # 组装需要部署密钥（凭证加密）；缺失时明确跳过而不是以明文落库。
     if (

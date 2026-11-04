@@ -179,6 +179,20 @@ class TestRig:
         )
         return self.files
 
+    def attach_ledger(self, *, queue: bool = True, max_rows: int = 100_000):
+        """装配 LedgerService（增量 F4）：依赖已装配的 FileService。"""
+        from backend.modules.ledger.api import LedgerService
+        from backend.platform.jobs import JobQueue
+
+        assert self.files is not None, "attach_files() 后才能 attach_ledger"
+        assert self.access is not None
+        self.ledger_queue = JobQueue(self.db) if queue else None
+        self.ledger = LedgerService(
+            self.db, access=self.access, files=self.files, queue=self.ledger_queue,
+            timezone=self.settings.project_timezone, max_rows=max_rows,
+        )
+        return self.ledger
+
     async def drain_runs(self, *, max_polls: int = 600) -> None:
         """推进调度直到无 queued/running/cancel_requested；超限直接失败。"""
         import asyncio

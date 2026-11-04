@@ -403,6 +403,23 @@ class FileService:
         with self.open_read(principal, file_id) as handle:
             return handle.read(max(1, min(limit, 64 * 1024)))
 
+    def read_head(self, principal: Principal, file_id: str, limit: int = _PROBE_BYTES) -> bytes:
+        """读取文件头部（格式探测用），不暴露路径。"""
+        return self.read_sample(principal, file_id, limit)
+
+    def internal_path(self, principal: Principal, file_id: str) -> Path:
+        """内部适配器专用物理路径（解析器/PDF 发送）。
+
+        安全约定：只返回给同 owner 的模块内部代码，绝不进入 HTTP 响应、
+        LLM 工具返回值或日志；越权调用由 `get()` 的 owner 校验拦截。
+        """
+        record = self.get(principal, file_id)
+        if record.status != FILE_READY:
+            raise InvalidInputError(f"文件不可读（状态 {record.status}）")
+        row = self.repo.get_file(file_id)
+        assert row is not None
+        return self.store.absolute_path(str(row["storage_key"]))
+
     # ---- 引用 ------------------------------------------------------------------
 
     def link(self, principal: Principal, file_id: str, ref_kind: str, ref_id: str) -> bool:
@@ -556,6 +573,25 @@ class FileService:
             raise NotFoundError("文件不存在")
         self._authorize(principal, int(row["owner_id"]))
         return self.repo.latest_extraction(file_id, extractor)
+
+    def get_extraction(self, principal: Principal, extraction_id: str) -> dict[str, Any]:
+        """按 ID 读提取结果（含解析后的 quality_summary），仅 owner 可见。"""
+        principal = self._require(principal, "file.read")
+        row = self.repo.get_extraction(extraction_id)
+        if row is None:
+            raise NotFoundError(f"提取结果不存在: {extraction_id}")
+        self._authorize(principal, int(row["owner_id"]))
+        import json
+
+        quality = row.get("quality_summary")
+        if isinstance(quality, str):
+            try:
+                row["quality_summary"] = json.loads(quality)
+            except ValueError:
+                row["quality_summary"] = {}
+        elif quality is None:
+            row["quality_summary"] = {}
+        return row
 
     # ---- 对账 ------------------------------------------------------------------
 
