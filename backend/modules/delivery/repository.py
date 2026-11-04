@@ -249,14 +249,15 @@ class DeliveryRepository:
         mime: str,
         run_id: str = "",
         expires_at: str | None = None,
+        stored_file_id: str = "",
     ) -> str:
         artifact_id = new_artifact_id()
         with self.db.transaction() as conn:
             conn.execute(
                 "INSERT INTO artifacts(id, owner_id, run_id, kind, file_path, sha256, file_size, "
-                "mime, created_at, expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "mime, created_at, expires_at, stored_file_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (artifact_id, owner_id, run_id or None, kind, file_path, sha256,
-                 int(file_size), mime, utc_now_iso(), expires_at),
+                 int(file_size), mime, utc_now_iso(), expires_at, stored_file_id or None),
             )
         return artifact_id
 

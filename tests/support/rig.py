@@ -160,6 +160,7 @@ class TestRig:
             transport=transport or FakeTransport(),
             media_fetcher=media_fetcher,
             media_dir=media_dir,
+            files=self.files,
             clock=self.clock,
         )
         return self.channels

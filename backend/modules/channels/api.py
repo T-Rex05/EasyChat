@@ -72,6 +72,7 @@ class ChannelService:
         transport: Any = None,
         media_fetcher: MediaFetcher | None = None,
         media_dir: Path | None = None,
+        files: Any = None,
         clock=time.time,
         fingerprint_window: float = DEFAULT_FINGERPRINT_WINDOW_SECONDS,
     ) -> None:
@@ -87,6 +88,7 @@ class ChannelService:
         self.listener = WeChatListener(self, self.transport, clock=clock)
         self.media_fetcher = media_fetcher
         self.media_dir = Path(media_dir) if media_dir is not None else None
+        self.files = files
         self.clock = clock
         self.fingerprint_window = fingerprint_window
 
@@ -457,7 +459,9 @@ class ChannelService:
                 event_id=event_id, reply_text=reply_text,
             )
 
-        attachment_ids = await self._ingest_media(principal, session_id, event_id, message)
+        attachment_ids = await self._ingest_media(
+            principal, session_id, event_id, message, account_id=account.id
+        )
         if message.media and not attachment_ids and not message.text.strip():
             # 只有媒体且全部接收失败：不要用"请描述图片"空跑一次模型
             return self._reject(event_id, REASON_MEDIA_FAILED, "媒体接收失败且无文字")
@@ -612,17 +616,33 @@ class ChannelService:
         session_id: str,
         event_id: str,
         message: InboundMessage,
+        *,
+        account_id: str = "",
     ) -> tuple[str, ...]:
+        """下载/解密后委托 files 持久保存；失败只跳过该媒体，不阻塞文字消息。
+
+        游标/事件在文件持久保存（或旧路径附件登记）完成后才标记 processed；
+        媒体重投命中同一 (账号, 事件, 序号) 收据时返回原文件，不重复入账。
+        """
         if not message.media or self.media_fetcher is None or self.media_dir is None:
             return ()
         dest_dir = self.media_dir / event_id
         attachment_ids: list[str] = []
-        for ref in message.media:
+        for index, ref in enumerate(message.media):
             try:
                 fetched = await self.media_fetcher.fetch(ref, dest_dir)
             except MediaFetchError as exc:
                 logger.warning("渠道媒体接收失败 event=%s kind=%s: %s", event_id, ref.kind, exc)
                 continue
+            if self.files is not None:
+                attachment_id = await self._persist_media(
+                    principal, session_id, message.external_event_id, event_id,
+                    account_id, index, fetched,
+                )
+                if attachment_id:
+                    attachment_ids.append(attachment_id)
+                continue
+            # 未装配 files 的降级路径（旧行为，保持兼容）
             attachment_id = await self.assistant.register_attachment(
                 principal,
                 file_name=fetched.file_name,
@@ -634,6 +654,54 @@ class ChannelService:
             )
             attachment_ids.append(attachment_id)
         return tuple(attachment_ids)
+
+    async def _persist_media(
+        self,
+        principal: Principal,
+        session_id: str,
+        external_event_id: str,
+        event_row_id: str,
+        account_id: str,
+        index: int,
+        fetched,
+    ) -> str:
+        from backend.modules.files.contracts import REF_ATTACHMENT, SaveMetadata
+
+        try:
+            result = await self.files.ingest_local_path(
+                principal,
+                fetched.path,
+                SaveMetadata(
+                    original_name=fetched.file_name,
+                    declared_mime=fetched.mime,
+                    source="wechat",
+                    channel=PLATFORM_WECHAT,
+                    account_id=account_id,
+                    # 幂等作用域用平台事件 ID（事件行被清理后仍可幂等），不是内部行 ID
+                    external_event_id=external_event_id,
+                    media_index=index,
+                    session_id=session_id,
+                ),
+                remove_source=True,
+            )
+        except AppError as exc:
+            logger.warning(
+                "渠道媒体持久保存失败 event=%s index=%s: %s", event_row_id, index, exc,
+            )
+            return ""
+        file = result.file
+        attachment_id = await self.assistant.register_attachment(
+            principal,
+            file_name=file.original_name or fetched.file_name,
+            file_path="",
+            mime=file.verified_mime,
+            file_size=file.size_bytes,
+            sha256=file.sha256,
+            session_id=session_id,
+            stored_file_id=file.file_id,
+        )
+        self.files.link(principal, file.file_id, REF_ATTACHMENT, attachment_id)
+        return attachment_id
 
     def _reject(
         self, event_id: str, reason: str, error: str, *, user_id: int | None = None

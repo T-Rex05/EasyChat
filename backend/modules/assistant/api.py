@@ -129,10 +129,14 @@ class AssistantService:
         file_size: int = 0,
         sha256: str = "",
         session_id: str = "",
+        stored_file_id: str = "",
     ) -> str:
-        """登记渠道收到/生成的文件引用（大内容在文件系统，DB 只存元信息）。"""
+        """登记渠道收到/生成的文件引用（大内容在文件系统，DB 只存元信息）。
+
+        `stored_file_id` 关联 files 模块的原件权威；旧调用不传时行为不变。
+        """
         principal = self.access.validate_principal(principal)
-        if not file_name or not file_path:
+        if not file_name or not (file_path or stored_file_id):
             raise InvalidInputError("附件缺少文件名或路径")
         return self.repo.create_attachment(
             owner_id=principal.user_id,
@@ -142,7 +146,13 @@ class AssistantService:
             mime=mime[:120],
             sha256=sha256,
             session_id=session_id,
+            stored_file_id=stored_file_id,
         )
+
+    async def get_attachment(self, principal: Principal, attachment_id: str) -> dict:
+        """按 owner 读附件元数据（含 stored_file_id，供 files 解析原件）。"""
+        principal = self.access.validate_principal(principal)
+        return self.repo.get_attachment(attachment_id, owner_id=principal.user_id)
 
     # ---- 提交 ------------------------------------------------------------------
 

@@ -51,6 +51,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     from backend.modules.delivery.routes import build_delivery_router
     from backend.modules.delivery.smtp import build_email_compat_router, build_email_router
     from backend.modules.evolution.routes import build_evolution_router
+    from backend.modules.files.routes import build_files_router
     from backend.modules.memory.routes import build_memory_router
     from backend.modules.models.routes import build_models_router
     from backend.modules.scheduling.routes import build_scheduling_router
@@ -64,6 +65,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate))
     app.include_router(build_assistant_compat_router(authenticate))
     app.include_router(build_channels_router(_LazyModule(registry, "channels"), authenticate))
+    app.include_router(build_files_router(_LazyModule(registry, "files"), authenticate))
     app.include_router(build_scheduling_router(
         _LazyModule(registry, "scheduling"), _LazyModule(registry, "channels"), authenticate,
     ))

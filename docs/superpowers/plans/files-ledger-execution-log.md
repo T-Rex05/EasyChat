@@ -107,3 +107,22 @@ python -m pytest tests/files/test_metadata.py tests/files/test_persistence.py -q
 
 下一步：F3 旧附件/报告桥接与微信/Web 接入。
 
+---
+
+## F3 — 旧附件/报告桥接、微信与 Web 接入
+
+- 旧 `attachments`/`artifacts` 追加 `stored_file_id`；`AssistantService.register_attachment` 增加可选 `stored_file_id`，旧调用（只传 file_path）行为不变；新增 `get_attachment`（按 owner）。
+- 微信媒体：`ChannelService._ingest_media` 下载/解密（保留原 SSRF 白名单与 AES 解密）后委托 `FileService.ingest_local_path`，再登记 attachment 并 `files.link(attachment)`；幂等作用域用**平台事件 ID + 媒体序号**（不是内部事件行 ID，事件行被清理后仍可幂等）。未装配 files 时保留旧路径。
+- Web：`backend/modules/files/routes.py` 显式路由 `POST/GET /api/files`、`GET /api/files/{id}`、`GET /api/files/{id}/content`、`DELETE /api/files/{id}?scope=`；下载鉴权 + RFC 5987 文件名 + `nosniff`/`no-store`，不暴露 storage_key。
+- `bootstrap` 构造 `FileService`（`settings.files_root = app.db 所在目录`）并注入 ChannelService；`app.py` 注册 files 路由。
+- 报告：本轮只保证 `artifact.stored_file_id` 可写、旧 `artifact_id` 发送路径不变；报告产物真正改由 files 保存放在 F10（此处明确未完成）。
+
+```powershell
+python -m pytest tests/files tests/contracts/test_wechat.py -q          # 63 passed
+python -m pytest tests/contracts/test_file_upload.py -q                  # 8 passed
+python -m pytest tests/contracts tests/delivery tests/assistant tests/architecture -q  # 158 passed
+```
+
+下一步：F4 账本 schema 与纯解析器。
+
+

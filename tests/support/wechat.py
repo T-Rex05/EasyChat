@@ -109,9 +109,13 @@ class FakeMediaFetcher:
 
 
 def make_channel_rig(tmp_path: Path, *, clock=None, media_fetcher: bool = True):
-    """独立渠道测试环境：真实临时 SQLite + FakeRuntime + FakeTransport。"""
+    """独立渠道测试环境：真实临时 SQLite + FakeRuntime + FakeTransport。
+
+    同时装配 files（增量 F3）：渠道媒体保存走统一文件权威。
+    """
     rig = make_rig(tmp_path, clock=clock, seed_access=True)
     rig.attach_assistant()
+    rig.attach_files()
     transport = FakeTransport()
     fetcher = FakeMediaFetcher() if media_fetcher else None
     rig.attach_channels(

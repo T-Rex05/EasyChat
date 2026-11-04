@@ -45,6 +45,9 @@ class ModuleRegistry:
     evolution: Any | None = None  # Task 11
     evolution_worker: Any | None = None  # Task 11
     adoption: Any | None = None  # Task 12
+    files: Any | None = None  # 增量 F1（FileService）
+    ledger: Any | None = None  # 增量 F4（LedgerService）
+    ledger_worker: Any | None = None  # 增量 F5（账本后台任务 worker）
 
 
 async def run_startup(registry: ModuleRegistry) -> None:
@@ -106,6 +109,17 @@ async def run_startup(registry: ModuleRegistry) -> None:
         )
         await registry.assistant.start()
 
+    if registry.access is not None and registry.files is None:
+        # 增量 F1：统一文件权威（原件落本地持久目录，元数据在 app.db）
+        from backend.modules.files.api import FileService
+        from backend.modules.files.local_store import LocalFileStore
+
+        registry.files = FileService(
+            db,
+            access=registry.access,
+            store=LocalFileStore(registry.settings.files_root),
+        )
+
     # Task 7：渠道模块（默认 wechat_enabled=False，不启动任何监听）。
     # 组装需要部署密钥（凭证加密）；缺失时明确跳过而不是以明文落库。
     if (
@@ -128,6 +142,7 @@ async def run_startup(registry: ModuleRegistry) -> None:
                 transport=transport,
                 media_fetcher=HttpMediaFetcher(transport),
                 media_dir=registry.settings.artifacts_dir / "channels",
+                files=registry.files,
             )
             await registry.channels.start_listeners()
         else:

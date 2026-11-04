@@ -113,6 +113,7 @@ class AssistantRepository:
         session_id: str = "",
         run_id: str | None = None,
         file_type: int = 0,
+        stored_file_id: str = "",
     ) -> str:
         from backend.shared.identifiers import new_attachment_id
 
@@ -120,9 +121,11 @@ class AssistantRepository:
         with self.db.transaction() as conn:
             conn.execute(
                 "INSERT INTO attachments(id, owner_id, session_id, run_id, file_name, file_path, "
-                "file_size, mime, file_type, sha256, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "file_size, mime, file_type, sha256, stored_file_id, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (attachment_id, owner_id, session_id, run_id, file_name, file_path,
-                 int(file_size), mime, int(file_type), sha256, utc_now_iso()),
+                 int(file_size), mime, int(file_type), sha256, stored_file_id or None,
+                 utc_now_iso()),
             )
         return attachment_id
 
