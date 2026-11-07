@@ -1,78 +1,129 @@
-# EasyChat 实施交接入口
+# Files & Ledger 增量执行日志（F0–F11）
 
-最后更新：2026-11-03。给负责后续实现的模型/开发者使用。此文件是文档，不是运行脚本。
+工作目录：`E:\PythonCode\EasyChat`。原项目 `E:\PythonCode\AgentForge` 未修改、未读取其真实数据。
+本日志只记录增量功能（files/ledger），旧主体 Task 0–16 的证据仍在 `easychat-execution-log.md`，本文件不覆盖它。
 
-## 从哪里开始
+约定：只记录**实际运行过**的命令与结果；未联调项单独列出，不把替身测试写成真实外联成功。
 
-工作目录：`E:\PythonCode\EasyChat`。原项目`E:\PythonCode\AgentForge`保持只读，不能在那里实施、清理或回退。
+---
 
-按顺序阅读：
+## F0 — 当前接口、迁移与合成基线
 
-1. [架构与工程规范](docs/superpowers/specs/2026-11-03-easychat-architecture.md)：模块职责、依赖、Interface、数据与状态、质量要求。
-2. [逐任务实施计划](docs/superpowers/plans/2026-11-03-easychat-implementation.md)：从Task 0开始，四个里程碑与17项任务。
-3. [源码定位与兼容基线](docs/superpowers/plans/2026-11-03-easychat-source-map.md)：关键文件/函数与144条静态路由装饰器；不是已核验的全部运行端点。
-4. [已确认需求与调研背景](docs/superpowers/specs/2026-11-03-easychat-design.md)：功能取舍、用户图片记忆方案及自进化范围。
-5. [Harness²评估](docs/research/2026-11-03-harness2-assessment.md)：固定上游源码调研，首版借鉴流程，不整包接入在线链路。
+### 0.1 起始状态核对（2026-11-04）
 
-优先级：用户最新明确要求 → 本文件确认范围 → 架构规范 → 实施任务 → 讨论背景 → 旧AgentForge文档。遇到实现细节不一致，先保持已确认能力和核心契约，记录差异，不以历史草案覆盖用户要求。
+- `git status --short`：`.planning/*`、`EASYCHAT_HANDOFF.md`、架构 spec 有修改，`2026-11-04-files-ledger-*` 为未跟踪新增；没有其他模型已完成的 files/ledger 代码（`backend/modules/files|ledger` 不存在，`tests/files|ledger` 不存在）。
+- HEAD：`6886531 docs: mark Task 0-16 complete with final verification and unverified external items`。
+- 结论：增量功能从 F0 开始，未重做旧 Task 0–16。
 
-## 已经完成与尚未完成
+### 0.2 桥接点实测（读源码，非按旧讨论稿推断）
 
-已完成：Task 0–16 全部完成。新架构测试 **303 passed**，前端 type-check/build 通过，Docker 镜像构建/容器 SPA/`/readyz`/Hermes 启用 ready 验证通过；旧 controller/service/db/rag/graphrag 等业务模块已删除，`main.py` 已切到 `backend.server:app`。逐任务证据见 `docs/superpowers/plans/easychat-execution-log.md`，进度见 `EASYCHAT_PROGRESS.md`。
-
-未完成（真实外联/部署验收，不属于代码任务）：真实 LLM/微信/MCP/SMTP/PDF 未联调；Runner 真实隔离未验收，自动执行保持关闭；新仓库未推送。
-
-没有复制：旧.git、真实.env/密钥、数据库/数据卷、上传、缓存、日志、已安装依赖。不要以为缺少这些文件就是拷贝失败，也不要自动从原项目取生产凭证。复制清单与hash位于`.planning/2026-11-03-easychat-design/copy-manifest.json`。
-
-原.gitignore会忽略docs、scripts、pyproject等部分重要文件；Task 0需选择性修正以便提交方案与必要源码，同时继续排除秘密和运行产物。不要先执行git clean、reset或批量删除“未跟踪文件”，当前源码本来就尚未提交。
-
-## 确认范围与任务对照
-
-| ID | 必须交付的结果 | 主要任务 |
+| 接入点 | 实际实现 | 增量用法 |
 |---|---|---|
-| R01 | EasyChat独立项目，不更改AgentForge，不擅自push | 0、16 |
-| R02 | SQLite业务库、保留Hermes原始历史；无MySQL/Redis/图向量必需服务 | 2、5、15、16 |
-| R03 | 移除本地知识库/RAG/GraphRAG、评测与专用数据层 | 5、15 |
-| R04 | WeKnora等MCP按需调用，允许同机或异机，失败不影响普通聊天 | 5、7、16 |
-| R05 | 保留微信iLink、Web、多端扩展、附件和会话恢复 | 5、6、7 |
-| R06 | 保留完整RBAC、角色、用户单独授权、工具集控制；部门未批准删除 | 3、7、15 |
-| R07 | 保留Token用户排行榜和统计，包含记忆/进化成本，不重复累计 | 4、5、11 |
-| R08 | 保留个人技能库、版本、固定保护、归档与恢复 | 10、12 |
-| R09 | 保留微信提醒、可靠投递和最小执行证据 | 6、8、14 |
-| R10 | 邮件发送、SMTP/收件人和PDF报告保留、按需启用 | 8、14、16 |
-| R11 | 用户事实/偏好、事件、经验记忆，来源、纠正、中文检索与遗忘 | 9 |
-| R12 | 自进化从反馈到经验/技能/脚本、验证、启用与回滚 | 10、11、12、13 |
-| R13 | 自进化不得直接修改生产服务源码、鉴权、权限、迁移和部署 | 3、11、12、13 |
-| R14 | 删除技能社区、论文复现、Text-to-SQL等冗余平台业务 | 10、15 |
-| R15 | 模块化单体、显式装配、小Interface、无路由SQL/循环依赖 | 1～16，架构测试持续检查 |
-| R16 | 单worker、有界缓存/任务、常态主进程RSS<1GiB目标、真实资源验证 | 5、6、11、13、14、16 |
+| `modules/assistant/api.py:register_attachment` | 写 `attachments`（file_name/file_path/file_size/mime/sha256/session_id），返回 `att_…` | 追加 `stored_file_id` 列并保持旧 ID 可用 |
+| `modules/assistant/contracts.py:RunCommand.attachment_ids` | tuple[str,...] 写入 `runs.attachment_ids` JSON | 继续只传引用；files/ledger 按 ID 取内容 |
+| `modules/channels/wechat/media.py:MediaFetcher.fetch` | 下载/解密到 `media_dir/<event_id>/`，返回 FetchedMedia | 保留协议/SSRF/解密；最终持久保存委托 files |
+| `modules/channels/api.py:_ingest_media` | fetch → `assistant.register_attachment` | 改为 fetch 暂存 → `files.save_stream` → 登记 attachment 引用 |
+| `modules/delivery/repository.py:create_artifact/get_artifact` | `artifacts(id, owner_id, run_id, kind, file_path, sha256, file_size, mime, …)` | 追加 `stored_file_id`；旧 artifact_id 仍可发送 |
+| `modules/delivery/reports.py` | 渲染后 `create_artifact`，邮件只重试同一 artifact | 报告产物同时登记 files 引用 |
+| `platform/jobs.py` | `enqueue/claim (lease)/complete/fail/recover_expired_leases`，`dedup_key` 全局唯一 | ledger 解析/提取/提交/分析复用，不新建队列 |
+| `platform/sqlite.py` | 逐语句迁移 + checksum；`executescript` 禁用 | 新增迁移只追加，不改已提交文件 |
+| 备份/清理 | 当前没有统一备份注册；`purge_old_events` 只清渠道事件 | F11 新增 `files.reconcile`/lifecycle 与运维文档 |
 
-“保留邮件/PDF”不是把菜单留着却删掉实现；“保留RBAC”不是用单管理员替代；“保留Token排行”不是只留日志；“精简记忆”不是只保留摘要；“完整自进化”不是生成几条反思文字。
+### 0.3 迁移编号
 
-## 关键工程约束
+`backend/platform/migrations/` 实测最新为 `0010_delivery_email.sql`。本次追加：
 
-- 一个Assistant执行入口，Web/微信/定时任务共用权限、模型、记忆、run与落库规则；渠道只处理协议和显示/投递。
-- Module拥有自己的数据写入口；只通过公开Interface跨模块协作。SQLite先用具体Repository，不为不存在的第二种数据库创建兼容平台。
-- app.db是应用业务权威，state.db是引擎历史权威，技能/附件大内容是不可变文件产物。没有跨库原子事务，不自动重跑有副作用工具“修复”投影。
-- 唯一用量计量入口、唯一进化调度器、唯一技能激活入口；复用Hermes时防止原生后台路径绕过这些入口。
-- 先做必要行为测试，真实临时SQLite，不mock自己所有SQL；网络和外发用替身。真实SMTP/微信发送、部署、远程push仍需用户实际明确指令。
-- 所有默认预算/留存/容量是架构给出的可配置起始值，不是已测量结论。缺少真实Runner隔离验收时不能启用任意脚本自动执行。
-- 每项任务完成要记录真实命令/结果、schema和commit；不得把计划中的命令写成已经运行。保持阶段可回退、旧桥接随迁移完成删除。
+- `0011_files.sql`（F1）
+- `0012_ledger.sql`（F4）
 
-## 可以直接交给执行模型的指令
+已提交的 0001–0010 checksum 未修改。
 
-```text
-请在 E:\PythonCode\EasyChat 按 EASYCHAT_PROGRESS.md 的当前进度继续实施。
-先读 EASYCHAT_PROGRESS.md、架构规范、实施计划和 easychat-execution-log.md，
-从本文件与 `EASYCHAT_PROGRESS.md` 的未验证项开始，优先做真实环境验收（LLM/微信/MCP/SMTP/PDF、Runner 隔离），
-不要重复已完成的 Task 0–16 代码迁移。任何变更仍需本地测试和提交，
-更新 easychat-execution-log.md 与 EASYCHAT_PROGRESS.md。
-不要修改 E:\PythonCode\AgentForge，不使用旧生产凭证，不自动推送。
-严格保留RBAC、Token排行榜、个人技能库、微信提醒和执行记录，
-邮件/PDF按需能力也要保留。架构采用模块化单体和单一执行/计量/进化入口，
-不要通过一个万能Manager、全局mapper或多套后台循环实现功能。
-离线测试可自主完成；涉及真实外发、部署或凭证缺失时单独说明。
-不要在前几个任务就宣称全部完成；按四个里程碑交付并明确未验证项。
+### 0.4 依赖核查（实测已安装版本）
+
+| 能力 | 选用 | 版本/结论 |
+|---|---|---|
+| XLSX 读取 | `openpyxl`（只读、`data_only=True`、不加载 VBA、不计算公式） | 3.1.5 已安装 |
+| CSV 读取 | 标准库 `csv` + 自实现编码探测（utf-8-sig/utf-8/gb18030） | 标准库 |
+| 图片解码/像素限制 | `Pillow`（仅图像提取用；缺失时明确 capability_unavailable） | 12.3.0 已安装，仍保持可选导入 |
+| PNG 夹具 | 标准库 zlib/struct | 不依赖 Pillow |
+| PDF | 复用 `integrations/pdf.py`（现有可选渲染器） | 不新增依赖 |
+| 测试 | pytest 9.1.1（`asyncio_mode=auto`）、ruff 0.15.12 | — |
+
+### 0.5 测试目录映射
+
+增量测试落在 `tests/files/`、`tests/ledger/`、`tests/contracts/test_file_upload.py`、`tests/contracts/test_ledger_api.py`；
+`tests/files|ledger` 当前不存在，`tests/storage`、`tests/contracts`、`tests/delivery`、`tests/access` 为既有目录，命令按实际名称执行。
+
+### 0.6 基线（本轮实际运行）
+
+```powershell
+python -m pytest tests/architecture tests/contracts tests/access tests/assistant tests/models tests/storage tests/usage tests/delivery tests/memory tests/skills tests/evolution -q
 ```
 
-本文件最初由方案作者编写（当时未开始任何 Task 的业务实现）。当前 Task 0–7 已由执行模型完成；接手者先按 `EASYCHAT_PROGRESS.md` 核对工作区与最新提交，继续现有进度，不覆盖后续改动。
+结果：`303 passed in 105.83s`（与进度文档一致；本轮为实际重跑证据）。
+
+### 0.7 新增产物
+
+- `tests/fixtures/ledger/README.md`：合成夹具说明与禁止事项。
+- `tests/support/ledger_fixtures.py`：合成微信 XLSX/CSV、通用 CSV、多行引号 CSV、PNG、假视觉结果、对账场景。
+- 本文件。
+
+### 0.8 未验证项（F0 时点）
+
+- 真实微信支付导出的 XLSX 列名/说明行变体未用真实账单验证（只按公开格式与合成样本设计，解析器对未知列明确失败/待审）。
+- 真实 OCR/视觉服务未联调（F6 用 FakeVision）。
+
+下一步：F1 统一文件模型与 `0011_files.sql`。
+
+---
+
+## F1 — 统一文件模型与 0011 迁移
+
+- 迁移：`0011_files.sql`（新增 `stored_files`、`upload_receipts`、`file_references`、`file_extractions`；旧 `attachments`/`artifacts` 追加 `stored_file_id`）。已提交的 0001–0010 checksum 未改。
+- 代码：`backend/modules/files/{contracts,repository,local_store,api}.py`；权限新增 `file.upload/read/delete`（admin+user 默认授予，跨 owner 仍需 `system.manage`）。
+- 关键规则：owner 由 Principal 决定；外部 metadata 不能指定 owner/storage_key；同 owner 同 sha256 复用文件但每次上传独立收据；跨 owner 不去重；删除一条引用不删共享原件；FileRecord 不含绝对路径。
+- 测试命令与结果：
+
+```powershell
+python -m pytest tests/files -q        # F1+F2 合并后 30 passed
+python -m pytest tests/storage tests/architecture tests/access -q   # 61 passed
+```
+
+## F2 — 流式保存、崩溃恢复与受限读取
+
+- `save_stream`/`ingest_local_path`/`save_bytes`/`save_derived`/`save_report` 分块写 `.part` + sha256，flush/fsync 后同文件系统原子 rename，再短事务提交 ready+收据+引用；移动后复核 hash。
+原件本地长期保存，SQLite记录元数据和账目；所有分析可追溯来源、幂等且授权。
+模型只识别意图/分类/解释，金额和退款统计由受控程序执行。
+用合成账单和假视觉做默认测试，不把桌面真实账单、秘密和运行数据加入Git。
+每任务记录真实测试证据与本地提交，不自动推送；真实外发另按用户授权执行。
+```
+
+## 微信 A+C 增量交接（2026-11-05 第四轮 care 收尾）
+
+范围：微信「事务外脑 + 人格情绪层」A+C，含 A5 账单对话、`/账单确认`、weekly 周报、微信聊天窗口文件上传。
+
+状态：代码已落地，第四轮 care 并发收尾完成。P1-1～P1-5 保持闭合：care 只在 delivery 实际 `sent` 回调后写 `last_care_at`/`mood_care_log`，入队和 failed 复用不标记，重复回调幂等。第三轮修复两个 P2 边界：
+
+- 周报“下周”不再只按 `next_run_at` 过滤：`SchedulingService.upcoming(start=...)` 会把 once/interval/daily/weekly 重复计划纯投影到明天 00:00 后的下一次 occurrence，不修改数据库；50 条上限在展开排序后截断。真实 SQLite 集成测试覆盖每日、每周、一次性、briefing 自身、边界、interval 和截断。
+- 删除/关闭情绪会取消尚未发送的 `source=care` delivery（`cancelled`）和 pending/retry `mood.care` job；`delete_mood` 同时清空 `last_care_at`、关闭 opt-in。第四轮新增 `0017_care_epoch`：`care_epoch_at` 只在删除/关闭/降低主动性时推进；`mark_care_sent` 在同一个 `BEGIN IMMEDIATE` 事务内校验 opt-in/代际后写入，回调与删除不再有“检查后插入”的 TOCTOU；`proactivity=low` 也会取消 pending care。`sending` 已开始外部调用的窗口不可撤回；目标解绑后旧 target 的 pending delivery 仍可能发出，见设计 §14.4/§23.5。
+
+仍未达到生产可交付：真实 iLink 推送、真实语音格式/STT、真实微信上传、真实模型效果、部署长稳未验证；`memory_correct`、每日 10,000 tokens 预算、failed care 当天补偿重试、`on_sent` 写库异常补偿仍不在范围。不能把 required 套件全绿当成这些外部项的验收通过。
+
+容器冒烟（2026-11-05）：本机临时用可达 PyPI 镜像构建单容器（默认 PyPI 直连遇到 wheel hash mismatch），启动后 `/healthz`、`/readyz`、SPA、注册/登录、profile 读写、情绪删除、multipart 上传均 200；迁移到 `0017`，`care_epoch_at` 存在，重启后卷数据仍可登录。首次启动暴露 `python-multipart` 缺失，已加入 `docker/requirements-core.txt`。默认 Dockerfile 的完整直连构建仍需在可靠网络/镜像源下复跑；真实 iLink/STT/模型/部署长稳仍未验证。
+
+- 设计：[2026-11-04-wechat-a-c-design.md](docs/superpowers/specs/2026-11-04-wechat-a-c-design.md)（§14.4/§14.5 删除与在途 care、§23.5 第三/四轮收尾、0014+0015+0016+0017）
+- 验收报告与修复提示词：[2026-11-04-wechat-a-c-acceptance.md](docs/superpowers/plans/2026-11-04-wechat-a-c-acceptance.md)（§7.5、§7.6 验收）
+
+接手模型不要重做已完成的 A+C 实现；后续优先是真实外联验证与产品确认“模型不可用时显式记住是否回退正则”“failed care 是否当天重试”“on_sent 写库异常是否补偿”，不要在未确认时改语义。真实外联没有凭证时单列为未验证，不伪造结果。变更后更新设计 §23 与验收 §7，并按报告中的 required 命令复跑。
+
+## 超级代理增量交接（2026-11-08 feature/superagent 分支）
+
+范围：参考 deepseek-ai/dsh-superagent-prototype 的领域模型（Source → Ticket → Executor → PR → Reply），在 EasyChat 上落地「微信收需求 → 后台编码代理 → 自动提 PR → 微信回信」。
+
+- 模块：`backend/modules/superagent/`（contracts/repository/api/routes/worker/github），路由 `/api/superagent/*`，迁移 `0019_superagent.sql`（settings 单行 + tasks 队列 + events 时间线）。
+- 任务表自身即队列（queued→running→终态），不走共享 jobs 表：编码任务执行可达数十分钟，超过 JobQueue lease 语义；启动恢复沿用 assistant 语义（遗留 running 标 failed，可手动重试）。
+- 执行链：`SuperagentWorker.tick()` 认领 → git 工作区（`data/artifacts/superagent/<owner>__<repo>`，token 只出现在一次性 fetch/push URL，不落 .git/config）→ 复用 Hermes 运行时（独立 session_id，新接缝 `HermesRuntimeAdapter.prepare_session_workspace/release_session_workspace` 按 session 注入 CWD 覆盖）→ terminal/file/web 工具集 → git commit/push → GitHub/Gitee REST 创建 PR → delivery 队列回信微信（无绑定时仅面板可见）。
+- 入口：微信对话经 `superagent_submit_task` 工具（`backend/tools/business/superagent_tools.py`，`__always_available__`，身份来自 ToolContext）；Web 面板 `SuperagentView.vue`（配置仓库/token + 建任务 + 轨迹时间线，轮询 5s）。
+- 权限：`superagent.view/create/manage` 三键；admin 默认全量、user 默认 view+create；token 经既有 AES-GCM（EASYCHAT_ENCRYPTION_SECRET）加密存储，面板只出掩码。
+- 测试：`python -m pytest tests/superagent tests/contracts/test_superagent_api.py tests/storage tests/architecture -q`（69 passed）；git/PR/运行时全部可注入假件，离线可重复。
+- 已知边界：真实 GitHub push/PR、真实模型长任务、并发 >1 的终端容器共享语义未实测；服务端审批回调沿用 fail-closed（tirith 标记的命令拒绝执行）。

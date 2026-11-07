@@ -87,6 +87,40 @@ class HermesRuntimeAdapter(ExecutionRuntime):
     def _current_thread_id(self) -> str | None:
         return getattr(self, "_current_thread_ctx", None)
 
+    def register_extra_tools(self, tools: Any) -> int:
+        """注册 bootstrap 构造的业务工具（提醒/账本/收件箱等）。
+
+        必须在 Assistant worker 与渠道监听启动前调用；重复调用幂等。
+        """
+        from backend.runtime.hermes import tools as hermes_tools
+
+        hermes_tools._ensure_hermes_loaded()
+        return hermes_tools.register_safe_project_tools(
+            thread_context_provider=self._current_thread_id,
+            extra_tools=list(tools or ()),
+        )
+
+    # ---- 会话工作区（superagent 等独立工作区执行方） --------------------------------
+
+    def prepare_session_workspace(self, session_id: str, workspace: str) -> None:
+        """把 session 的工具工作目录锚定到 workspace（terminal/file 的 CWD 覆盖）。
+
+        键是 AIAgent 的 session_id（顶层工具调用的 task_id）；CWD-only 覆盖
+        共享 default 容器，不触发沙箱隔离。业务层经 duck-typing 调用，
+        不导入 Hermes 内部模块。
+        """
+        from backend.runtime.hermes.paths import ensure_hermes_environment
+
+        ensure_hermes_environment(self.hermes_home)
+        from tools.terminal_tool import register_task_env_overrides  # noqa: PLC0415
+
+        register_task_env_overrides(session_id, {"cwd": str(workspace)})
+
+    def release_session_workspace(self, session_id: str) -> None:
+        from tools.terminal_tool import clear_task_env_overrides  # noqa: PLC0415
+
+        clear_task_env_overrides(session_id)
+
     # ---- Agent 缓存 ----------------------------------------------------------------
 
     def _cache_key(self, request: RuntimeRequest) -> tuple:
@@ -168,7 +202,7 @@ class HermesRuntimeAdapter(ExecutionRuntime):
         call_id = begin_for_run(
             self.usage,
             owner_id=request.context.principal.user_id,
-            source=request.context.source if request.context.source in ("chat", "memory", "evolution", "schedule") else "chat",
+            source=request.context.source if request.context.source in ("chat", "memory", "evolution", "schedule", "superagent") else "chat",
             provider=handle.model_provider,
             model=handle.model_name,
             run_id=request.context.run_id,
@@ -185,17 +219,56 @@ class HermesRuntimeAdapter(ExecutionRuntime):
             events.put(("tool_started", {"iteration": iteration, "tools": _safe_tools(prev_tools)}))
 
         def _sync_run() -> None:
+            # 审计 #2：服务端 run 无人值守，Hermes 的非交互分支会默认放行全部
+            # 需审批命令。这里显式离开该分支（interactive 上下文）并注册自动
+            # 拒绝回调——良性命令照常执行，被 tirith/危险命令检测标记的命令
+            # 一律拒绝；线程本地状态在 finally 里恢复。
+            interactive_token = None
+            approval_installed = False
+            try:
+                from tools import terminal_tool
+                from tools.approval import reset_hermes_interactive_context, set_hermes_interactive_context
+
+                def _deny_unattended(command, description, **kwargs) -> str:
+                    logger.warning(
+                        "命令需人工审批但服务端无审批通道，已拒绝 run_id=%s: %s (%s)",
+                        request.context.run_id, str(command)[:160], str(description)[:200],
+                    )
+                    return "deny"
+
+                # 顺序不可换：回调必须先于 interactive 上下文就位，否则装配
+                # 中途失败会留下"交互模式+无回调"，内核会走 input() 兜底挂起。
+                terminal_tool.set_approval_callback(_deny_unattended)
+                interactive_token = set_hermes_interactive_context(True)
+                approval_installed = True
+            except Exception:  # noqa: BLE001  审批装配失败时拒绝兜底由调用方保证
+                logger.exception("审批通道装配失败 run_id=%s；本轮命令按内核默认处理", request.context.run_id)
             try:
                 result = self._runner(handle.agent, request, on_delta, on_reasoning, on_step)
                 post = snapshot(handle.agent)
                 delta = diff(pre, post)
-                complete_for_run(self.usage, call_id, delta=delta,
-                                 model=handle.model_name, estimated=bool(request.text))
+                complete_for_run(
+                    self.usage,
+                    call_id,
+                    delta=delta,
+                    model=handle.model_name,
+                    estimated=bool(request.text),
+                )
                 events.put(("completed", {"result": _safe_result(result), "api_calls": delta.get("session_api_calls", 0)}))
             except BaseException as exc:  # noqa: BLE001  桥接层必须把失败转成事件
                 logger.exception("run 执行失败 run_id=%s", request.context.run_id)
                 events.put(("failed", {"error": str(exc)}))
             finally:
+                if approval_installed:
+                    try:
+                        from tools import terminal_tool
+                        from tools.approval import reset_hermes_interactive_context
+
+                        terminal_tool.set_approval_callback(None)
+                        if interactive_token is not None:
+                            reset_hermes_interactive_context(interactive_token)
+                    except Exception:  # noqa: BLE001  线程本地清理尽力而为
+                        logger.exception("审批通道清理失败 run_id=%s", request.context.run_id)
                 events.put(None)
 
         worker_ctx = contextvars.copy_context()
@@ -256,13 +329,23 @@ class HermesRuntimeAdapter(ExecutionRuntime):
             agent.stream_delta_callback = on_delta
             agent.reasoning_callback = on_reasoning
             agent.step_callback = on_step
+            # 人格/记忆/附件是每轮易变的上下文：走 ephemeral_system_prompt 与
+            # 合成 user message，绝不写进会持久化的 system_message。
+            combined_system = "\n\n".join(
+                part.strip() for part in (request.system_context, request.persona_context) if part.strip()
+            )
+            agent.ephemeral_system_prompt = combined_system or None
+            user_message = request.text
+            if request.context_prefix.strip():
+                user_message = f"{request.context_prefix.strip()}\n\n{request.text}"
             try:
                 # 会话连续性由 agent 绑定的 SessionDB（state.db）提供；
                 # UI 投影历史不得在此拼接（架构 §5.1：conversations 仅是投影）。
                 return run_conversation(
                     agent,
-                    request.text,
-                    system_message=request.system_context or None,
+                    user_message,
+                    system_message=None,
+                    persist_user_message=request.persist_user_message or request.text,
                 )
             finally:
                 agent.stream_delta_callback = None

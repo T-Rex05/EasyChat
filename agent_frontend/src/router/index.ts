@@ -24,6 +24,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create' },
   },
   {
+    path: '/wechat',
+    name: 'WeChatSettings',
+    component: () => import('../views/WeChatSettingsView.vue'),
+    meta: { title: '微信偏好', icon: '💬', requiresAuth: true, permission: 'chat.use' },
+  },
+  {
     path: '/schedules',
     name: 'Schedules',
     component: () => import('../views/SchedulesView.vue'),
@@ -34,6 +40,12 @@ const routes: RouteRecordRaw[] = [
     name: 'Ledger',
     component: () => import('../views/LedgerView.vue'),
     meta: { title: '账单', icon: '📄', requiresAuth: true, permission: 'ledger.view' },
+  },
+  {
+    path: '/superagent',
+    name: 'Superagent',
+    component: () => import('../views/SuperagentView.vue'),
+    meta: { title: '超级代理', icon: '🤖', requiresAuth: true, permission: 'superagent.view' },
   },
   {
     path: '/memory',

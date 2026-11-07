@@ -13,9 +13,42 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.bootstrap import AppSettings, ModuleRegistry, default_settings, run_shutdown, run_startup
 from backend.shared.errors import AppError, CapabilityUnavailableError
+from backend.utils.rate_limit import AuthRateLimiter, make_auth_rate_limit_middleware
+
+
+class SPAStaticFiles(StaticFiles):
+    """Vue history 路由回退：非 API/静态资源 404 时返回 index.html。
+
+    `/login`、`/schedules` 等前端路由在刷新或直接打开时不能落到 FastAPI 的
+    JSON 404；`/api/*` 与带扩展名的缺失资源仍保持真实 404。
+    """
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if (
+                exc.status_code != 404
+                or self._is_api_scope(scope)
+                or not self._is_spa_path(path)
+            ):
+                raise
+            return await super().get_response("index.html", scope)
+
+    @staticmethod
+    def _is_api_scope(scope) -> bool:
+        request_path = str(scope.get("path") or "")
+        return request_path == "/api" or request_path.startswith("/api/")
+
+    @staticmethod
+    def _is_spa_path(path: str) -> bool:
+        if path == "api" or path.startswith("api/"):
+            return False
+        return "." not in path.rsplit("/", 1)[-1]
 
 
 class _LazyModule:
@@ -42,6 +75,16 @@ def _authenticate(registry: ModuleRegistry):
     return authenticate
 
 
+def _authenticate_ticket(registry: ModuleRegistry):
+    def authenticate_ticket(ticket: str):
+        access = registry.access
+        if access is None:
+            raise CapabilityUnavailableError("认证模块未就绪")
+        return access.consume_sse_ticket(ticket)
+
+    return authenticate_ticket
+
+
 def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     """Task 15：显式注册新模块路由，不扫描 backend/controller。"""
     from backend.modules.access.routes import build_access_router
@@ -52,22 +95,28 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     from backend.modules.delivery.smtp import build_email_compat_router, build_email_router
     from backend.modules.evolution.routes import build_evolution_router
     from backend.modules.files.routes import build_files_router
+    from backend.modules.inbox.routes import build_inbox_router
     from backend.modules.ledger.routes import build_ledger_router
     from backend.modules.memory.routes import build_memory_router
     from backend.modules.models.routes import build_models_router
+    from backend.modules.profiles.routes import build_profiles_router
     from backend.modules.scheduling.routes import build_scheduling_router
     from backend.modules.skills.routes import build_skills_router
+    from backend.modules.superagent.routes import build_superagent_router
     from backend.modules.usage.routes import build_usage_router
 
     authenticate = _authenticate(registry)
+    authenticate_ticket = _authenticate_ticket(registry)
     app.include_router(build_access_router(_LazyModule(registry, "access")))
     app.include_router(build_usage_router(_LazyModule(registry, "usage"), authenticate))
     app.include_router(build_models_router(_LazyModule(registry, "models"), authenticate))
-    app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate))
+    app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate, authenticate_ticket))
     app.include_router(build_assistant_compat_router(authenticate))
     app.include_router(build_channels_router(_LazyModule(registry, "channels"), authenticate))
     app.include_router(build_files_router(_LazyModule(registry, "files"), authenticate))
     app.include_router(build_ledger_router(_LazyModule(registry, "ledger"), authenticate))
+    app.include_router(build_profiles_router(_LazyModule(registry, "profiles"), authenticate))
+    app.include_router(build_inbox_router(_LazyModule(registry, "inbox"), authenticate))
     app.include_router(build_scheduling_router(
         _LazyModule(registry, "scheduling"), _LazyModule(registry, "channels"), authenticate,
     ))
@@ -76,6 +125,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_email_compat_router(_LazyModule(registry, "email"), authenticate))
     app.include_router(build_memory_router(_LazyModule(registry, "memory"), authenticate))
     app.include_router(build_skills_router(_LazyModule(registry, "skills"), authenticate))
+    app.include_router(build_superagent_router(_LazyModule(registry, "superagent"), authenticate))
     app.include_router(build_evolution_router(
         _LazyModule(registry, "evolution"), _LazyModule(registry, "adoption"), authenticate,
     ))
@@ -110,6 +160,12 @@ def create_app(
     app.state.settings = settings
     app.state.registry = registry
     app.state.ready = False
+    # 登录/注册限流（审计 #5）：生产配置默认开启；测试工厂缺省关闭
+    app.state.auth_rate_limiter = AuthRateLimiter()
+    if settings.auth_rate_limit_enabled:
+        app.middleware("http")(
+            make_auth_rate_limit_middleware(app.state.auth_rate_limiter)
+        )
     _register_explicit_routers(app, registry)
 
     @app.get("/healthz", include_in_schema=False)
@@ -130,6 +186,6 @@ def create_app(
     # 生产镜像把前端 dist 放到 /app/static；API 路由已先注册，挂载在最后不吞接口。
     static_dir = Path(__file__).resolve().parents[1] / "static"
     if (static_dir / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="spa")
+        app.mount("/", SPAStaticFiles(directory=static_dir, html=True), name="spa")
 
     return app

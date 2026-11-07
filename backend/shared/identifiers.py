@@ -39,6 +39,9 @@ _PREFIX_LEDGER_CATEGORY = "lct"
 _PREFIX_LEDGER_RULE = "lru"
 _PREFIX_LEDGER_CHANGE = "lch"
 _PREFIX_LEDGER_ANALYSIS = "lan"
+_PREFIX_MOOD = "mood"
+_PREFIX_INBOX = "inb"
+_PREFIX_SUPERAGENT_TASK = "sag"
 
 
 def _new_id(prefix: str) -> str:
@@ -159,6 +162,18 @@ def new_ledger_change_id() -> str:
 
 def new_analysis_id() -> str:
     return _new_id(_PREFIX_LEDGER_ANALYSIS)
+
+
+def new_mood_id() -> str:
+    return _new_id(_PREFIX_MOOD)
+
+
+def new_inbox_id() -> str:
+    return _new_id(_PREFIX_INBOX)
+
+
+def new_superagent_task_id() -> str:
+    return _new_id(_PREFIX_SUPERAGENT_TASK)
 
 
 def new_channel_account_id() -> str:

@@ -39,6 +39,10 @@ PERMISSION_DEFS: tuple[dict, ...] = (
     {"key": "ledger.edit",     "label": "修正账目",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 30, "description": "修正分类/备注等可编辑字段"},
     {"key": "ledger.export",   "label": "导出报告",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 40, "description": "导出分析报告与明细"},
     {"key": "ledger.manage",   "label": "管理账本",   "group_name": "ledger",  "group_label": "账本",    "sort_order": 50, "description": "跨用户管理账本数据与删除范围"},
+    # 超级代理（微信收需求 → 后台编码 → 自动提 PR）
+    {"key": "superagent.view",   "label": "查看编码任务", "group_name": "superagent", "group_label": "超级代理", "sort_order": 10, "description": "查看自己的编码任务与执行轨迹"},
+    {"key": "superagent.create", "label": "提交编码任务", "group_name": "superagent", "group_label": "超级代理", "sort_order": 20, "description": "提交编码任务给后台代理执行"},
+    {"key": "superagent.manage", "label": "管理超级代理", "group_name": "superagent", "group_label": "超级代理", "sort_order": 30, "description": "配置仓库/凭证与跨用户管理任务"},
 )
 
 ALL_PERMISSION_KEYS: frozenset[str] = frozenset(d["key"] for d in PERMISSION_DEFS)
@@ -52,6 +56,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
         "evolution.view", "evolution.manage",
         "file.upload", "file.read", "file.delete",
         "ledger.view", "ledger.import", "ledger.edit", "ledger.export", "ledger.manage",
+        "superagent.view", "superagent.create", "superagent.manage",
     ),
     "user": (
         "chat.use", "skill.create",
@@ -59,6 +64,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, tuple[str, ...]] = {
         "cron.create", "trace.view",
         "file.upload", "file.read", "file.delete",
         "ledger.view", "ledger.import", "ledger.edit", "ledger.export",
+        "superagent.view", "superagent.create",
     ),
 }
 
@@ -82,7 +88,10 @@ DEPRECATED_TOOLSETS: frozenset[str] = frozenset(
 
 DEFAULT_ROLE_TOOLSETS: dict[str, tuple[str, ...]] = {
     "super_admin": tuple(t["key"] for t in TOOLSET_DEFS),
-    "admin": ("terminal", "file", "web", "notification", "schedule"),
+    # 纵深防御（审计 #2）：服务端 run 无人值守，默认不授予宿主执行工具集；
+    # adapter 层的 fail-closed 审批回调是不变量，接受风险的运维可经
+    # system.manage 按角色显式重新授予 terminal/file。
+    "admin": ("web", "notification", "schedule"),
     "user": ("web",),
 }
 
