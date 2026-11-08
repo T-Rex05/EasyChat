@@ -32,7 +32,6 @@ from backend.shared.crypto import decrypt_secret
 from backend.shared.errors import AppError, ForbiddenError
 from tests.support.rig import TEST_ENCRYPTION_SECRET
 from tests.support.wechat import (
-    FakeTransport,
     image_message,
     inbound,
     make_channel_rig,
@@ -128,6 +127,20 @@ async def test_disabled_user_rejected_immediately_and_recovers(env):
     assert recovered.accepted is True
     await rig.drain_runs()
     assert rig.runtime.execute_count == 1
+
+
+async def test_delivery_target_uses_latest_context_token(env):
+    rig, _transport, _media = env
+    admin = _admin(rig)
+    user = _user(rig)
+    account = _register(rig, admin)
+    _bind(rig, admin, account, "wx_ctx", user)
+    rig.channels.repo.set_session_cursor(
+        "wechat", account.account_id, "wx_ctx", "wx_ctx", "sess_ctx", "ctx-latest"
+    )
+    target = rig.channels.delivery_target_for_owner(user.user_id)
+    assert target is not None
+    assert target.context_token == "ctx-latest"
 
 
 async def test_unbind_takes_effect_on_next_message(env):
@@ -305,6 +318,34 @@ async def test_media_fetch_failure_does_not_block_text(env):
 # ── 异常/重投与身份边界 ───────────────────────────────────────────────────────
 
 
+async def test_crisis_message_gets_fixed_resources_without_model_run(env):
+    rig, _, _ = env
+    admin = _admin(rig)
+    user = _user(rig)
+    account = _register(rig, admin)
+    _bind(rig, admin, account, "wx_crisis", user)
+
+    outcome = await rig.channels.handle_inbound(
+        inbound(
+            rig, account,
+            text_message("我真的不想活了", message_id="crisis-1", from_user="wx_crisis"),
+        )
+    )
+    assert outcome.accepted is True
+    assert "12356" in outcome.reply_text and "120" in outcome.reply_text
+    # 平台重投同一事件时，即使上次发送失败，也必须能再拿到同一条危机回复。
+    replay = await rig.channels.handle_inbound(
+        inbound(
+            rig, account,
+            text_message("我真的不想活了", message_id="crisis-1", from_user="wx_crisis"),
+        )
+    )
+    assert replay.duplicate is True
+    assert "12356" in replay.reply_text
+    await rig.drain_runs()
+    assert rig.runtime.execute_count == 0
+
+
 async def test_duplicate_message_id_from_two_users_both_execute(env):
     rig, _, _ = env
     admin = _admin(rig)
@@ -318,6 +359,10 @@ async def test_duplicate_message_id_from_two_users_both_execute(env):
     assert (await rig.channels.handle_inbound(inbound(rig, account, msg2))).accepted
     await rig.drain_runs()
     assert rig.runtime.execute_count == 2
+
+
+def clock_now(rig) -> float:
+    return rig.clock() + 10_000
 
 
 async def test_internal_failure_releases_event_for_redelivery(env):
@@ -335,12 +380,20 @@ async def test_internal_failure_releases_event_for_redelivery(env):
     failed = await rig.channels.handle_inbound(inbound(rig, account, text_message("会重投", message_id="retry-1")))
     assert failed.accepted is False
     assert failed.reason == "internal"
-    assert _rows(rig, "SELECT count(*) AS c FROM channel_events")[0]["c"] == 0  # 事件已撤回
+    # T5 持久 inbox：内部失败不再删事件（上游未必重投），保留 envelope 等待本地重放
+    assert _rows(rig, "SELECT count(*) AS c FROM channel_events")[0]["c"] == 1
+    failed_row = _rows(rig, "SELECT processing_state FROM channel_events")[0]
+    assert failed_row["processing_state"] == "failed"
 
+    # 本地重放成功（submit 已恢复）
     rig.assistant.submit = original_submit
-    retried = await rig.channels.handle_inbound(inbound(rig, account, text_message("会重投", message_id="retry-1")))
-    assert retried.accepted is True
+    replayed = await rig.channels.replay_due_events(now=clock_now(rig), limit=5)
+    assert replayed == 1
     await rig.drain_runs()
+    assert rig.runtime.execute_count == 1
+    # 平台重投：事件已存在 → 去重，不再执行
+    retried = await rig.channels.handle_inbound(inbound(rig, account, text_message("会重投", message_id="retry-1")))
+    assert retried.accepted is False and retried.duplicate is True
     assert rig.runtime.execute_count == 1
 
 

@@ -44,13 +44,32 @@ def _sse_frame(seq: int | None, payload: dict[str, Any]) -> str:
     return prefix + f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def build_web_chat_router(assistant: AssistantService, authenticate: Any) -> APIRouter:
-    """authenticate: Callable[[str], Principal]（bootstrap 注入 access.authenticate_token）。"""
+def build_web_chat_router(
+    assistant: AssistantService,
+    authenticate: Any,
+    authenticate_ticket: Any = None,
+) -> APIRouter:
+    """authenticate: Callable[[str], Principal]（bootstrap 注入 access.authenticate_token）。
+
+    authenticate_ticket: Callable[[str], Principal]（注入 access.consume_sse_ticket）。
+    审计 #3：EventSource 无法带 Header，但 30 天期 JWT 不得进 URL——GET /chat/stream
+    只接受秒级一次性 ticket 或 Authorization header；长效 token 查询参数已移除。
+    """
 
     def _principal_from_token(token: str | None):
         if not token:
             raise UnauthenticatedError("请先登录")
         return authenticate(token)
+
+    def _principal_from_request(ticket: str | None, authorization: str | None):
+        token = (authorization or "").replace("Bearer ", "").strip()
+        if token:
+            return _principal_from_token(token)
+        if ticket:
+            if authenticate_ticket is None:
+                raise UnauthenticatedError("请先登录")
+            return authenticate_ticket(ticket)
+        raise UnauthenticatedError("请先登录")
 
     async def _resolve_session(principal, thread_id: str) -> str:
         if not thread_id:
@@ -148,12 +167,14 @@ def build_web_chat_router(assistant: AssistantService, authenticate: Any) -> API
         message: str = Query(...),
         thread_id: str = Query(...),
         client_msg_id: str = Query(default=""),
-        token: str = Query(default=""),
+        ticket: str = Query(default=""),
+        authorization: Annotated[str | None, Header()] = None,
         mode: str = Query(default="normal"),
         scene: str = Query(default=""),
         last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     ):
-        principal = _principal_from_token(token or None)
+        # URL 上只允许秒级一次性 ticket 或 Authorization header（审计 #3）
+        principal = _principal_from_request(ticket or None, authorization)
         session_id = await _resolve_session(principal, thread_id)
         client_msg_id = client_msg_id or f"auto-{session_id[:8]}-{message[:12]}"
         try:
@@ -173,8 +194,7 @@ def build_web_chat_router(assistant: AssistantService, authenticate: Any) -> API
     async def stream_post(request: Request, body: StreamPostBody,
                           authorization: Annotated[str | None, Header()] = None,
                           last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None):
-        token = (authorization or "").replace("Bearer ", "").strip() or request.query_params.get("token", "")
-        principal = _principal_from_token(token or None)
+        principal = _principal_from_token((authorization or "").replace("Bearer ", "").strip() or None)
         session_id = await _resolve_session(principal, body.thread_id)
         client_msg_id = body.client_msg_id or f"auto-{session_id[:8]}-{body.message[:12]}"
         try:
@@ -197,11 +217,10 @@ def build_web_chat_router(assistant: AssistantService, authenticate: Any) -> API
         thread_id: str = Query(default=""),
         client_msg_id: str = Query(default=""),
         run_id: str = Query(default=""),
-        token: str = Query(default=""),
+        ticket: str = Query(default=""),
         authorization: Annotated[str | None, Header()] = None,
     ):
-        token = token or (authorization or "").replace("Bearer ", "").strip()
-        principal = _principal_from_token(token or None)
+        principal = _principal_from_request(ticket or None, authorization)
         target = run_id
         if not target:
             session_id = await _resolve_session(principal, thread_id)

@@ -31,6 +31,8 @@ class AssistantService:
         models: Any,
         access: Any,
         on_run_finished=None,
+        profiles: Any = None,
+        memory: Any = None,
         wait_capacity: int = DEFAULT_WAIT_CAPACITY,
     ) -> None:
         self.db = db
@@ -39,11 +41,16 @@ class AssistantService:
         self.dispatcher = RunDispatcher(
             repo=self.repo, events=self.events, runtime=runtime,
             models=models, access=access, on_run_finished=on_run_finished,
+            profiles=profiles, memory=memory,
         )
         self.access = access
         self.wait_capacity = wait_capacity
 
     # ---- 生命周期 ------------------------------------------------------------------
+
+    def set_source_for_session(self, lookup) -> None:
+        """bootstrap 晚绑定：session → 渠道来源标识（ToolContext 用）。"""
+        self.dispatcher.source_for_session = lookup
 
     async def start(self) -> None:
         await self.dispatcher.start()
@@ -52,6 +59,10 @@ class AssistantService:
         await self.dispatcher.stop()
 
     # ---- 会话 ------------------------------------------------------------------
+
+    def messages_for_run_tx(self, conn: Any, owner_id: int, run_id: str) -> list[dict[str, Any]]:
+        """公开的事务内投影读取，供 run 终态回调使用；不暴露 repository。"""
+        return self.repo.messages_for_run_tx(conn, owner_id, run_id)
 
     async def create_session(
         self,

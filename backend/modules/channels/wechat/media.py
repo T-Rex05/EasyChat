@@ -16,12 +16,14 @@ from urllib.parse import quote
 
 from backend.modules.channels.contracts import MAX_MEDIA_BYTES, MediaRef
 from backend.modules.channels.wechat.account import CDN_BASE_URL, IlinkTransport, TransportError
+from backend.modules.channels.wechat.urlpolicy import ALLOWED_MEDIA_HOSTS, is_allowed_media_url
 
 # 与旧实现保持一致的文件接收白名单（空扩展名沿用旧行为放行）
 ALLOWED_FILE_EXTENSIONS = frozenset({
     ".pdf", ".md", ".txt", ".docx", ".xlsx", ".pptx",
     ".zip", ".json", ".csv", ".py", ".js", ".html", ".css",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".mp3", ".m4a", ".wav", ".ogg", ".opus", ".amr", ".silk", ".aac", ".webm",
 })
 ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
 
@@ -77,18 +79,10 @@ def decrypt_aes128_ecb(ciphertext: bytes, aes_key_b64: str) -> bytes:
     return _pkcs7_unpad(AES.new(key, AES.MODE_ECB).decrypt(ciphertext))
 
 
-# 允许下载的微信媒体域名（防 SSRF：入站消息里的 URL 不能指向任意内网地址）
-_ALLOWED_URL_HOSTS = ("weixin.qq.com", "wechat.com", "qpic.cn")
-
-
-def _is_allowed_media_url(url: str) -> bool:
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname:
-        return False
-    host = parts.hostname.lower()
-    return any(host == allowed or host.endswith(f".{allowed}") for allowed in _ALLOWED_URL_HOSTS)
+# 允许下载的微信媒体域名（防 SSRF）：策略唯一来源是 urlpolicy，初始 URL
+# 与每一跳重定向都要命中（审计 #6）。旧名保留为别名兼容既有引用。
+_ALLOWED_URL_HOSTS = ALLOWED_MEDIA_HOSTS
+_is_allowed_media_url = is_allowed_media_url
 
 
 def _download_url(ref: MediaRef) -> str:
@@ -135,7 +129,8 @@ class HttpMediaFetcher:
         dest = dest_dir / f"{uuid.uuid4().hex[:12]}_{safe_name}"
         try:
             size = await self.transport.download_to(
-                _download_url(ref), dest, max_bytes=max_bytes
+                _download_url(ref), dest, max_bytes=max_bytes,
+                allowed_hosts=ALLOWED_MEDIA_HOSTS,
             )
         except TransportError as exc:
             raise MediaFetchError(str(exc)) from exc

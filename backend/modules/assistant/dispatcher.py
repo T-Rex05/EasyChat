@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from backend.modules.assistant.events import EventBus
 from backend.modules.assistant.repository import (
@@ -38,6 +40,8 @@ class RunDispatcher:
         models: Any,
         access: Any,
         on_run_finished: Callable[[Any, dict[str, Any]], None] | None = None,
+        profiles: Any = None,
+        memory: Any = None,
         poll_interval: float = 0.05,
     ) -> None:
         self.repo = repo
@@ -46,6 +50,12 @@ class RunDispatcher:
         self.models = models
         self.access = access
         self.on_run_finished = on_run_finished
+        # 由 bootstrap 晚绑定，避免 assistant 构造早于 profiles/memory。
+        self.profiles = profiles
+        self.memory = memory
+        # 由 bootstrap 晚绑定（channels 装配后）：session → 渠道来源标识；
+        # ToolContext 携带后业务工具可固定任务回执目标。
+        self.source_for_session: Callable[[str], dict[str, str] | None] | None = None
         self.poll_interval = poll_interval
         self._task: asyncio.Task | None = None
         self._stopping = False
@@ -89,6 +99,18 @@ class RunDispatcher:
         return recovered
 
     # ---- 取消 ------------------------------------------------------------------
+
+    def _source_extra(self, session_id: str) -> dict[str, str]:
+        """服务端来源查询（channels 晚绑定）；查询失败不阻塞 run。"""
+        lookup = self.source_for_session
+        if lookup is None or not session_id:
+            return {}
+        try:
+            route = lookup(session_id)
+            return route if isinstance(route, dict) else {}
+        except Exception:  # noqa: BLE001
+            logger.exception("来源查询失败 session=%s", session_id)
+            return {}
 
     async def request_cancel(self, run_id: str) -> str:
         status = self.repo.request_cancel(run_id)
@@ -152,7 +174,27 @@ class RunDispatcher:
             return  # 已被取消等并发推进
         self.events.publish(run_id, "started", {"session_id": run["session_id"]})
 
-        request = self._build_request(run)
+        try:
+            request = self._build_request(run)
+        except Exception as exc:  # noqa: BLE001  身份失效/配置损坏必须明确失败
+            logger.exception("构建 run 请求失败 run_id=%s", run_id)
+            if self.repo.transition_run(run_id, to_status=RUN_FAILED, error=str(exc)[:500]):
+                self.events.finish(run_id, "failed", {"error": str(exc)[:500]})
+            return
+
+        from backend.shared.tool_context import ToolContext, reset_current, set_current
+
+        source_extra = self._source_extra(request.context.session_id)
+        tool_context = ToolContext(
+            principal=request.context.principal,
+            run_id=request.context.run_id,
+            session_id=request.context.session_id,
+            source=request.context.source,
+            channel_account_id=request.context.channel_account_id,
+            source_ref=str(source_extra.get("external_user_id") or ""),
+            source_chat_id=str(source_extra.get("external_chat_id") or ""),
+        )
+        token = set_current(tool_context)
         final_status = RUN_FAILED
         final_content = ""
         error: str | None = None
@@ -189,6 +231,8 @@ class RunDispatcher:
             final_status = RUN_FAILED
             error = str(exc)
             logger.exception("run 执行异常 run_id=%s", run_id)
+        finally:
+            reset_current(token)
 
         if run_id in self._cancel_flags and final_status in (RUN_COMPLETED, RUN_FAILED):
             final_status = RUN_CANCELLED
@@ -220,34 +264,101 @@ class RunDispatcher:
 
     def _build_request(self, run: dict[str, Any]) -> Any:
         from backend.runtime.contracts import RuntimeRequest
-        from backend.shared.context import ExecutionContext, Principal
+        from backend.shared.context import ExecutionContext
 
         owner_id = int(run["owner_id"])
-        principal = Principal(user_id=owner_id, role="user", permission_revision=self.access.permission_revision)
-        user = self.access.repo.get_user(owner_id)
-        role_toolsets = ()
-        if user is not None:
-            role = self.access.repo.get_role_by_name(user.role)
-            role_toolsets = tuple(role.toolsets) if role is not None else ()
+        # 唯一可信身份来源：数据库中的当前用户/状态/角色；禁用用户在此拒绝，
+        # 不能回落到默认 user 0 或模型传入的 user_id。
+        principal = self.access.snapshot_principal(owner_id)
+        self.access.require_permission(principal, "chat.use")
+        role_toolsets = self.access.hermes_toolsets(owner_id)
+        source = str(run["source"])
+        text = self._input_text(run)
+        persona_context = ""
+        timezone_name = "Asia/Shanghai"
+        if self.profiles is not None:
+            try:
+                profile = self.profiles.get_by_owner(owner_id)
+                timezone_name = profile.timezone
+                persona_context = self.profiles.render_persona(
+                    owner_id, "wechat" if source == "wechat" else "web"
+                )
+            except Exception:  # noqa: BLE001  人格失败不阻塞回答
+                logger.exception("人格渲染失败 owner=%s", owner_id)
+
+        attachment_ids = tuple(json.loads(run["attachment_ids"] or "[]"))
+        prefix = self._context_prefix(
+            owner_id, str(run["id"]), text, attachment_ids, source, timezone_name
+        )
+
         ctx = ExecutionContext(
             run_id=str(run["id"]),
             session_id=str(run["session_id"]),
             principal=principal,
-            source=str(run["source"]),
+            source=source,
             channel_account_id=run["channel_account_scope"] or None,
             model_profile_id="active",
             policy_revision=self.access.permission_revision,
         )
         return RuntimeRequest(
             context=ctx,
-            text=self._input_text(run),
-            attachment_ids=tuple(json.loads(run["attachment_ids"] or "[]")),
+            text=text,
+            attachment_ids=attachment_ids,
             system_context="",
             allowed_tools=frozenset(role_toolsets),
             skill_versions=(),
+            persona_context=persona_context,
+            context_prefix=prefix,
+            persist_user_message=text,
         )
 
-    def _input_text(self, run: dict[str, Any]) -> str:
+    def _context_prefix(
+        self,
+        owner_id: int,
+        run_id: str,
+        text: str,
+        attachment_ids: tuple[str, ...],
+        source: str,
+        timezone_name: str,
+    ) -> str:
+        """当前时间 + 附件元数据 + 记忆召回；只放易变上下文。"""
+        try:
+            now = datetime.now(ZoneInfo(timezone_name))
+            weekday = "一二三四五六日"[now.weekday()]
+            lines = [f"【当前】{now:%Y-%m-%d %H:%M}，周{weekday}，{timezone_name}"]
+        except Exception:  # noqa: BLE001
+            lines = [f"【当前】{datetime.now():%Y-%m-%d %H:%M}"]
+        if attachment_ids:
+            try:
+                attachments = self.repo.attachments_by_ids(owner_id, attachment_ids)
+                if attachments:
+                    lines.append("【附件】")
+                    for index, item in enumerate(attachments, 1):
+                        name = _safe_attachment_name(str(item.get("file_name") or "附件"))
+                        file_id = str(item.get("stored_file_id") or "")
+                        suffix = f"，file_id={file_id}" if file_id else ""
+                        lines.append(
+                            f"{index}. {name} attachment_id={item['id']}{suffix}"
+                            f"（{item.get('mime') or '未知类型'}，已保存）"
+                        )
+            except Exception:  # noqa: BLE001
+                logger.exception("附件元数据读取失败 run=%s", run_id)
+        if source in ("web", "wechat") and self.memory is not None:
+            try:
+                principal = self.access.snapshot_principal(owner_id)
+                recalled = self.memory.recall(
+                    principal, text[:500], top_k=3, token_budget=800
+                )
+                if recalled.items:
+                    lines.append("【可能是相关的记忆，未必准确；自然使用，不要逐条复述】")
+                    for index, item in enumerate(recalled.items, 1):
+                        memory = item.memory
+                        lines.append(f"{index}. [{memory.kind}] {memory.content}")
+            except Exception:  # noqa: BLE001  记忆失败只跳过
+                logger.warning("记忆召回失败 owner=%s run=%s", owner_id, run_id)
+        return "\n".join(lines)
+
+    def _input_text(self, run: dict[str, Any]) -> str:  # noqa: D401
         """从 UI 投影取该 run 的用户输入（submit 时已落库）。"""
         conn = self.repo.db.connect()
         try:
@@ -258,3 +369,9 @@ class RunDispatcher:
             return str(row["content"]) if row else str(run["input_summary"] or "")
         finally:
             conn.close()
+
+
+def _safe_attachment_name(name: str) -> str:
+    """附件名是不可信输入：去控制字符、压平空白、截断 80 字。"""
+    cleaned = "".join(ch for ch in name if ch.isprintable() and ch not in "\r\n\t")
+    return " ".join(cleaned.split())[:80] or "附件"

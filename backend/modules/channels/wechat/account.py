@@ -8,20 +8,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from backend.modules.channels.contracts import (
+    ChannelTransportError,
     QR_CONFIRMED,
     QR_EXPIRED,
     QR_SCANNED,
     QR_WAIT,
     QrSessionView,
 )
+from backend.modules.channels.wechat.urlpolicy import MAX_REDIRECT_HOPS
 from backend.shared.text import split_text  # noqa: F401  渠道发送与投递共用切分规则
+
+logger = logging.getLogger(__name__)
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
@@ -38,8 +44,8 @@ DEFAULT_TEXT_CHUNK = 1800
 CHANNEL_VERSION = "2.2.0"
 
 
-class TransportError(RuntimeError):
-    """iLink HTTP/JSON 传输失败（调用方决定重试与状态）。"""
+class TransportError(ChannelTransportError):
+    """兼容旧名；实际异常类型由 channels.contracts 统一提供。"""
 
 
 def ilink_headers(token: str = "", body_len: int = 0) -> dict[str, str]:
@@ -57,6 +63,16 @@ def ilink_headers(token: str = "", body_len: int = 0) -> dict[str, str]:
     return headers
 
 
+def _host_allowed(url: str, allowed_hosts: Sequence[str]) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    return any(host == item or host.endswith(f".{item}") for item in allowed_hosts)
+
+
 class IlinkTransport(Protocol):
     """测试替身只需实现这三个方法；默认实现见 AiohttpTransport。"""
 
@@ -67,7 +83,8 @@ class IlinkTransport(Protocol):
     ) -> dict[str, Any]: ...
 
     async def download_to(
-        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0
+        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0,
+        allowed_hosts: Sequence[str] | None = None,
     ) -> int: ...
 
 
@@ -97,7 +114,10 @@ class AiohttpTransport:
             async with session.get(url, headers=ilink_headers(), timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 text = await resp.text()
                 if resp.status != 200:
-                    raise TransportError(f"GET {url} HTTP {resp.status}: {text[:200]}")
+                    raise TransportError(
+                        f"GET {url} HTTP {resp.status}: {text[:200]}",
+                        status=resp.status,
+                    )
                 data = json.loads(text)
                 return data if isinstance(data, dict) else {}
         except TransportError:
@@ -119,7 +139,10 @@ class AiohttpTransport:
             ) as resp:
                 text = await resp.text()
                 if resp.status != 200:
-                    raise TransportError(f"POST {url} HTTP {resp.status}: {text[:200]}")
+                    raise TransportError(
+                        f"POST {url} HTTP {resp.status}: {text[:200]}",
+                        status=resp.status,
+                    )
                 data = json.loads(text)
                 return data if isinstance(data, dict) else {}
         except TransportError:
@@ -128,25 +151,49 @@ class AiohttpTransport:
             raise TransportError(f"POST {url} 失败: {exc}") from exc
 
     async def download_to(
-        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0
+        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0,
+        allowed_hosts: Sequence[str] | None = None,
     ) -> int:
-        """流式落盘并限制最大字节，避免把大文件整体读进内存。"""
+        """流式落盘并限制最大字节，避免把大文件整体读进内存。
+
+        审计 #6：禁用 aiohttp 隐式重定向（默认跟随最多 10 跳到任意主机）；
+        给出 allowed_hosts 时逐跳校验重定向目标域名，任何不命中白名单的
+        跳都立即失败且不落盘。
+        """
         import aiohttp
 
         session = await self._get_session()
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         total = 0
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-                if resp.status != 200:
-                    raise TransportError(f"下载 {url[:120]} HTTP {resp.status}")
-                with dest_path.open("wb") as fh:
-                    async for chunk in resp.content.iter_chunked(64 * 1024):
-                        total += len(chunk)
-                        if total > max_bytes:
-                            raise TransportError(f"下载超过上限 {max_bytes} bytes")
-                        fh.write(chunk)
-            return total
+            current = url
+            for _hop in range(MAX_REDIRECT_HOPS + 1):
+                async with session.get(
+                    current, timeout=aiohttp.ClientTimeout(total=timeout), allow_redirects=False,
+                ) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        location = (resp.headers.get("Location") or "").strip()
+                        if not location:
+                            raise TransportError(f"下载 {current[:120]} 重定向缺少 Location")
+                        from urllib.parse import urljoin
+
+                        target = urljoin(current, location)
+                        if allowed_hosts is not None and not _host_allowed(target, allowed_hosts):
+                            raise TransportError("重定向目标不是微信 CDN 域名，已拒绝（防 SSRF）")
+                        current = target
+                        continue
+                    if resp.status != 200:
+                        raise TransportError(
+                            f"下载 {current[:120]} HTTP {resp.status}", status=resp.status
+                        )
+                    with dest_path.open("wb") as fh:
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise TransportError(f"下载超过上限 {max_bytes} bytes")
+                            fh.write(chunk)
+                    return total
+            raise TransportError(f"下载重定向超过 {MAX_REDIRECT_HOPS} 跳")
         except TransportError:
             dest_path.unlink(missing_ok=True)
             raise
@@ -173,21 +220,22 @@ class _QrSession:
 
 
 def _render_qr_data_url(content: str) -> str:
-    """可选依赖 qrcode；未安装时返回空串，由前端展示 qr_content。"""
+    """可选依赖 qrcode/Pillow；任何渲染失败都返回空串，由前端展示 qr_content。"""
     if not content:
         return ""
     try:
         import qrcode  # 可选依赖
         from io import BytesIO
-    except ImportError:
+
+        qr = qrcode.QRCode(box_size=6, border=2)
+        qr.add_data(content)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:  # noqa: BLE001  qrcode 存在但 Pillow 缺失/编码失败
         return ""
-    qr = qrcode.QRCode(box_size=6, border=2)
-    qr.add_data(content)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 class QrLoginManager:
@@ -254,9 +302,14 @@ class QrLoginManager:
         if session.status in (QR_CONFIRMED, QR_EXPIRED):
             return self._view(session)
 
-        data = await self.transport.get_json(
-            f"{session.base_url}{EP_QRCODE_STATUS}?qrcode={session.qrcode_value}"
-        )
+        try:
+            data = await self.transport.get_json(
+                f"{session.base_url}{EP_QRCODE_STATUS}?qrcode={session.qrcode_value}"
+            )
+        except TransportError:
+            # 扫码端每 1-2 秒轮询一次；iLink 偶发超时不应把整个绑定流程打成 500。
+            logger.warning("二维码状态轮询失败，保留当前状态 session=%s", session.id)
+            return self._view(session)
         status = str(data.get("status") or QR_WAIT)
         if status == "scaned_but_redirect":
             redirect_host = str(data.get("redirect_host") or "")
@@ -359,7 +412,8 @@ async def send_text(
         if ret not in (0, None):
             raise TransportError(
                 f"微信发送失败 ret={ret} errcode={data.get('errcode')} "
-                f"errmsg={data.get('errmsg') or ''}"
+                f"errmsg={data.get('errmsg') or ''}",
+                ret=int(ret) if isinstance(ret, int) else None,
             )
         sent += 1
     return sent

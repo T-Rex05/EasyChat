@@ -20,6 +20,16 @@ EVENT_RECEIVED = "received"
 EVENT_PROCESSED = "processed"
 EVENT_REJECTED = "rejected"
 
+# 持久 inbox 的处理状态（processing_state；与 state 的去重语义分离，方案 §5）
+PROCESSING_PENDING = "pending"    # 受理后等待/正在处理
+PROCESSING_FAILED = "failed"      # 内部失败，等 retry_at 本地重放
+PROCESSING_DONE = "done"          # 已有业务结果（processed/rejected 都算）
+PROCESSING_DEAD = "dead"          # 重试耗尽的毒消息（可见失败状态）
+MAX_REPLAY_ATTEMPTS = 5
+REPLAY_DELAYS_SECONDS = (30.0, 120.0, 600.0, 1800.0)
+# 停机时卡在 pending 的事件：超过该时长后由 replay 兜底重放
+STALE_PENDING_SECONDS = 900.0
+
 # 入站处理结果（拒绝也要落 channel_events，避免同一事件被反复处理）
 REASON_OK = "ok"
 REASON_DUPLICATE = "duplicate"
@@ -52,6 +62,33 @@ QR_WAIT = "wait"
 QR_SCANNED = "scanned"
 QR_CONFIRMED = "confirmed"
 QR_EXPIRED = "expired"
+
+
+class ChannelTransportError(RuntimeError):
+    """渠道传输失败的结构化错误；调用方按 status/ret 分类，不解析文案。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        ret: int | None = None,
+        retryable: bool | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.ret = ret
+        self.retryable = retryable
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelTarget:
+    """渠道可投递目标；delivery 负责把它适配成投递值对象。"""
+
+    kind: str
+    ref: str
+    channel_account_id: str = ""
+    context_token: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +165,12 @@ class InboundMessage:
     fingerprint: str = ""
     fingerprint_window: float = DEFAULT_FINGERPRINT_WINDOW_SECONDS
     event_kind: str = "message"  # message_id / fingerprint
+
+
+@dataclass(frozen=True, slots=True)
+class MediaIngestResult:
+    attachment_ids: tuple[str, ...] = ()
+    transcripts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

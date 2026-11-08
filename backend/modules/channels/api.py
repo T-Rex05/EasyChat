@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -18,8 +19,12 @@ from backend.modules.channels.contracts import (
     BINDING_DISABLED,
     DEFAULT_FINGERPRINT_WINDOW_SECONDS,
     EVENT_PROCESSED,
+    EVENT_RECEIVED,
     EVENT_REJECTED,
+    MAX_REPLAY_ATTEMPTS,
     PLATFORM_WECHAT,
+    REPLAY_DELAYS_SECONDS,
+    STALE_PENDING_SECONDS,
     REASON_ACCOUNT_DISABLED,
     REASON_BUSY,
     REASON_DUPLICATE,
@@ -34,9 +39,11 @@ from backend.modules.channels.contracts import (
     ChannelAccount,
     ChannelAccountView,
     ChannelBinding,
+    ChannelTarget,
     InboundMessage,
     InboundOutcome,
     ListenerState,
+    MediaRef,
     QrSessionView,
 )
 from backend.modules.channels.repository import ChannelRepository
@@ -57,7 +64,12 @@ _WECHAT_COMMANDS_HELP = (
     "/1、/2 … 切换会话\n"
     "/status 当前会话\n"
     "/rename 标题 重命名\n"
-    "/rm 删除当前会话"
+    "/rm 删除当前会话\n"
+    "/人设 查看或切换说话风格\n"
+    "/记忆 查看长期记忆；/忘掉 <ID或关键词>\n"
+    "/账单确认 <import_id> 提交已预览账单\n\n"
+    "直接说「明天 9 点提醒我交周报」即可创建提醒；"
+    "发账单文件后可让我预览。"
 )
 
 
@@ -73,6 +85,9 @@ class ChannelService:
         media_fetcher: MediaFetcher | None = None,
         media_dir: Path | None = None,
         files: Any = None,
+        stt: Any = None,
+        voice_echo: bool = False,
+        commands: Any = None,
         clock=time.time,
         fingerprint_window: float = DEFAULT_FINGERPRINT_WINDOW_SECONDS,
     ) -> None:
@@ -89,8 +104,12 @@ class ChannelService:
         self.media_fetcher = media_fetcher
         self.media_dir = Path(media_dir) if media_dir is not None else None
         self.files = files
+        self.stt = stt
+        self.voice_echo = voice_echo
         self.clock = clock
         self.fingerprint_window = fingerprint_window
+        # 命令处理器在构造时注入；渠道不反向持有/晚绑定各业务模块。
+        self.commands: Any = commands
 
     # ---- 生命周期 ----------------------------------------------------------------
 
@@ -308,7 +327,7 @@ class ChannelService:
     def delivery_credentials(self, account_pk: str) -> tuple[ChannelAccount | None, dict[str, str]]:
         return self.listener_account(account_pk)
 
-    def delivery_target_for_run(self, run: dict[str, Any]) -> dict[str, str] | None:
+    def delivery_target_for_run(self, run: dict[str, Any]) -> ChannelTarget | None:
         """run 完成时按会话路由解析微信目标；未绑定/禁用返回 None（不投递）。"""
         route = self.repo.find_session_route(str(run.get("session_id") or ""))
         if route is None:
@@ -322,12 +341,12 @@ class ChannelService:
         resolved = self.repo.find_active_binding(platform, account_id, external_user)
         if resolved is None or int(resolved[1].get("status") or 0) != 1:
             return None
-        return {
-            "kind": platform,
-            "ref": external_user,
-            "channel_account_id": account.id,
-            "context_token": str(route.get("context_token") or ""),
-        }
+        return ChannelTarget(
+            kind=platform,
+            ref=external_user,
+            channel_account_id=account.id,
+            context_token=str(route.get("context_token") or ""),
+        )
 
     def is_delivery_binding_active(self, account_pk: str, external_user_id: str) -> bool:
         account = self.repo.get_account(account_pk)
@@ -336,7 +355,7 @@ class ChannelService:
         resolved = self.repo.find_active_binding(account.platform, account.account_id, external_user_id)
         return resolved is not None and int(resolved[1].get("status") or 0) == 1
 
-    def delivery_target_for_owner(self, owner_id: int) -> dict[str, str] | None:
+    def delivery_target_for_owner(self, owner_id: int) -> ChannelTarget | None:
         """用户默认微信目标：取该 owner 第一个有效绑定且账号启用。"""
         for row in self.repo.list_bindings(owner_id):
             if str(row.get("status") or "") != BINDING_ACTIVE:
@@ -346,12 +365,15 @@ class ChannelService:
             )
             if account is None or account.status != ACCOUNT_ACTIVE:
                 continue
-            return {
-                "kind": str(row["platform"]),
-                "ref": str(row["external_user_id"]),
-                "channel_account_id": account.id,
-                "context_token": "",
-            }
+            return ChannelTarget(
+                kind=str(row["platform"]),
+                ref=str(row["external_user_id"]),
+                channel_account_id=account.id,
+                context_token=self.repo.latest_context_token(
+                    str(row["platform"]), str(row["account_id"]),
+                    str(row["external_user_id"]),
+                ),
+            )
         return None
 
     async def send_wechat_text(
@@ -367,6 +389,10 @@ class ChannelService:
         base_url = (account.base_url or credentials.get("base_url") or "").rstrip("/")
         if not token or not base_url:
             raise InvalidInputError("渠道账号缺少发送凭证")
+        if not context_token:
+            context_token = self.repo.latest_context_token(
+                account.platform, account.account_id, external_user_id
+            )
         await send_text(
             self.transport,
             base_url=base_url,
@@ -379,7 +405,11 @@ class ChannelService:
     # ---- 入站处理 ----------------------------------------------------------------
 
     async def handle_inbound(self, message: InboundMessage) -> InboundOutcome:
-        """去重 → 绑定 → 权限 → 会话 → Assistant.submit；拒绝也持久化事件。"""
+        """持久 inbox（T5）：先事务保存完整可重放 envelope，再处理。
+
+        内部失败不再删除事件（上游未必重投）：标记 failed + retry_at 退避，
+        由本地 replay 重试；envelope 已持久化，listener 推进游标是安全的。
+        """
         account = self.repo.get_account(message.account_pk)
         if account is None or account.platform != message.platform or account.account_id != message.external_account_id:
             return InboundOutcome(accepted=False, reason=REASON_INVALID)
@@ -399,9 +429,31 @@ class ChannelService:
             },
             fingerprint=message.fingerprint,
             received_at=_iso_from_epoch(message.received_at or self.clock()),
+            envelope_json=json.dumps(_envelope_of(message), ensure_ascii=False),
+            envelope_version=1,
         )
         if not inserted:
             existing = self.repo.get_event(event_id) or {}
+            try:
+                payload = json.loads(existing.get("payload") or "{}")
+            except ValueError:
+                payload = {}
+            if str(existing.get("state") or "") == EVENT_RECEIVED:
+                # 上次处理在 mark processed 之前被取消/崩溃：平台重投时必须继续，
+                # 否则事件永远卡在 received，而 purge 又不会清理它。
+                try:
+                    outcome = await self._process_event(account, message, event_id)
+                    if outcome.reply_text:
+                        self.repo.set_event_reply(event_id, outcome.reply_text)
+                    self.repo.mark_event_processing_done(event_id)
+                    return outcome
+                except asyncio.CancelledError:
+                    # 停机：事件保留 pending，重启后由 replay 兜底（陈旧 pending 会被重放）
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("渠道事件重投处理失败 event=%s", event_id)
+                    self._mark_replay_failed(event_id, exc)
+                    return InboundOutcome(accepted=False, reason=REASON_INTERNAL)
             return InboundOutcome(
                 accepted=False,
                 reason=REASON_DUPLICATE,
@@ -409,14 +461,83 @@ class ChannelService:
                 run_id=str(existing.get("run_id") or ""),
                 session_id=str(existing.get("session_id") or ""),
                 event_id=event_id,
+                # 上次 reply 发送失败时平台会重投；重发确定性回复，避免危机文案丢失。
+                reply_text=str(payload.get("reply_text") or "") if isinstance(payload, dict) else "",
             )
 
         try:
-            return await self._process_event(account, message, event_id)
-        except Exception:  # noqa: BLE001  未产生业务结果的内部失败允许平台重投
-            logger.exception("渠道入站处理失败，撤回事件等待重投 event=%s", event_id)
-            self.repo.delete_event(event_id)
+            outcome = await self._process_event(account, message, event_id)
+            if outcome.reply_text:
+                self.repo.set_event_reply(event_id, outcome.reply_text)
+            self.repo.mark_event_processing_done(event_id)
+            return outcome
+        except asyncio.CancelledError:
+            # 停机：保留 pending（envelope 已落库），重启后由 replay 兜底重放。
+            raise
+        except Exception as exc:  # noqa: BLE001  内部失败：本地重放，不再删除事件
+            logger.exception("渠道入站处理失败，标记待重放 event=%s", event_id)
+            self._mark_replay_failed(event_id, exc)
             return InboundOutcome(accepted=False, reason=REASON_INTERNAL)
+
+    # ---- 本地重放（envelope 已持久化；毒消息进入可见 dead 状态） --------------------
+
+    async def replay_due_events(self, *, now: float | None = None, limit: int = 5) -> int:
+        """重放到期失败事件与停机遗留的陈旧 pending；返回处理条数。"""
+        current = self.clock() if now is None else now
+        due = self.repo.due_replay_events(
+            now=current,
+            # received_at 是 ISO TEXT 列：阈值必须同为 ISO 字符串
+            stale_pending_before=_iso_from_epoch(current - STALE_PENDING_SECONDS),
+            limit=limit,
+        )
+        replayed = 0
+        for row in due:
+            try:
+                message = _message_from_envelope(row)
+            except Exception:  # noqa: BLE001  envelope 损坏 = 毒消息
+                logger.exception("envelope 重建失败，标记 dead event=%s", row["id"])
+                self.repo.mark_event_dead(str(row["id"]), error="envelope 损坏，无法重建消息")
+                continue
+            account = self.repo.get_account(message.account_pk)
+            if account is None:
+                self.repo.mark_event_dead(str(row["id"]), error="渠道账号不存在，无法重放")
+                continue
+            try:
+                outcome = await self._process_event(account, message, str(row["id"]))
+                if outcome.reply_text:
+                    self.repo.set_event_reply(str(row["id"]), outcome.reply_text)
+                self.repo.mark_event_processing_done(str(row["id"]))
+                replayed += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_replay_failed(str(row["id"]), exc)
+        return replayed
+
+    def _mark_replay_failed(self, event_id: str, exc: Exception) -> None:
+        row = self.repo.get_event(event_id) or {}
+        attempts = int(row.get("attempts") or 0) + 1
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        if attempts >= MAX_REPLAY_ATTEMPTS:
+            self.repo.mark_event_dead(event_id, error=error)
+            logger.error("渠道事件重试耗尽，标记 dead event=%s attempts=%s", event_id, attempts)
+            return
+        delay = REPLAY_DELAYS_SECONDS[min(len(REPLAY_DELAYS_SECONDS) - 1, attempts - 1)]
+        self.repo.mark_event_processing_failed(
+            event_id, error=error, retry_at=self.clock() + delay, attempts=attempts,
+        )
+
+    def source_route_for_session(self, session_id: str) -> dict[str, str] | None:
+        """服务端来源查询（窄接口）：会话 → 渠道来源标识（ToolContext 用）。"""
+        route = self.repo.find_session_route(session_id)
+        if route is None:
+            return None
+        return {
+            "platform": str(route["platform"]),
+            "external_user_id": str(route["external_user_id"]),
+            "channel_account_id": str(route["account_id"]),
+            "external_chat_id": str(route.get("external_chat_id") or ""),
+        }
 
     async def _process_event(
         self, account: ChannelAccount, message: InboundMessage, event_id: str
@@ -459,13 +580,44 @@ class ChannelService:
                 event_id=event_id, reply_text=reply_text,
             )
 
-        attachment_ids = await self._ingest_media(
+        ingested = await self._ingest_media(
             principal, session_id, event_id, message, account_id=account.id
         )
-        if message.media and not attachment_ids and not message.text.strip():
-            # 只有媒体且全部接收失败：不要用"请描述图片"空跑一次模型
+        attachment_ids = ingested.attachment_ids
+        # 失败判据是“整条消息只有语音且没有可用文本”，不能看音频是否保存成功；
+        # 语音+图片时图片仍应继续处理，语音+文字时按文字处理。
+        all_voice = bool(message.media) and all(
+            ref.kind == "voice" for ref in message.media
+        )
+        if all_voice and not ingested.transcripts and not message.text.strip():
+            self.repo.update_event(
+                event_id, state=EVENT_PROCESSED, session_id=session_id,
+                processed_at=utc_now_iso(),
+            )
+            return InboundOutcome(
+                accepted=True, reason=REASON_OK, session_id=session_id,
+                event_id=event_id,
+                reply_text="这条语音我没转出来，能打字或再说一遍吗？",
+            )
+        if message.media and not attachment_ids and not ingested.transcripts and not message.text.strip():
             return self._reject(event_id, REASON_MEDIA_FAILED, "媒体接收失败且无文字")
-        text = message.text.strip() or _default_media_text(message)
+        text = message.text.strip() or "\n".join(ingested.transcripts)
+        if text and ingested.transcripts and message.text.strip():
+            text = text + "\n（语音转写）" + " ".join(ingested.transcripts)
+        if not text:
+            text = _default_media_text(message)
+        from backend.modules.channels.safety import CRISIS_REPLY, detect_crisis
+
+        if detect_crisis(text):
+            # 危机表达立即确定性回复，不进入模型、不写入情绪样本。
+            self.repo.update_event(
+                event_id, state=EVENT_PROCESSED, session_id=session_id,
+                processed_at=utc_now_iso(),
+            )
+            return InboundOutcome(
+                accepted=True, reason=REASON_OK, session_id=session_id,
+                event_id=event_id, reply_text=CRISIS_REPLY,
+            )
         from backend.modules.assistant.contracts import RunCommand
 
         try:
@@ -482,6 +634,18 @@ class ChannelService:
             return self._reject(event_id, REASON_BUSY, str(exc), user_id=principal.user_id)
         except AppError as exc:
             return self._reject(event_id, REASON_INVALID, str(exc), user_id=principal.user_id)
+
+        if self.voice_echo and ingested.transcripts:
+            echo = "我听到：" + " ".join(ingested.transcripts)[:120]
+            try:
+                await self.send_wechat_text(
+                    account_pk=account.id,
+                    external_user_id=message.external_user_id,
+                    text=echo,
+                    context_token=message.context_token,
+                )
+            except Exception:  # noqa: BLE001  回显是可选体验，不阻塞已入队的回答
+                logger.warning("语音回显失败 account=%s", account.id, exc_info=True)
 
         self.repo.update_event(
             event_id, state=EVENT_PROCESSED, session_id=session_id,
@@ -598,6 +762,10 @@ class ChannelService:
             "/model", "/模型", "/send", "/restart", "/restart-all", "/stop", "/stop-all",
         ):
             return "⚠️ 该命令已停用：模型切换请到 Web 控制台操作", session_id
+        if self.commands is not None:
+            handled = await self.commands.handle(principal, message, session_id)
+            if handled is not None:
+                return handled
         return None
 
     async def _recent_sessions(self, principal: Principal, account: ChannelAccount) -> list[dict[str, Any]]:
@@ -618,22 +786,33 @@ class ChannelService:
         message: InboundMessage,
         *,
         account_id: str = "",
-    ) -> tuple[str, ...]:
-        """下载/解密后委托 files 持久保存；失败只跳过该媒体，不阻塞文字消息。
+    ):
+        """下载/解密后先转写语音，再委托 files 保存；失败只跳过该媒体。"""
+        from backend.modules.channels.contracts import MediaIngestResult
 
-        游标/事件在文件持久保存（或旧路径附件登记）完成后才标记 processed；
-        媒体重投命中同一 (账号, 事件, 序号) 收据时返回原文件，不重复入账。
-        """
         if not message.media or self.media_fetcher is None or self.media_dir is None:
-            return ()
+            return MediaIngestResult()
         dest_dir = self.media_dir / event_id
         attachment_ids: list[str] = []
+        transcripts: list[str] = []
         for index, ref in enumerate(message.media):
             try:
                 fetched = await self.media_fetcher.fetch(ref, dest_dir)
             except MediaFetchError as exc:
                 logger.warning("渠道媒体接收失败 event=%s kind=%s: %s", event_id, ref.kind, exc)
                 continue
+            if ref.kind == "voice" and self.stt is not None:
+                from backend.integrations.speech import SpeechError
+
+                try:
+                    transcript = await self.stt.transcribe(fetched.path, fetched.mime)
+                except SpeechError as exc:
+                    logger.warning("语音转写失败 event=%s: %s", event_id, exc)
+                except Exception:  # noqa: BLE001  转写失败不能阻塞其他媒体
+                    logger.exception("语音转写异常 event=%s", event_id)
+                else:
+                    if transcript.text.strip():
+                        transcripts.append(transcript.text.strip())
             if self.files is not None:
                 attachment_id = await self._persist_media(
                     principal, session_id, message.external_event_id, event_id,
@@ -653,7 +832,7 @@ class ChannelService:
                 session_id=session_id,
             )
             attachment_ids.append(attachment_id)
-        return tuple(attachment_ids)
+        return MediaIngestResult(tuple(attachment_ids), tuple(transcripts))
 
     async def _persist_media(
         self,
@@ -761,15 +940,81 @@ def _binding_dict(binding: ChannelBinding) -> dict[str, Any]:
 
 
 def _default_media_text(message: InboundMessage) -> str:
+    """纯媒体消息的中性说明：只告知已保存，绝不让模型编造内容。"""
     kinds = {ref.kind for ref in message.media}
     if "image" in kinds:
-        return "请描述这张图片的内容"
+        return (
+            "（用户发来一张图片，已保存；当前无法查看图片内容，不要描述图片。"
+            "如果用户要识别图片，明确说明只能保存，看不到内容。）"
+        )
     if "file" in kinds:
-        return "请阅读我发送的文件"
-    return "请处理我发送的内容"
+        return (
+            "（用户发来一个文件，已保存。附件元数据里有 file_id；"
+            "只有用户明确要求导入账单时才调用 ledger_import_preview，不要猜测文件内容。）"
+        )
+    return "（用户发来附件，已保存；不要猜测附件内容。）"
 
 
 def _iso_from_epoch(epoch: float) -> str:
     from datetime import datetime, timezone
 
     return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _envelope_of(message: InboundMessage) -> dict[str, Any]:
+    """完整可重放 envelope：重建 InboundMessage 所需的全部字段。"""
+    return {
+        "platform": message.platform,
+        "account_pk": message.account_pk,
+        "external_account_id": message.external_account_id,
+        "external_user_id": message.external_user_id,
+        "external_chat_id": message.external_chat_id,
+        "external_event_id": message.external_event_id,
+        "text": message.text,
+        "media": [ref.to_payload() for ref in message.media],
+        "context_token": message.context_token,
+        "received_at": float(message.received_at or 0.0),
+        "fingerprint": message.fingerprint,
+        "fingerprint_window": message.fingerprint_window,
+        "event_kind": message.event_kind,
+    }
+
+
+def _message_from_envelope(row: dict[str, Any]) -> InboundMessage:
+    """从持久化 envelope 重建消息；缺字段/坏结构抛 ValueError（→ dead）。"""
+    envelope_version = int(row.get("envelope_version") or 0)
+    if envelope_version < 1:
+        raise ValueError("事件缺少 envelope（历史行不可重放）")
+    try:
+        data = json.loads(str(row.get("envelope_json") or "{}"))
+    except ValueError as exc:
+        raise ValueError("envelope JSON 损坏") from exc
+    if not isinstance(data, dict) or not data.get("platform"):
+        raise ValueError("envelope 字段缺失")
+    media = tuple(
+        MediaRef(
+            kind=str(item.get("kind") or "file"),
+            url=str(item.get("url") or ""),
+            encrypt_query_param=str(item.get("encrypt_query_param") or ""),
+            aes_key=str(item.get("aes_key") or ""),
+            file_name=str(item.get("file_name") or ""),
+            size=int(item.get("size") or 0),
+        )
+        for item in (data.get("media") or [])
+        if isinstance(item, dict)
+    )
+    return InboundMessage(
+        platform=str(data["platform"]),
+        account_pk=str(data["account_pk"]),
+        external_account_id=str(data["external_account_id"]),
+        external_user_id=str(data["external_user_id"]),
+        external_chat_id=str(data["external_chat_id"]),
+        external_event_id=str(data["external_event_id"]),
+        text=str(data.get("text") or ""),
+        media=media,
+        context_token=str(data.get("context_token") or ""),
+        received_at=float(data.get("received_at") or 0.0),
+        fingerprint=str(data.get("fingerprint") or ""),
+        fingerprint_window=float(data.get("fingerprint_window") or DEFAULT_FINGERPRINT_WINDOW_SECONDS),
+        event_kind=str(data.get("event_kind") or "message"),
+    )

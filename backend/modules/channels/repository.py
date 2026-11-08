@@ -14,6 +14,11 @@ from backend.modules.channels.contracts import (
     BINDING_ACTIVE,
     BINDING_DISABLED,
     EVENT_RECEIVED,
+    MAX_REPLAY_ATTEMPTS,
+    PROCESSING_DEAD,
+    PROCESSING_DONE,
+    PROCESSING_FAILED,
+    PROCESSING_PENDING,
     ChannelAccount,
     ChannelBinding,
 )
@@ -300,16 +305,20 @@ class ChannelRepository:
         payload: dict[str, Any],
         fingerprint: str,
         received_at: str,
+        envelope_json: str = "",
+        envelope_version: int = 0,
     ) -> tuple[str, bool]:
-        """插入事件；唯一键冲突返回已存在 id 且 inserted=False（不重复执行）。"""
+        """插入事件（含可重放 envelope）；唯一键冲突返回已存在 id 且 inserted=False。"""
         event_id = new_channel_event_id()
         with self.db.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO channel_events(id, platform, account_id, external_event_id, event_kind, "
-                "payload, fingerprint, received_at, state) VALUES(?,?,?,?,?,?,?,?,?) "
+                "payload, fingerprint, received_at, state, envelope_version, envelope_json, "
+                "processing_state, attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(platform, account_id, external_event_id) DO NOTHING",
                 (event_id, platform, account_id, external_event_id, event_kind,
-                 json.dumps(payload, ensure_ascii=False), fingerprint, received_at, EVENT_RECEIVED),
+                 json.dumps(payload, ensure_ascii=False), fingerprint, received_at, EVENT_RECEIVED,
+                 envelope_version, envelope_json, PROCESSING_PENDING, 0),
             )
             if cur.rowcount == 1:
                 return event_id, True
@@ -318,6 +327,50 @@ class ChannelRepository:
                 (platform, account_id, external_event_id),
             ).fetchone()
             return (str(row["id"]) if row else event_id), False
+
+    # ---- 持久 inbox：处理状态与本地重放（T5） ------------------------------------
+
+    def mark_event_processing_done(self, event_id: str) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel_events SET processing_state=? WHERE id=?",
+                (PROCESSING_DONE, event_id),
+            )
+
+    def mark_event_processing_failed(
+        self, event_id: str, *, error: str, retry_at: float, attempts: int
+    ) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel_events SET processing_state=?, last_error=?, retry_at=?, "
+                "attempts=? WHERE id=?",
+                (PROCESSING_FAILED, error[:500], retry_at, int(attempts), event_id),
+            )
+
+    def mark_event_dead(self, event_id: str, *, error: str) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel_events SET processing_state=?, last_error=? WHERE id=?",
+                (PROCESSING_DEAD, error[:500], event_id),
+            )
+
+    def due_replay_events(
+        self, *, now: float, stale_pending_before: float, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """待重放事件：到期的 failed + 停机遗留的陈旧 pending。"""
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM channel_events WHERE "
+                "(processing_state=? AND retry_at IS NOT NULL AND retry_at<=? AND attempts<?) "
+                "OR (processing_state=? AND received_at<?) "
+                "ORDER BY received_at LIMIT ?",
+                (PROCESSING_FAILED, now, MAX_REPLAY_ATTEMPTS,
+                 PROCESSING_PENDING, stale_pending_before, int(limit)),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
 
     def update_event(
         self,
@@ -334,6 +387,30 @@ class ChannelRepository:
                 "UPDATE channel_events SET state=?, session_id=?, run_id=?, error=?, processed_at=? "
                 "WHERE id=?",
                 (state, session_id, run_id, error[:500], processed_at or utc_now_iso(), event_id),
+            )
+
+    def set_event_reply(self, event_id: str, reply_text: str) -> None:
+        """把确定性回复写进事件，平台重投时可重发而不是永久丢失。"""
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM channel_events WHERE id=?", (event_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["reply_text"] = reply_text[:2000]
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel_events SET payload=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), event_id),
             )
 
     def get_event(self, event_id: str) -> dict[str, Any] | None:
@@ -393,6 +470,22 @@ class ChannelRepository:
                 (platform, account_id, external_user_id, external_chat_id, session_id,
                  context_token, utc_now_iso()),
             )
+
+    def latest_context_token(
+        self, platform: str, account_id: str, external_user_id: str
+    ) -> str:
+        """主动推送前取最近一次被动消息留下的 context_token。"""
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT context_token FROM channel_session_cursors "
+                "WHERE platform=? AND account_id=? AND external_user_id=? "
+                "AND context_token<>'' ORDER BY updated_at DESC LIMIT 1",
+                (platform, account_id, external_user_id),
+            ).fetchone()
+            return str(row["context_token"]) if row else ""
+        finally:
+            conn.close()
 
     def find_session_route(self, session_id: str) -> dict[str, Any] | None:
         """按 Assistant 会话反查渠道路由（run 完成时确定投递目标）。"""

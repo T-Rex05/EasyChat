@@ -170,7 +170,10 @@ class WeChatListener:
         if errcode == -14:
             raise ListenerThrottled("iLink 风控/频率限制（errcode=-14），暂停轮询")
         if ret not in (0, None) or errcode not in (0, None):
-            raise TransportError(f"getupdates 失败 ret={ret} errcode={errcode}")
+            raise TransportError(
+                f"getupdates 失败 ret={ret} errcode={errcode}",
+                ret=int(ret) if isinstance(ret, int) else None,
+            )
 
         cursor = str(data.get("get_updates_buf") or "")
         processed = 0
@@ -194,8 +197,14 @@ class WeChatListener:
                     text=outcome.reply_text,
                     context_token=message.context_token,
                 )
-        # 先处理再推进游标：崩溃后最多重复投递，由 channel_events 唯一键去重，
-        # 不会出现“游标已过、消息未处理”的静默丢失。
+        # 本地重放：处理失败的事件在退避后由本地重试（envelope 已持久化，
+        # 游标推进安全，不依赖上游重投）。尽力而为，不阻塞本轮游标。
+        try:
+            await self.service.replay_due_events(limit=3)
+        except Exception:  # noqa: BLE001
+            logger.exception("本地事件重放失败 account=%s", account_pk)
+        # 先处理再推进游标：崩溃后最多重复投递，由 channel_events 唯一键去重 +
+        # 持久 inbox 本地重放兜底，不会出现“游标已过、消息未处理”的静默丢失。
         if cursor and cursor != account.sync_cursor:
             self.service.record_poll(account_pk, cursor=cursor)
         self.service.record_poll(account_pk, error="")

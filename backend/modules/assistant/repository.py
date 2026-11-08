@@ -141,6 +141,45 @@ class AssistantRepository:
         finally:
             conn.close()
 
+    def attachments_by_ids(self, owner_id: int, attachment_ids: tuple[str, ...]) -> list[dict[str, Any]]:
+        if not attachment_ids:
+            return []
+        placeholders = ",".join("?" * len(attachment_ids))
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, owner_id, run_id, session_id, file_name, mime, file_size, sha256, "
+                f"stored_file_id FROM attachments WHERE owner_id=? AND id IN ({placeholders})",
+                (owner_id, *attachment_ids),
+            ).fetchall()
+            by_id = {str(row["id"]): dict(row) for row in rows}
+            return [by_id[item] for item in attachment_ids if item in by_id]
+        finally:
+            conn.close()
+
+    def attachments_for_run(self, owner_id: int, run_id: str) -> list[dict[str, Any]]:
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, owner_id, run_id, session_id, file_name, mime, file_size, sha256, "
+                "stored_file_id FROM attachments WHERE owner_id=? AND run_id=? ORDER BY created_at",
+                (owner_id, run_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def messages_for_run_tx(
+        self, conn: Any, owner_id: int, run_id: str
+    ) -> list[dict[str, Any]]:
+        """事务内读取：终态回调需要看到尚未提交的 assistant 投影。"""
+        rows = conn.execute(
+            "SELECT role, content, source, created_at FROM conversations "
+            "WHERE owner_id=? AND run_id=? ORDER BY id",
+            (owner_id, run_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_sessions(self, owner_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         conn = self.db.connect()
         try:
@@ -268,7 +307,11 @@ class AssistantRepository:
                      final_content, run["source"], now, now),
                 )
                 if on_finish is not None:
-                    on_finish(conn, run)
+                    # 回调看到的是本次终态（run 变量是更新前快照）。
+                    finished = dict(run)
+                    finished["status"] = to_status
+                    finished["finished_at"] = now
+                    on_finish(conn, finished)
                 return True
         except Exception:
             # 投影失败：run 保持原状态，重启对账标 interrupted（架构 §5.3 双库恢复）

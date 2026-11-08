@@ -99,6 +99,21 @@ EVENT_INPUT = "input"
 EVENT_RECONCILED = "reconciled"
 EVENT_ATTEMPT_STARTED = "attempt_started"
 
+# ---- 状态展示名（微信回执与前端共用） ---------------------------------------------
+
+STATUS_LABELS = {
+    TASK_QUEUED: "排队中",
+    TASK_RUNNING: "执行中",
+    TASK_SUCCEEDED: "已完成",
+    TASK_FAILED: "失败",
+    TASK_CANCELLED: "已取消",
+    TASK_WAITING_INPUT: "等待补充",
+    TASK_BLOCKED: "受阻",
+    TASK_AWAITING_REVIEW: "待评审",
+    TASK_INTERRUPTED: "已中断",
+    TASK_CANCEL_REQUESTED: "取消中",
+}
+
 # ---- 来源 --------------------------------------------------------------------
 
 SOURCE_WECHAT = "wechat"

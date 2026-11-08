@@ -295,6 +295,20 @@ async def run_startup(registry: ModuleRegistry) -> None:
                 generator=generator,
             )
 
+        # 7.5) 超级代理服务：命令装配前构造（/开发 命令族需要）；worker 在 9.5 接 runtime
+        if registry.superagent is None:
+            from backend.modules.superagent.api import SuperagentService
+
+            registry.superagent = SuperagentService(
+                db, access=registry.access,
+                delivery=registry.delivery,
+                channels=None,  # 回执目标在受理时快照，发送不经此引用
+                timezone=registry.settings.project_timezone,
+            )
+            registry.superagent.set_encryption_secret(
+                str(registry.settings.encryption_secret or "")
+            )
+
         # 命令处理器只依赖窄接口；在渠道构造前完成，渠道不再晚绑定 commands。
         from backend.modules.channels.commands import CommandServices, WeChatCommands
 
@@ -304,6 +318,10 @@ async def run_startup(registry: ModuleRegistry) -> None:
             ledger=registry.ledger,
             scheduling=registry.scheduling,
             inbox=registry.inbox,
+            superagent=(
+                _make_superagent_intake(registry.superagent)
+                if registry.superagent is not None else None
+            ),
             target_for_owner=lambda owner_id: (
                 registry.channels.delivery_target_for_owner(owner_id)
                 if registry.channels is not None else None
@@ -347,6 +365,14 @@ async def run_startup(registry: ModuleRegistry) -> None:
                 )
 
         # 9) 依赖渠道的 worker（渠道可能为空，邮箱/显式目标仍可用）
+        # 渠道来源查询晚绑定给 assistant（ToolContext 携带微信回执地址）
+        if registry.assistant is not None:
+            if registry.channels is not None:
+                registry.assistant.set_source_for_session(
+                    registry.channels.source_route_for_session
+                )
+            elif registry.superagent is not None:
+                registry.assistant.set_source_for_session(lambda session_id: None)
         if registry.profiles is not None:
             from backend.modules.profiles.worker import MoodWorker
 
@@ -370,34 +396,22 @@ async def run_startup(registry: ModuleRegistry) -> None:
                 artifacts_dir=registry.settings.artifacts_dir,
             )
 
-    # 9.5) 超级代理：面板/配置始终可用；worker 需要 runtime，在此统一构造（步骤 12 启动）
-    if registry.access is not None:
-        from backend.modules.superagent.api import SuperagentService
+    # 9.5) 超级代理 worker：服务已在 7.5 构造；这里接 runtime（步骤 12 启动）
+    if registry.superagent is not None and registry.runtime is not None:
+        registry.superagent.set_run_canceller(registry.runtime.cancel)
+        registry.superagent.runner_ready = True
+        from backend.modules.superagent.runner import HermesCodingRunner
+        from backend.modules.superagent.worker import SuperagentWorker
 
-        registry.superagent = SuperagentService(
-            db, access=registry.access,
+        registry.superagent_worker = SuperagentWorker(
+            registry.superagent,
+            runner=HermesCodingRunner(registry.runtime),
             delivery=registry.delivery,
-            channels=None,  # 发送时经 provider 解析，不依赖构造顺序
+            channels_provider=lambda: registry.channels,
+            workspace_root=registry.settings.artifacts_dir / "superagent",
+            artifacts_root=registry.settings.artifacts_dir / "superagent_verify",
             timezone=registry.settings.project_timezone,
         )
-        registry.superagent.set_encryption_secret(
-            str(registry.settings.encryption_secret or "")
-        )
-        if registry.runtime is not None:
-            registry.superagent.set_run_canceller(registry.runtime.cancel)
-            registry.superagent.runner_ready = True
-            from backend.modules.superagent.runner import HermesCodingRunner
-            from backend.modules.superagent.worker import SuperagentWorker
-
-            registry.superagent_worker = SuperagentWorker(
-                registry.superagent,
-                runner=HermesCodingRunner(registry.runtime),
-                delivery=registry.delivery,
-                channels_provider=lambda: registry.channels,
-                workspace_root=registry.settings.artifacts_dir / "superagent",
-                artifacts_root=registry.settings.artifacts_dir / "superagent_verify",
-                timezone=registry.settings.project_timezone,
-            )
 
     # 10) 业务工具（提醒/账本/收件箱）必须在 assistant.start 前注册
     if registry.runtime is not None:
@@ -457,6 +471,13 @@ async def run_startup(registry: ModuleRegistry) -> None:
         from backend.modules.evolution.adoption import AdoptionService
 
         registry.adoption = AdoptionService(db, registry.skills)
+
+
+def _make_superagent_intake(service: Any):
+    """命令层只拿窄入口（/开发 /任务 /补充 /取消 /重试）。"""
+    from backend.modules.superagent.intake import SuperagentIntake
+
+    return SuperagentIntake(service)
 
 
 def _make_care_canceller(registry: ModuleRegistry):
