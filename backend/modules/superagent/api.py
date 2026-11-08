@@ -11,6 +11,7 @@ Gate：enabled 且 repo_url 非空才受理新任务；GitHub token 可后补
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from backend.modules.access.api import AccessService
 from backend.modules.superagent.contracts import (

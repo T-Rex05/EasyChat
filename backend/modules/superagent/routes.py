@@ -6,7 +6,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
-from backend.modules.superagent.api import SuperagentService
 from backend.shared.errors import UnauthenticatedError
 
 

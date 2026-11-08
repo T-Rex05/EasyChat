@@ -8,6 +8,7 @@ requirement 必须是自包含的完整需求（目标/验收/涉及范围），
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool

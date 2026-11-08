@@ -25,7 +25,6 @@ from backend.modules.superagent.contracts import (
     EVENT_PR_CREATED,
     EVENT_STARTED,
     SUMMARY_MAX_CHARS,
-    TASK_CANCELLED,
     TASK_RUNNING,
     TASK_SUCCEEDED,
     TERMINAL_TASK_STATUSES,
@@ -302,7 +301,7 @@ class SuperagentWorker:
         if client is None:
             client = gh.HttpxPRClient(token=token)
         title = self._title_of(task_id)
-        body_parts = [f"## 需求", ""]
+        body_parts = ["## 需求", ""]
         task = self.service.task(task_id)
         requirement = task.requirement if task else ""
         body_parts += [requirement[:4000], ""]

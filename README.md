@@ -1,4 +1,31 @@
-# AgentForge - 通用 Hermes Agent 脚手架
+# EasyChat（原 AgentForge）
+
+> 微信个人助手 + 超级代理：微信收需求 → 后台编码代理 → 自动 Draft PR → 微信回执。
+
+## 当前架构（以此为准）
+
+- 启动入口：`backend/server.py` → `backend/app.py`（工厂）→ `backend/bootstrap.py`（生命周期装配）。本地开发 `python main.py`（端口 8001）；生产入口 `docker/Dockerfile`（依赖 docker/requirements-core.txt + requirements-hermes.txt）。
+- 存储：SQLite（`backend/platform/sqlite.py`，迁移在 `backend/platform/migrations/`，追加式、checksum 校验）。
+- 后端模块：`backend/modules/`（access/assistant/channels/delivery/scheduling/superagent/files/ledger/memory/inbox/profiles/briefing/skills/evolution/models/usage）。
+- 执行引擎：Hermes AIAgent 经 `backend/runtime/hermes/adapter.py` 适配（唯一 Seam 是 `backend/runtime/contracts.py`）。
+- 前端：Vue 3 + Vite（`agent_frontend/`，`npm run dev` 端口 3000，`/api` 代理 8001）。
+- 能力开关默认全关：`EASYCHAT_WECHAT_ENABLED` / `EASYCHAT_HERMES_ENABLED` / `EASYCHAT_EMAIL_ENABLED` 等，凭证加密依赖 `EASYCHAT_ENCRYPTION_SECRET`。
+
+## 测试与构建
+
+```powershell
+python -m pytest tests -q -m "not integration and not resources"   # 全量维护套件
+python -m pytest tests/superagent tests/contracts -q               # 定向
+cd agent_frontend && npm run type-check && npm run build
+```
+
+---
+
+# 以下为历史 AgentForge 文档（旧架构，已退役，仅作参考）
+
+> ⚠️ 下文描述的 MySQL、Redis、Neo4j、GraphRAG、Code Mode、模型网关、KB RAG 等均属旧架构，当前代码库不再包含这些组件。请勿据此理解或恢复旧依赖。
+
+
 
 > 基于 Hermes 的 AI Agent 服务框架 — 三层记忆（Episodic/Semantic/Neo4j）+ GraphRAG 知识图谱 + 安全审批 + 可观测性 + Docker 一键部署
 

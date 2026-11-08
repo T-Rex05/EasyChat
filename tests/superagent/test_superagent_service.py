@@ -1,7 +1,6 @@
 """superagent：受理 gate、权限、生命周期、worker 执行全流程（假 git/PR/运行时）。"""
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
