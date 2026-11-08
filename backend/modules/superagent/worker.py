@@ -133,6 +133,8 @@ class SuperagentWorker:
         git_runner: GitRunner | None = None,
         poll_seconds: float = POLL_SECONDS,
         timezone: str = "Asia/Shanghai",
+        job_queue: Any | None = None,
+        webhook_service: Any | None = None,
     ) -> None:
         self.service = service
         self.runner = runner
@@ -144,6 +146,8 @@ class SuperagentWorker:
         self._git_runner = git_runner
         self._poll_seconds = poll_seconds
         self._timezone = timezone
+        self.job_queue = job_queue
+        self.webhook_service = webhook_service
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
         self._helper_dir: tempfile.TemporaryDirectory | None = None
@@ -193,15 +197,37 @@ class SuperagentWorker:
     # ---- 主流程 ------------------------------------------------------------------
 
     async def tick(self) -> int:
+        processed = await self._process_webhook_jobs()
         settings = self.service.repo.get_settings()
         if not settings.enabled or not settings.repo_url:
-            return 0
+            return processed
         claimed = self.service.repo.claim_next_task()
         if claimed is None:
-            return 0
+            return processed
         task, attempt = claimed
         await self._execute(task, attempt)
-        return 1
+        return processed + 1
+
+    async def _process_webhook_jobs(self) -> int:
+        """消费 GitHub 回流 job（短回调；与本 worker 共用循环，串行无锁）。"""
+        queue = getattr(self, "job_queue", None)
+        webhook_service = getattr(self, "webhook_service", None)
+        if queue is None or webhook_service is None:
+            return 0
+        processed = 0
+        for _ in range(10):  # 单 tick 上限，防止饥饿编码任务
+            lease = queue.claim("superagent-worker", kinds=("superagent.webhook.process",))
+            if lease is None:
+                break
+            try:
+                event_id = str(lease.payload_json().get("event_id") or "")
+                webhook_service.process_event(event_id)
+                queue.complete(lease)
+                processed += 1
+            except Exception as exc:  # noqa: BLE001  job 失败走统一重试
+                queue.fail(lease, str(exc)[:500], retryable=True, retry_delay_seconds=60)
+                break
+        return processed
 
     async def _execute(self, task: SuperagentTask, attempt: TaskAttempt) -> None:
         logger.info("superagent 开始执行 task_id=%s attempt=%s", task.task_id, attempt.attempt_no)

@@ -126,6 +126,10 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_memory_router(_LazyModule(registry, "memory"), authenticate))
     app.include_router(build_skills_router(_LazyModule(registry, "skills"), authenticate))
     app.include_router(build_superagent_router(_LazyModule(registry, "superagent"), authenticate))
+    # GitHub webhook：验签保护（无 JWT）；模块未就绪时 503 由 _LazyModule 兜底
+    from backend.modules.superagent.webhooks import build_superagent_webhook_router
+
+    app.include_router(build_superagent_webhook_router(_LazyModule(registry, "superagent_webhooks")))
     app.include_router(build_evolution_router(
         _LazyModule(registry, "evolution"), _LazyModule(registry, "adoption"), authenticate,
     ))

@@ -56,6 +56,7 @@ class ModuleRegistry:
     inbox_worker: Any | None = None
     superagent: Any | None = None  # 超级代理：微信收需求 → 编码 → 自动提 PR
     superagent_worker: Any | None = None
+    superagent_webhooks: Any | None = None  # GitHub 回流（T7）
     job_queue: Any | None = None  # 共享 JobQueue（run 终态/调度/投递 worker）
 
 
@@ -401,8 +402,13 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.superagent.set_run_canceller(registry.runtime.cancel)
         registry.superagent.runner_ready = True
         from backend.modules.superagent.runner import HermesCodingRunner
+        from backend.modules.superagent.webhooks import WebhookService
         from backend.modules.superagent.worker import SuperagentWorker
 
+        webhook_service = WebhookService(
+            db, superagent=registry.superagent, queue=registry.job_queue,
+            webhook_secret=str(registry.settings.github_webhook_secret or ""),
+        )
         registry.superagent_worker = SuperagentWorker(
             registry.superagent,
             runner=HermesCodingRunner(registry.runtime),
@@ -411,7 +417,10 @@ async def run_startup(registry: ModuleRegistry) -> None:
             workspace_root=registry.settings.artifacts_dir / "superagent",
             artifacts_root=registry.settings.artifacts_dir / "superagent_verify",
             timezone=registry.settings.project_timezone,
+            job_queue=registry.job_queue,
+            webhook_service=webhook_service,
         )
+        registry.superagent_webhooks = webhook_service
 
     # 10) 业务工具（提醒/账本/收件箱）必须在 assistant.start 前注册
     if registry.runtime is not None:
@@ -655,6 +664,8 @@ async def run_shutdown(registry: ModuleRegistry) -> None:
         registry.superagent_worker = None
     if registry.superagent is not None:
         registry.superagent = None
+    if registry.superagent_webhooks is not None:
+        registry.superagent_webhooks = None
     if registry.delivery_worker is not None:
         await registry.delivery_worker.stop()
         registry.delivery_worker = None
