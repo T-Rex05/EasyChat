@@ -127,3 +127,19 @@ python -m pytest tests/storage tests/architecture tests/access -q   # 61 passed
 - 权限：`superagent.view/create/manage` 三键；admin 默认全量、user 默认 view+create；token 经既有 AES-GCM（EASYCHAT_ENCRYPTION_SECRET）加密存储，面板只出掩码。
 - 测试：`python -m pytest tests/superagent tests/contracts/test_superagent_api.py tests/storage tests/architecture -q`（69 passed）；git/PR/运行时全部可注入假件，离线可重复。
 - 已知边界：真实 GitHub push/PR、真实模型长任务、并发 >1 的终端容器共享语义未实测；服务端审批回调沿用 fail-closed（tirith 标记的命令拒绝执行）。
+
+## 超级代理可靠化交接（2026-11-09 feature/superagent-reliability 分支，T0–T8）
+
+依据 `docs/superpowers/plans/2026-11-09-project-review-and-wechat-superagent.md` 完成 T0–T8。基线 3b3d6c5 + 工作区微信 A+C 增量，提交链 c72eb4f → ad01bce（7 个提交）。
+
+- **T1–T4 可靠化**（f8a37ff）：0020 迁移（任务快照/attempts/inputs/reports/version）；CAS 状态机（迟到 attempt 拒绝写终态）；严格 HTTPS parser + 无凭证 remote + credential helper（token 只进 git 子进程环境，不进 URL/config/argv，错误统一脱敏）；host/repo_hash/task_id 独立工作区；git/agent/验证分别限时 + 进程树回收；CodingRunner 窄接缝；cancel 改 await 协作取消；completed 门禁 + base...HEAD 双比较（覆盖代理自行 commit）；验证门禁（verify_profile JSON + allow_unverified_draft 策略）；checkpoint 推进；PR 先查后建（Draft 复用）；终态+报告+回执同事务，dedup 按 attempt/report/target；取消/发布竞态记 cancelled_after_publication；capabilities 端点。
+- **T5 持久 inbox**（fc6c89d）：0021 迁移；入站 envelope 先落库（全文/媒体/来源），内部失败 failed+退避本地重放（不再 delete_event），毒消息 dead；/开发 /任务 /补充 /取消 /重试 命令族（短号解析限定本人，幂等键=平台事件 ID）；ToolContext 增加 source_ref/source_chat_id（dispatcher 晚绑定 source_for_session 服务端查询）；工具服务端操作键幂等。
+- **T6 前端工作台**（4edbd48）：capabilities 驱动受理入口（修复失败也 ready 的缺陷）、新状态徽标+phase、游标分页、增量事件（after_id）、防竞态（单在途/切详情弃旧响应）、补充输入表单。
+- **T7 webhook**（a496db9）：0022 迁移；HMAC 验签（缺配置 403）、delivery_id 去重、allowlist、持久 job；PR closed（merged/closed_unmerged 回流 outcome）、评审/评论转任务输入（waiting/blocked/failed 自动回队）、CI 失败报告；Bot 跳过、旧 head 不触发。配置 EASYCHAT_GITHUB_WEBHOOK_SECRET。
+- **T8**（ad01bce）：auth 受保护解析 + chatUserId 去 '1' 兜底 + ready 状态；运维指标 GET /api/superagent/ops/metrics + 面板；bundle 记录（入口 JS 1,020 kB / gzip 332 kB，Element Plus 全量引入为主因，按需引入列为预算评审项）。
+
+状态机：queued/running/succeeded/failed/cancelled + waiting_input/blocked/awaiting_review/interrupted/cancel_requested；phase 单独（preparing/coding/verifying/publishing）；PR 状态单独（draft/open/merged/closed）+ outcome（merged/closed_unmerged）。
+
+默认决策（用户未逐条确认，复核点）：①第一版仅 GitHub HTTPS（Gitee/SSH 拒绝并提示）；②缺验证命令默认允许发 Draft PR（PR 记录缺失证据），开关可强制门禁；③webhook 自动修复规则暂缓；④真实并发固定 1（max_concurrent 仅历史语义）；⑤旧任务无快照禁止重试（提示重新提交）；⑥start-local.bat 不入库（含密钥）。
+
+测试：`python -m pytest tests -q -m "not integration and not resources"`（全量）；定向 `python -m pytest tests/superagent tests/channels tests/tools tests/contracts/test_superagent_api.py tests/contracts/test_wechat.py tests/architecture tests/storage -q`。迁移测试硬编码版本列表（test_migration_0014.py），新增迁移需同步。真实 GitHub push/PR、真实微信、webhook 真实投递未联调（需凭证/测试仓库）。
