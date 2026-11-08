@@ -9,20 +9,34 @@ import { useChatStore } from '@/stores/chat'
 export const useAuthStore = defineStore(
   'auth',
   () => {
+    // 受保护解析：缓存损坏返回空数组，不阻断启动
+    function readStoredPermissions(): string[] {
+      try {
+        const raw = localStorage.getItem('userPermissions')
+        const parsed = raw ? JSON.parse(raw) : []
+        return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []
+      } catch {
+        localStorage.removeItem('userPermissions')
+        return []
+      }
+    }
+
     // 状态
     const token = ref<string | null>(localStorage.getItem('authToken'))
     const user = ref<User | null>(null)
     const userRole = ref<string>(localStorage.getItem('userRole') || '')
     const username = ref<string>(localStorage.getItem('username') || '')
-    const permissions = ref<string[]>(JSON.parse(localStorage.getItem('userPermissions') || '[]'))
+    const permissions = ref<string[]>(readStoredPermissions())
+    // 身份初始化状态：/me 对齐完成前，依赖身份的调用应等待（ready=false）
+    const ready = ref(false)
 
     // 计算属性
     const isAuthenticated = computed(() => !!token.value)
 
     const userId = computed(() => {
-      // 优先从 localStorage，回退到 sessionStorage（兼容旧版），最后 fallback 到 '1'
-      // 注意：不能用 '0' 做 fallback，否则对话会存为 user_id=0，与认证 user_id 不匹配导致刷新后丢失
-      return localStorage.getItem('chatUserId') || sessionStorage.getItem('chatUserId') || '1'
+      // 未知身份返回空串（T8）：调用方必须等待 ready 或显式处理空值，
+      // 绝不再默认到 '1'（会把对话记到 admin 头上）
+      return localStorage.getItem('chatUserId') || sessionStorage.getItem('chatUserId') || ''
     })
 
     // 操作
@@ -41,7 +55,7 @@ export const useAuthStore = defineStore(
         localStorage.setItem('userRole', response.role || '')
         localStorage.setItem('username', response.username || '')
         localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-        const uid = String(response.user_id || '1')
+        const uid = String(response.user_id || '')
         localStorage.setItem('chatUserId', uid)
         sessionStorage.setItem('chatUserId', uid)
 
@@ -66,7 +80,7 @@ export const useAuthStore = defineStore(
         localStorage.setItem('userRole', response.role || '')
         localStorage.setItem('username', response.username || '')
         localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-        const uid = String(response.user_id || '1')
+        const uid = String(response.user_id || '')
         localStorage.setItem('chatUserId', uid)
         sessionStorage.setItem('chatUserId', uid)
 
@@ -75,6 +89,10 @@ export const useAuthStore = defineStore(
         console.error('注册失败:', error)
         throw error
       }
+    }
+
+    function markReady() {
+      ready.value = true
     }
 
     async function verify() {
@@ -130,7 +148,7 @@ export const useAuthStore = defineStore(
           localStorage.setItem('userRole', response.role || '')
           localStorage.setItem('username', response.username || '')
           localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-          const uid = String(response.user_id || '1')
+          const uid = String(response.user_id || '')
           localStorage.setItem('chatUserId', uid)
           sessionStorage.setItem('chatUserId', uid)
 
@@ -182,6 +200,8 @@ export const useAuthStore = defineStore(
       tryRefresh,
       logout,
       hasPerm,
+      ready,
+      markReady,
     }
   },
   {

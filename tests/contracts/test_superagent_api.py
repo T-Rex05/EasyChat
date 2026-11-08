@@ -186,6 +186,16 @@ async def test_cancel_and_retry_flow_with_new_statuses(rig) -> None:
     # （同一 service 已配置，跳过 gate 用例——由 tests/superagent 覆盖）
 
 
+async def test_ops_metrics_manage_only(rig) -> None:
+    service, admin, user = _service(rig)
+    client = _client(rig, service)
+    denied = await client.get("/api/superagent/ops/metrics", headers=_headers(rig, user))
+    assert denied.status_code == 403
+    metrics = (await client.get("/api/superagent/ops/metrics", headers=_headers(rig, admin))).json()["metrics"]
+    assert "tasks_by_status" in metrics and "attempts" in metrics
+    assert metrics["runner_ready"] is True
+
+
 async def test_unauthenticated_rejected(rig) -> None:
     service, _, _ = _service(rig)
     client = _client(rig, service)

@@ -147,3 +147,19 @@ export async function listSuperagentReports(taskId: string): Promise<SuperagentR
   const res = await request.get<{ reports: SuperagentReport[] }>(`/api/superagent/tasks/${taskId}/reports`)
   return res.data.reports || []
 }
+
+export interface SuperagentOpsMetrics {
+  tasks_by_status: Record<string, number>
+  attempts: { total: number; succeeded: number; failed: number; avg_duration_seconds: number }
+  verification: { total: number; blocked: number; allow_unverified_draft: boolean; verify_commands: number }
+  deliveries_by_status: Record<string, number>
+  webhook_pending: number
+  runner_ready: boolean
+  credentials_ready: boolean
+  enabled: boolean
+}
+
+export async function getSuperagentOpsMetrics(): Promise<SuperagentOpsMetrics> {
+  const res = await request.get<{ metrics: SuperagentOpsMetrics }>('/api/superagent/ops/metrics')
+  return res.data.metrics
+}

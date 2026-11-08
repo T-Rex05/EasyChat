@@ -146,7 +146,8 @@ export function useChat(chatMode: string = 'normal') {
     let chatId = currentChatId.value
     const isNewChat = !chatId || messages.value.length === 0
     if (isNewChat) {
-      const userId = localStorage.getItem('chatUserId') || '1'
+      const userId = localStorage.getItem('chatUserId') || ''
+      if (!userId) throw new Error('用户身份尚未初始化，请刷新页面重试')
       chatId = `${userId}_${Date.now()}`
       chatStore.setCurrentChatId(chatId)
     }
@@ -226,7 +227,7 @@ export function useChat(chatMode: string = 'normal') {
         currentCloseFn.value = close
       } else {
         // 使用 GET EventSource（纯文本短消息）
-        const { eventSource, close } = sendMessageStream(
+        const { eventSource, close } = await sendMessageStream(
           text, chatId, createCallbacks(streamState), clientMsgId, chatMode,
           selectedModelId.value || undefined,
         )
@@ -511,7 +512,7 @@ export function useChat(chatMode: string = 'normal') {
         )
         currentCloseFn.value = close
       } else {
-        const { eventSource, close } = sendMessageStream(
+        const { eventSource, close } = await sendMessageStream(
           pendingStream.userMessage, chatId, callbacks, clientMsgId,
         )
         currentEventSource.value = eventSource

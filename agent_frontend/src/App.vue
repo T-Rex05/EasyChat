@@ -22,29 +22,34 @@ const authStore = useAuthStore()
 
 const showSidebar = computed(() => route.path !== '/login')
 
-// 应用启动时验证 token 并刷新用户信息
+// 应用启动时验证 token 并刷新用户信息（完成后 auth.ready = true）
 onMounted(async () => {
-  if (authStore.token) {
+  if (!authStore.token) {
+    authStore.markReady()
+    return
+  }
+  try {
+    await authStore.verify()
+    authStore.markReady()
+    console.log('[App] Token verified, userId:', authStore.userId || '(待初始化)')
+  } catch (verifyErr) {
+    console.warn('[App] Token verification failed, trying silent refresh:', verifyErr)
+    // Token 验证失败（可能已过期），尝试静默刷新（宽限期内免登录）
     try {
-      await authStore.verify()
-      console.log('[App] Token verified, userId:', authStore.userId)
-    } catch (verifyErr) {
-      console.warn('[App] Token verification failed, trying silent refresh:', verifyErr)
-      // Token 验证失败（可能已过期），尝试静默刷新（宽限期内免登录）
-      try {
-        const refreshed = await authStore.tryRefresh()
-        if (refreshed) {
-          console.log('[App] Token silently refreshed, userId:', authStore.userId)
-          return  // 刷新成功，正常进入应用
-        }
-      } catch (refreshErr) {
-        console.warn('[App] Silent refresh also failed:', refreshErr)
+      const refreshed = await authStore.tryRefresh()
+      if (refreshed) {
+        authStore.markReady()
+        console.log('[App] Token silently refreshed, userId:', authStore.userId || '(待初始化)')
+        return  // 刷新成功，正常进入应用
       }
-      // 验证和刷新都失败 → 彻底过期，logout 并跳转登录
-      authStore.logout()
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
-      }
+    } catch (refreshErr) {
+      console.warn('[App] Silent refresh also failed:', refreshErr)
+    }
+    // 验证和刷新都失败 → 彻底过期，logout 并跳转登录
+    authStore.logout()
+    authStore.markReady()
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
     }
   }
 })

@@ -342,6 +342,73 @@ class SuperagentService:
             raise InvalidInputError("任务状态已变化，刷新后重试")
         return self.repo.get_task(task_id)  # type: ignore[return-value]
 
+    # ---- 运维指标（T8：runner/队列/执行/验证/PR/回执观测面） --------------------------
+
+    def ops_metrics(self, principal: Principal) -> dict[str, Any]:
+        self.access.validate_principal(principal)
+        self.access.require_permission(principal, "superagent.manage")
+        db = self.repo.db
+        conn = db.connect()
+        try:
+            def count(sql: str, params: tuple = ()) -> int:
+                row = conn.execute(sql, params).fetchone()
+                return int(row["c"]) if row else 0
+
+            tasks_by_status: dict[str, int] = {}
+            for row in conn.execute(
+                "SELECT status, count(*) AS c FROM superagent_tasks GROUP BY status"
+            ):
+                tasks_by_status[str(row["status"])] = int(row["c"])
+            attempts_total = count("SELECT count(*) AS c FROM superagent_attempts")
+            attempts_failed = count(
+                "SELECT count(*) AS c FROM superagent_attempts WHERE state='failed'"
+            )
+            attempts_succeeded = count(
+                "SELECT count(*) AS c FROM superagent_attempts WHERE state='succeeded'"
+            )
+            avg_seconds = conn.execute(
+                "SELECT avg(julianday(finished_at) - julianday(started_at)) AS d "
+                "FROM superagent_attempts WHERE finished_at IS NOT NULL AND started_at IS NOT NULL"
+            ).fetchone()
+            duration_seconds = round(float(avg_seconds["d"] or 0) * 86400, 1)
+            verify_total = count(
+                "SELECT count(*) AS c FROM superagent_reports WHERE kind IN ('ready','blocked')"
+            )
+            verify_blocked = count(
+                "SELECT count(*) AS c FROM superagent_reports WHERE kind='blocked'"
+            )
+            deliveries: dict[str, int] = {}
+            for row in conn.execute(
+                "SELECT status, count(*) AS c FROM deliveries WHERE source='superagent' GROUP BY status"
+            ):
+                deliveries[str(row["status"])] = int(row["c"])
+            webhook_pending = count(
+                "SELECT count(*) AS c FROM superagent_webhook_events WHERE processed_at IS NULL"
+            )
+            settings = self.repo.get_settings()
+        finally:
+            conn.close()
+        return {
+            "tasks_by_status": tasks_by_status,
+            "attempts": {
+                "total": attempts_total,
+                "succeeded": attempts_succeeded,
+                "failed": attempts_failed,
+                "avg_duration_seconds": duration_seconds,
+            },
+            "verification": {
+                "total": verify_total,
+                "blocked": verify_blocked,
+                "allow_unverified_draft": settings.allow_unverified_draft,
+                "verify_commands": len(load_verify_commands(settings.verify_profile)),
+            },
+            "deliveries_by_status": deliveries,
+            "webhook_pending": webhook_pending,
+            "runner_ready": bool(self.runner_ready),
+            "credentials_ready": bool(settings.has_github_token),
+            "enabled": bool(settings.enabled),
+        }
+
     # ---- worker 协作入口（内部） ---------------------------------------------------
 
     def claim_next_task(self) -> tuple[SuperagentTask, Any] | None:

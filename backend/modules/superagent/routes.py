@@ -89,6 +89,11 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
         principal = _principal(authorization)
         return {"capabilities": service.capabilities(principal)}
 
+    @router.get("/ops/metrics")
+    async def ops_metrics(authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        return {"metrics": service.ops_metrics(principal)}
+
     @router.get("/settings")
     async def get_settings(authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)

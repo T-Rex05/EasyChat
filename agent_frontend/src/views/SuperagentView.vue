@@ -5,14 +5,52 @@
         <h2>超级代理</h2>
         <p class="hint">在微信里描述需求（或用 /开发 命令），后台代理在独立工作区完成编码并自动创建 Draft PR，结果回信给你。</p>
       </div>
-      <button v-if="caps.manage" class="btn btn-secondary" @click="showSettings = !showSettings">
-        {{ showSettings ? '收起配置' : '仓库配置' }}
-      </button>
+      <div class="header-actions">
+        <button v-if="caps.manage" class="btn btn-secondary" @click="toggleOps">
+          {{ showOps ? '收起运维' : '运维面板' }}
+        </button>
+        <button v-if="caps.manage" class="btn btn-secondary" @click="showSettings = !showSettings">
+          {{ showSettings ? '收起配置' : '仓库配置' }}
+        </button>
+      </div>
     </header>
 
     <!-- 受理状态提示（capabilities 驱动，普通用户也能看到准确原因） -->
     <div v-if="caps.view && gateReasons.length" class="notice-banner">
       当前暂不能受理新任务：{{ gateReasons.join('；') }}
+    </div>
+
+    <!-- 运维面板（仅 manage） -->
+    <div v-if="showOps && caps.manage" class="card ops-card">
+      <div class="ops-grid" v-if="opsMetrics">
+        <div class="ops-cell">
+          <span class="ops-label">Runner / 凭证 / 开关</span>
+          <span>{{ opsMetrics.runner_ready ? '✅ runner' : '⛔ runner' }}
+            {{ opsMetrics.credentials_ready ? '✅ 凭证' : '⛔ 凭证' }}
+            {{ opsMetrics.enabled ? '✅ 已启用' : '⛔ 停用' }}</span>
+        </div>
+        <div class="ops-cell">
+          <span class="ops-label">任务分布</span>
+          <span>{{ Object.entries(opsMetrics.tasks_by_status).map(([k, v]) => `${k}:${v}`).join(' ') || '无任务' }}</span>
+        </div>
+        <div class="ops-cell">
+          <span class="ops-label">执行 attempt</span>
+          <span>{{ opsMetrics.attempts.succeeded }}/{{ opsMetrics.attempts.total }} 成功 · 失败 {{ opsMetrics.attempts.failed }} · 均 {{ opsMetrics.attempts.avg_duration_seconds }}s</span>
+        </div>
+        <div class="ops-cell">
+          <span class="ops-label">验证</span>
+          <span>{{ opsMetrics.verification.verify_commands }} 条命令 · 受阻 {{ opsMetrics.verification.blocked }}/{{ opsMetrics.verification.total }} · {{ opsMetrics.verification.allow_unverified_draft ? '允许未验证发布' : '强制门禁' }}</span>
+        </div>
+        <div class="ops-cell">
+          <span class="ops-label">回执</span>
+          <span>{{ Object.entries(opsMetrics.deliveries_by_status).map(([k, v]) => `${k}:${v}`).join(' ') || '无投递' }}</span>
+        </div>
+        <div class="ops-cell">
+          <span class="ops-label">Webhook 待处理</span>
+          <span>{{ opsMetrics.webhook_pending }}</span>
+        </div>
+      </div>
+      <div v-else class="muted">加载中…</div>
     </div>
 
     <!-- 仓库配置（仅 manage） -->
@@ -146,6 +184,7 @@ import {
   cancelSuperagentTask,
   createSuperagentTask,
   getSuperagentCapabilities,
+  getSuperagentOpsMetrics,
   getSuperagentSettings,
   listSuperagentEvents,
   listSuperagentTasks,
@@ -153,6 +192,7 @@ import {
   updateSuperagentSettings,
   type SuperagentCapabilities,
   type SuperagentEvent,
+  type SuperagentOpsMetrics,
   type SuperagentSettings,
   type SuperagentTask,
 } from '@/api/superagent'
@@ -169,6 +209,8 @@ const settingsDraft = reactive({
   github_token: '', verify_profile: '[]', allow_unverified_draft: true,
 })
 const showSettings = ref(false)
+const showOps = ref(false)
+const opsMetrics = ref<SuperagentOpsMetrics | null>(null)
 const savingSettings = ref(false)
 
 const tasks = ref<SuperagentTask[]>([])
@@ -200,6 +242,17 @@ async function loadCapabilities() {
     caps.value = await getSuperagentCapabilities()
   } catch {
     // 无 view 权限：保持默认，列表请求会 403
+  }
+}
+
+async function toggleOps() {
+  showOps.value = !showOps.value
+  if (showOps.value && !opsMetrics.value) {
+    try {
+      opsMetrics.value = await getSuperagentOpsMetrics()
+    } catch {
+      // 权限瞬变忽略
+    }
   }
 }
 
@@ -489,6 +542,33 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ops-card {
+  padding: 4px 8px;
+}
+
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ops-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.ops-label {
+  color: var(--text-tertiary);
+  font-weight: 600;
 }
 
 .settings-card,
