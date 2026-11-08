@@ -1,20 +1,20 @@
-"""GitHub/Gitee REST 客户端：只做创建 PR 这一件外部事（httpx，无 SDK 依赖）。
+"""GitHub REST 客户端（T2/T4）：Draft PR 创建、按 head/base 查询复用。
 
-host 与 owner/repo 一律从配置的 repo_url 解析；测试注入 Fake 实现 PRClient。
+- 仓库地址解析复用 credentials.parse_repo_url（保存/prepare/publish 同一 parser）；
+- 查询先于创建：push/PR 边界中断后按 repo/head/base 对账复用已知远端结果；
+- 创建一律 draft=true（方案：合并交由维护者）；
+- 所有错误文本经 credentials.sanitize_text 脱敏。
+测试注入 Fake 实现 PRClient；真实实现用 httpx.AsyncClient。
 """
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
+
+from backend.modules.superagent.credentials import RepoRef, sanitize_text
 
 logger = logging.getLogger(__name__)
-
-_REPO_URL_RE = re.compile(
-    r"https://(?:www\.)?(?P<host>github\.com|gitee\.com)/(?P<full>[^/]+/[^/]+?)(?:\.git)?/?$",
-    re.I,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,54 +22,68 @@ class PullRequest:
     number: int
     api_url: str
     html_url: str
+    state: str = ""
+    draft: bool = False
+    head_ref: str = ""
+    merged: bool = False
 
 
 class PRClient(Protocol):
-    async def create_pull_request(
-        self, *, repo_url: str, title: str, head: str, base: str, body: str,
-    ) -> PullRequest: ...
-
-
-def parse_repo_full_name(repo_url: str) -> tuple[str, str]:
-    """仓库 URL → (host, owner/repo)；不支持的形式抛 ValueError。"""
-    match = _REPO_URL_RE.match(repo_url.strip())
-    if not match:
-        raise ValueError(f"无法从仓库地址解析 owner/repo: {repo_url}")
-    return match.group("host"), match.group("full")
-
-
-def push_url_with_token(repo_url: str, token: str) -> str:
-    """一次性 push URL：凭证只出现在命令行参数，不写进 .git/config。"""
-    host, full = parse_repo_full_name(repo_url)
-    return f"https://{token}@{host}/{full}.git"
+    async def find_pr_for_head(self, *, ref: RepoRef, head_branch: str, base_branch: str) -> PullRequest | None: ...
+    async def create_draft_pr(self, *, ref: RepoRef, title: str, head: str, base: str, body: str) -> PullRequest: ...
 
 
 class HttpxPRClient:
-    """POST /repos/{owner}/{repo}/pulls；Gitee 字段差异收敛在这里。"""
+    """POST/GET /repos/{owner}/{repo}/pulls；token 只进 Authorization 头。"""
 
     def __init__(self, *, token: str, timeout: float = 30.0) -> None:
         self._token = token
         self._timeout = timeout
 
-    async def create_pull_request(
-        self, *, repo_url: str, title: str, head: str, base: str, body: str,
+    async def find_pr_for_head(
+        self, *, ref: RepoRef, head_branch: str, base_branch: str
+    ) -> PullRequest | None:
+        import httpx  # noqa: PLC0415
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            # open + closed 都查：重试时若 PR 已被关闭也复用，不重复创建
+            response = await client.get(
+                f"https://api.github.com/repos/{ref.full_name}/pulls",
+                headers=_headers(self._token),
+                params={"head": f"{ref.owner}:{head_branch}", "base": base_branch,
+                        "state": "all", "per_page": "20"},
+            )
+            if response.status_code >= 400:
+                detail = sanitize_text(response.text[:300], tokens=(self._token,))
+                logger.warning("查询 PR 失败 status=%s detail=%s", response.status_code, detail)
+                raise RuntimeError(f"查询已有 PR 失败（HTTP {response.status_code}）：{detail}")
+            for item in response.json() or []:
+                head_ref = str((item.get("head") or {}).get("ref") or "")
+                if head_ref == head_branch:
+                    return PullRequest(
+                        number=int(item.get("number") or 0),
+                        api_url=str(item.get("url") or ""),
+                        html_url=str(item.get("html_url") or ""),
+                        state=str(item.get("state") or ""),
+                        draft=bool(item.get("draft")),
+                        head_ref=head_ref,
+                        merged=bool(item.get("merged")),
+                    )
+        return None
+
+    async def create_draft_pr(
+        self, *, ref: RepoRef, title: str, head: str, base: str, body: str,
     ) -> PullRequest:
         import httpx  # noqa: PLC0415
 
-        host, full_name = parse_repo_full_name(repo_url)
-        api_base = "https://gitee.com/api/v5" if host == "gitee.com" else "https://api.github.com"
-        headers = {"Accept": "application/vnd.github+json"}
-        payload: dict[str, Any] = {"title": title, "head": head, "base": base, "body": body}
-        if host == "gitee.com":
-            payload["access_token"] = self._token
-        else:
-            headers["Authorization"] = f"Bearer {self._token}"
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
-                f"{api_base}/repos/{full_name}/pulls", headers=headers, json=payload,
+                f"https://api.github.com/repos/{ref.full_name}/pulls",
+                headers=_headers(self._token),
+                json={"title": title, "head": head, "base": base, "body": body, "draft": True},
             )
             if response.status_code >= 400:
-                detail = response.text[:300]
+                detail = sanitize_text(response.text[:300], tokens=(self._token,))
                 logger.warning("创建 PR 失败 status=%s detail=%s", response.status_code, detail)
                 raise RuntimeError(f"创建 PR 失败（HTTP {response.status_code}）：{detail}")
             data = response.json()
@@ -77,4 +91,14 @@ class HttpxPRClient:
             number=int(data.get("number") or 0),
             api_url=str(data.get("url") or ""),
             html_url=str(data.get("html_url") or ""),
+            state=str(data.get("state") or ""),
+            draft=bool(data.get("draft")),
+            head_ref=str((data.get("head") or {}).get("ref") or head),
         )
+
+
+def _headers(token: str) -> dict[str, str]:
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers

@@ -1,268 +1,488 @@
-"""superagent：受理 gate、权限、生命周期、worker 执行全流程（假 git/PR/运行时）。"""
-from __future__ import annotations
+"""superagent 服务与 worker 回归（T1–T4）。
 
-from pathlib import Path
+覆盖：快照与幂等受理、CAS 状态机、attempt 生命周期、权限撤销、
+变更识别（代理自行 commit）、completed 门禁、验证门禁、Draft PR、
+通知幂等、取消竞态、publish 恢复。git/runner/PR 全部注入假件。
+"""
+from __future__ import annotations
 
 import pytest
 
+from backend.modules.delivery.api import DeliveryService
+from backend.modules.delivery.wechat import DisabledDeliverySender
 from backend.modules.superagent.api import SuperagentService
 from backend.modules.superagent.contracts import (
-    EVENT_NO_CHANGES,
-    EVENT_PR_CREATED,
-    EVENT_STARTED,
+    TASK_BLOCKED,
     TASK_CANCELLED,
     TASK_QUEUED,
+    TASK_RUNNING,
     TASK_SUCCEEDED,
+    TASK_WAITING_INPUT,
 )
 from backend.modules.superagent.github import PullRequest
+from backend.modules.superagent.runner import RunnerOutcome
 from backend.modules.superagent.worker import SuperagentWorker
-from backend.runtime.contracts import RuntimeEvent
 from backend.shared.errors import ForbiddenError, InvalidInputError
+from tests.superagent.fakes import (
+    CancelMidRunRunner,
+    FakeCanceller,
+    FakeGit,
+    FakePRClient,
+    FakeRunner,
+    make_outcome,
+)
 from tests.support.rig import TEST_ENCRYPTION_SECRET, make_rig
 
 REPO_URL = "https://github.com/foo/bar.git"
+HEAD1 = "a" * 40
+HEAD2 = "c" * 40
 
 
-def _service(rig) -> tuple[SuperagentService, object, object]:
+async def _rig_with_worker(rig, *, status="", diff="", existing_pr=None):
+    """装配 service + delivery(真实账本) + worker。返回 (service, admin, user, worker, delivery)。"""
     ready = rig if rig.access is not None else make_rig(rig.tmp_path, seed_access=True)
     rig.db, rig.access = ready.db, ready.access
-    service = SuperagentService(ready.db, access=ready.access)
+    delivery = DeliveryService(ready.db, sender=DisabledDeliverySender())
+    service = SuperagentService(ready.db, access=ready.access, delivery=delivery)
     service.set_encryption_secret(TEST_ENCRYPTION_SECRET)
+    service.runner_ready = True
     admin = ready.seed_user(role="admin")
     user = ready.seed_user(role="user")
-    return service, admin, user
-
-
-def _enable(service: SuperagentService, admin, *, token: str = "gh_token_1234567890") -> None:
-    service.update_settings(
-        admin, enabled=True, repo_url=REPO_URL, base_branch="main", github_token=token,
-    )
-
-
-def _worker(
-    rig, service: SuperagentService, runtime, *,
-    git_runner=None, pr_client=None, workspace_root: Path | None = None,
-) -> SuperagentWorker:
-    return SuperagentWorker(
+    service.update_settings(admin, enabled=True, repo_url=REPO_URL, base_branch="main",
+                            github_token="ghp_test_token_1234567890")
+    worker = SuperagentWorker(
         service,
-        runtime=runtime,
-        delivery=None,
+        runner=FakeRunner(make_outcome()),
+        delivery=delivery,
         channels_provider=lambda: None,
-        workspace_root=workspace_root or (rig.tmp_path / "ws"),
-        encryption_secret=TEST_ENCRYPTION_SECRET,
-        pr_client=pr_client,
-        git_runner=git_runner or _fake_git(clean=False),
+        workspace_root=rig.tmp_path / "ws",
+        artifacts_root=rig.tmp_path / "verify",
+        pr_client_factory=lambda token: FakePRClient(existing=existing_pr),
+        git_runner=FakeGit(status=status, diff=diff),
         timezone="Asia/Shanghai",
     )
+    return service, admin, user, worker, delivery
 
 
-def _fake_git(*, clean: bool, calls: list | None = None):
-    """假 git runner：status 按 clean 意愿返回；其余命令成功并记录。"""
-    seen = calls if calls is not None else []
-
-    async def run(cwd, *args):
-        seen.append((cwd, args))
-        if args[:1] == ("status",):
-            return 0, ("" if clean else " M app.py\n"), ""
-        return 0, "", ""
-
-    return run
+def _wire(worker: SuperagentWorker, *, git: FakeGit | None = None, runner=None, pr=None) -> None:
+    worker._git_runner = git or FakeGit()
+    if runner is not None:
+        worker.runner = runner
+    worker._pr_client_factory = lambda token: pr or FakePRClient()
+    worker._helper_path = lambda: str(worker.workspace_root.parent / "helper.py")
 
 
-class _FakePRClient:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
+# ---- 受理 / 快照 / 幂等 ------------------------------------------------------------
 
-    async def create_pull_request(self, *, repo_url, title, head, base, body):
-        self.calls.append(
-            {"repo_url": repo_url, "title": title, "head": head, "base": base, "body": body}
-        )
-        return PullRequest(number=7, api_url="https://api/pulls/7", html_url="https://github.com/foo/bar/pull/7")
-
-
-def _completed(final_response: str) -> list[RuntimeEvent]:
-    return [RuntimeEvent(kind="completed", payload={"result": {"final_response": final_response, "completed": True}})]
-
-
-def _setup_workspace(root: Path) -> None:
-    """预置 .git 目录，跳过 clone 路径（clone 需要真实网络）。"""
-    (root / "foo__bar" / ".git").mkdir(parents=True, exist_ok=True)
-
-
-# ---- 受理与权限 ------------------------------------------------------------------
-
-async def test_create_task_requires_enabled_gate(rig) -> None:
-    service, admin, _ = _service(rig)
-    with pytest.raises(InvalidInputError):
-        service.create_task(
-            admin, title="t", requirement="r", source="web",
-        )  # 未启用
-
-
-async def test_create_task_and_queue(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(
-        user, title="修复登录", requirement="登录页 500，修复它", source="web",
-    )
+async def test_create_task_snapshots_repo_and_is_idempotent(rig) -> None:
+    service, admin, user, _, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="修复登录", requirement="登录 500", source="web",
+                               idempotency_key="evt-1")
     assert task.status == TASK_QUEUED
+    assert task.repo_url_snapshot == "https://github.com/foo/bar.git"
+    assert task.base_branch_snapshot == "main"
     assert task.branch.startswith("superagent/sag_")
-    assert task.owner_id == user.user_id
-    kinds = [e.kind for e in service.list_events(user, task.task_id)]
-    assert kinds[0] == "created"
+    # 幂等：同 key 返回同一任务
+    again = service.create_task(user, title="修复登录", requirement="登录 500",
+                                idempotency_key="evt-1")
+    assert again.task_id == task.task_id
+    # 不同 key 新任务
+    other = service.create_task(user, title="x", requirement="y", idempotency_key="evt-2")
+    assert other.task_id != task.task_id
 
 
-async def test_user_cannot_manage_settings_or_others_tasks(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(admin, title="a", requirement="b", source="web")
+async def test_settings_change_after_creation_does_not_affect_accepted_task(rig) -> None:
+    """验收矩阵 9：改仓库设置不改变已受理任务。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    service.create_task(user, title="t", requirement="r", idempotency_key="k9")
+    service.update_settings(admin, repo_url="https://github.com/other/repo.git", base_branch="dev")
+    git = FakeGit()
+    runner = FakeRunner(make_outcome())
+    pr_client = FakePRClient(existing=PullRequest(number=3, api_url="u",
+                                                  html_url="https://github.com/foo/bar/pull/3"))
+    _wire(worker, git=git, runner=runner, pr=pr_client)
+    await worker.tick()
+    # worker 用快照 clone；分支基线仍是快照的 main
+    joined_calls = [" ".join(c) for c in git.calls]
+    assert any("https://github.com/foo/bar.git" in c for c in joined_calls)
+    assert not any("other/repo" in c for c in joined_calls)
+    assert any("origin/main" in c for c in joined_calls)
+
+
+# ---- CAS / attempt / 权限 ------------------------------------------------------------
+
+async def test_claim_creates_attempt_and_late_result_is_rejected(rig) -> None:
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    claimed = service.repo.claim_next_task()
+    assert claimed is not None
+    claimed_task, attempt = claimed
+    assert claimed_task.task_id == task.task_id
+    assert claimed_task.status == TASK_RUNNING
+    assert attempt.attempt_no == 1
+    # CAS：终态迁移要求匹配 active_attempt_id；换一个假 attempt 必须失败
+    from backend.modules.superagent.contracts import TaskAttempt
+
+    fake_attempt = TaskAttempt(
+        attempt_id="sat_" + "0" * 32, task_id=task.task_id, attempt_no=99, run_id="",
+        session_id="", workspace_key="", state="running", checkpoint="", head_sha="",
+        remote_head_sha="", pr_number=0, pr_url="", started_at="", heartbeat_at="",
+        finished_at="", error_code="", error_summary="",
+    )
+    ok = worker._transition_terminal(
+        claimed_task, fake_attempt, to_status=TASK_SUCCEEDED, task_fields={},
+        report_kind=None,
+    )
+    assert ok is False
+    assert service.task(task.task_id).status == TASK_RUNNING  # 未被迟到结果覆盖
+
+
+async def test_permission_revoked_blocks_execution(rig) -> None:
+    """验收矩阵 1/9：撤销权限后执行阶段重新检查。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    service.access.repo.set_user_permission(user.user_id, "superagent.create", False)
+    service.access.invalidate_all()
+    _wire(worker)
+    await worker.tick()
+    final = service.task(task.task_id)
+    assert final.status == TASK_BLOCKED
+    assert "权限" in final.error
+
+
+async def test_legacy_task_without_snapshot_cannot_retry(rig) -> None:
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    # 模拟 0020 之前的旧任务：清空快照
+    with service.repo.db.transaction() as conn:
+        conn.execute(
+            "UPDATE superagent_tasks SET repo_url_snapshot='', base_branch_snapshot='' WHERE id=?",
+            (task.task_id,),
+        )
+    with pytest.raises(InvalidInputError, match="快照"):
+        service.retry_task(user, task.task_id)
+
+
+async def test_cross_user_access_rules(rig) -> None:
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    other = rig.seed_user(role="user")
+    task = service.create_task(user, title="t", requirement="r")
+    # 撤销 view 权限者不可见
+    service.access.repo.set_user_permission(other.user_id, "superagent.view", False)
+    service.access.invalidate_all()
     with pytest.raises(ForbiddenError):
-        service.get_settings(user)
+        service.get_task(other, task.task_id)
+    # 恢复 view 后：可见但跨用户取消需要 manage
+    service.access.repo.set_user_permission(other.user_id, "superagent.view", True)
+    service.access.invalidate_all()
     with pytest.raises(ForbiddenError):
-        service.get_task(user, task.task_id)
+        await service.cancel_task(other, task.task_id)
+    # manage 可跨用户取消
+    await service.cancel_task(admin, task.task_id)
+    assert service.task(task.task_id).status == TASK_CANCELLED
 
 
-async def test_token_is_encrypted_and_masked(rig) -> None:
-    service, admin, _ = _service(rig)
-    _enable(service, admin)
-    settings = service.get_settings(admin)
-    assert settings.has_github_token
-    assert "gh_token" not in settings.github_token_mask
-    raw = service.repo.get_token_encrypted()
-    assert raw.startswith("enc:v1:")
+# ---- worker 全流程 ------------------------------------------------------------------
+
+async def test_worker_runs_task_and_creates_draft_pr(rig) -> None:
+    from backend.modules.delivery.contracts import DeliveryTarget
+
+    service, admin, user, worker, delivery = await _rig_with_worker(rig)
+    task = service.create_task(
+        user, title="修复登录", requirement="修复登录 500", source="wechat",
+        source_target=DeliveryTarget(kind="wechat", ref="wx-user-1", channel_account_id="chn_1"),
+    )
+    git = FakeGit(status=" M app.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2])
+    pr_client = FakePRClient()
+    runner = FakeRunner(make_outcome("修复了 login.py 的空指针。"))
+    _wire(worker, git=git, runner=runner, pr=pr_client)
+
+    assert await worker.tick() == 1
+    final = service.task(task.task_id)
+    assert final.status == TASK_SUCCEEDED
+    assert final.pr_state == "draft"
+    assert final.pr_url.endswith("/pull/7")
+    assert final.result_summary == "修复了 login.py 的空指针。"
+    # PR 调用：draft、head=任务分支、base=快照基线
+    assert pr_client.created[0]["head"] == final.branch
+    assert pr_client.created[0]["base"] == "main"
+    assert "EasyChat-Superagent-Task:" in pr_client.created[0]["body"]
+    # git 调用：无凭证 URL；argv 与 helper 参数都不含 token
+    joined_calls = [" ".join(c) for c in git.calls]
+    assert any("https://github.com/foo/bar.git" in c for c in joined_calls)
+    assert not any("ghp_test_token" in c for c in joined_calls)
+    assert not any("ghp_test_token" in " ".join(git.git_args_seen) for _ in [0])
+    # push 限时存在且 ≤ 300
+    push_idx = next(i for i, c in enumerate(git.calls) if c[0] == "push")
+    assert git.timeouts_seen[push_idx] <= 300
+    # attempt checkpoint 推进到 pr_created；head 记录
+    attempts = service.repo.attempts_for_task(task.task_id)
+    assert attempts[0].checkpoint == "pr_created"
+    assert attempts[0].head_sha == HEAD2
+    # 同事务回执：真实 deliveries 行存在且 dedup 含 attempt/report/target
+    conn = rig.db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT dedup_key FROM deliveries WHERE source='superagent'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    assert f"a{attempts[0].attempt_no}:ready" in str(rows[0]["dedup_key"])
 
 
-# ---- worker 执行 ------------------------------------------------------------------
-
-
-async def test_worker_runs_task_and_creates_pr(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="修复登录", requirement="修复登录 500", source="wechat")
-    rig.runtime.script_events(_completed("修复了 login.py 的空指针。"))
-    workspace_root = rig.tmp_path / "ws"
-    _setup_workspace(workspace_root)
-    pr_client = _FakePRClient()
-    worker = _worker(rig, service, rig.runtime, pr_client=pr_client,
-                     workspace_root=workspace_root)
-
-    executed = await worker.tick()
-    assert executed == 1
+async def test_agent_self_commit_is_detected_via_base_diff(rig) -> None:
+    """验收矩阵 5：代理自行 commit 后 porcelain 为空，base...HEAD 仍识别变更。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    git = FakeGit(status="", diff=" app.py | 3 +-\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2])
+    pr_client = FakePRClient()
+    _wire(worker, git=git, pr=pr_client)
+    await worker.tick()
     final = service.task(task.task_id)
     assert final.status == TASK_SUCCEEDED
     assert final.pr_url.endswith("/pull/7")
-    assert final.pr_number == 7
-    assert final.result_summary == "修复了 login.py 的空指针。"
-    assert pr_client.calls[0]["head"] == final.branch
-    assert pr_client.calls[0]["base"] == "main"
-    kinds = [e.kind for e in service.list_events(user, task.task_id)]
-    assert EVENT_STARTED in kinds and EVENT_PR_CREATED in kinds
-    # 运行时请求：独立 source、编码工具集、需求文本
-    request = rig.runtime.requests[-1]
-    assert request.context.source == "superagent"
-    assert request.allowed_tools == frozenset({"terminal", "file", "web"})
-    assert "修复登录 500" in request.text
+    assert any("diff" in " ".join(c) and "..." in " ".join(c) for c in git.calls)
 
 
-async def test_worker_no_changes_succeeds_without_pr(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="体检", requirement="检查代码", source="web")
-    rig.runtime.script_events(_completed("没有需要改动的地方。"))
-    workspace_root = rig.tmp_path / "ws"
-    _setup_workspace(workspace_root)
-    worker = _worker(rig, service, rig.runtime, pr_client=_FakePRClient(),
-                     workspace_root=workspace_root,
-                     git_runner=_fake_git(clean=True))
+async def test_stream_ended_without_completed_fails_task(rig) -> None:
+    """P0 门禁：runtime 流意外结束 ≠ 完成。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    _wire(worker, runner=FakeRunner(RunnerOutcome(completed=False, error="连接中断")))
+    await worker.tick()
+    final = service.task(task.task_id)
+    assert final.status == "failed"
+    assert "未正常完成" in final.error
 
+
+async def test_missing_credentials_blocks(rig) -> None:
+    """缺凭证 → blocked（可重试），不再伪装 failed。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    service.update_settings(admin, github_token="")  # 清除凭证
+    task = service.create_task(user, title="t", requirement="r")
+    git = FakeGit(heads=[HEAD1, HEAD1, HEAD1])
+    _wire(worker, git=git)
+    await worker.tick()
+    final = service.task(task.task_id)
+    assert final.status == TASK_BLOCKED
+    assert "凭证" in final.error
+    reports = service.repo.reports_for_task(task.task_id)
+    assert reports[0].kind == "blocked"
+
+
+async def test_no_changes_succeeds_without_pr(rig) -> None:
+    from backend.modules.delivery.contracts import DeliveryTarget
+
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(
+        user, title="体检", requirement="检查代码", source="wechat",
+        source_target=DeliveryTarget(kind="wechat", ref="wx-user-1", channel_account_id="chn_1"),
+    )
+    git = FakeGit(status="", diff="", heads=[HEAD1, HEAD1, HEAD1, HEAD1])
+    _wire(worker, git=git, pr=FakePRClient())
     await worker.tick()
     final = service.task(task.task_id)
     assert final.status == TASK_SUCCEEDED
     assert final.pr_url == ""
-    kinds = [e.kind for e in service.list_events(user, task.task_id)]
-    assert EVENT_NO_CHANGES in kinds and EVENT_PR_CREATED not in kinds
+    kinds = [e["kind"] for e in service.repo.events_for_task(task.task_id)]
+    assert "no_changes" in kinds
+    conn = rig.db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT dedup_key FROM deliveries WHERE source='superagent'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert any("no_changes" in str(r["dedup_key"]) for r in rows)
 
 
-async def test_worker_runtime_failure_marks_task_failed(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="t", requirement="r", source="web")
-    rig.runtime.script_events([RuntimeEvent(kind="failed", payload={"error": "模型超时"})])
-    workspace_root = rig.tmp_path / "ws"
-    _setup_workspace(workspace_root)
-    worker = _worker(rig, service, rig.runtime, pr_client=_FakePRClient(),
-                     workspace_root=workspace_root)
-
+async def test_question_protocol_enters_waiting_input_and_input_resumes(rig) -> None:
+    """追问 → waiting_input → 补充 → 重新入队续跑（同一任务）。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    outcome = make_outcome("需要知道目标 Python 版本。\nQUESTION: 目标 Python 版本是多少？")
+    _wire(worker, git=FakeGit(heads=[HEAD1, HEAD1]),
+          runner=FakeRunner(outcome), pr=FakePRClient())
     await worker.tick()
     final = service.task(task.task_id)
-    assert final.status == "failed"
-    assert "模型超时" in final.error
+    assert final.status == TASK_WAITING_INPUT
+    reports = service.repo.reports_for_task(task.task_id)
+    assert reports[0].kind == "question"
+    assert "Python" in reports[0].question
+    # 用户补充（幂等键防重）
+    first = service.append_task_input(user, task.task_id, text="3.12", source="wechat",
+                                      external_event_id="wx-1")
+    dup = service.append_task_input(user, task.task_id, text="3.12", source="wechat",
+                                    external_event_id="wx-1")
+    assert dup.input_id == first.input_id
+    assert service.task(task.task_id).status == TASK_QUEUED
+    # 第二次执行：runner 收到补充输入
+    runner = FakeRunner(make_outcome("改好了。"))
+    _wire(worker, git=FakeGit(status=" M a.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2]),
+          runner=runner, pr=FakePRClient())
+    await worker.tick()
+    request = runner.requests[-1]
+    assert any("3.12" in item for item in request.extra_inputs)
+    assert service.task(task.task_id).status == TASK_SUCCEEDED
 
 
-async def test_cancelled_task_is_not_overwritten(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="t", requirement="r", source="web")
-    # 执行中取消：runtime 事件流期间把任务置为 cancelled
-    scripted = rig.runtime
+async def test_cancel_during_coding_lands_cancelled_without_pr(rig) -> None:
+    """验收矩阵 6：运行中取消按真实状态显示，协作中断被 await。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    canceller = FakeCanceller()
+    service.set_run_canceller(canceller)
+    task = service.create_task(user, title="t", requirement="r")
 
-    async def execute(request):
-        service.cancel_task(user, task.task_id)
-        for event in _completed("晚到的结果"):
-            yield event
+    async def trigger_cancel():
+        await service.cancel_task(user, task.task_id)
 
-    scripted.execute = execute  # type: ignore[method-assign]
-    workspace_root = rig.tmp_path / "ws"
-    _setup_workspace(workspace_root)
-    worker = _worker(rig, service, scripted, pr_client=_FakePRClient(),
-                     workspace_root=workspace_root)
-
+    _wire(worker, git=FakeGit(heads=[HEAD1, HEAD1]),
+          runner=CancelMidRunRunner(make_outcome("晚到的结果"), trigger_cancel),
+          pr=FakePRClient())
     await worker.tick()
     final = service.task(task.task_id)
     assert final.status == TASK_CANCELLED
     assert final.pr_url == ""
+    # 协作取消被 await（异步 canceller 真正执行）
+    assert len(canceller.cancelled) >= 1
+    attempts = service.repo.attempts_for_task(task.task_id)
+    assert attempts[0].state == "interrupted"
 
 
-async def test_queued_task_can_be_cancelled_before_execution(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="t", requirement="r", source="web")
-    cancelled = service.cancel_task(user, task.task_id)
-    assert cancelled.status == TASK_CANCELLED
-    assert await _worker(rig, service, rig.runtime).tick() == 0
+async def test_cancel_after_push_records_race_and_finishes(rig) -> None:
+    """取消/发布竞态：push 已发出后取消 → cancelled_after_publication + 完成发布。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+
+    async def cancel_during_push(args: str) -> None:
+        if args.startswith("push"):
+            await service.cancel_task(user, task.task_id)
+
+    git = FakeGit(status=" M a.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2],
+                  hooks={"push": cancel_during_push})
+    _wire(worker, git=git, pr=FakePRClient())
+    await worker.tick()
+    final = service.task(task.task_id)
+    # 已推送的动作以远端实际结果为准：完成发布（非 cancelled）
+    assert final.status == TASK_SUCCEEDED
+    assert final.pr_url != ""
+    kinds = [e["kind"] for e in service.repo.events_for_task(task.task_id)]
+    assert "cancelled_after_publication" in kinds
 
 
-async def test_retry_requeues_failed_task(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    task = service.create_task(user, title="t", requirement="r", source="web")
-    service.repo.update_fields(task.task_id, status="failed", error="x", finished_at="now")
-    retried = service.retry_task(user, task.task_id)
-    assert retried.status == TASK_QUEUED
-    assert retried.error == ""
-    with pytest.raises(InvalidInputError):
-        service.repo.update_fields(task.task_id, status="succeeded")
-        service.retry_task(user, task.task_id)
+async def test_push_failure_then_retry_reconciles_pr(rig) -> None:
+    """push 后建 PR 失败（响应丢失）→ 重试按远端对账复用 PR，不重复创建。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    ghost_pr = PullRequest(number=11, api_url="u", html_url="https://github.com/foo/bar/pull/11",
+                           state="open", draft=True, head_ref=task.branch)
+    # 第一次：PR 创建"失败"但远端实际已创建（网络歧义）
+    pr_client = FakePRClient(create_error=RuntimeError("connection reset"),
+                             register_on_create_error=ghost_pr)
+    _wire(worker, git=FakeGit(status=" M a.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2]),
+          pr=pr_client)
+
+    await worker.tick()
+    assert service.task(task.task_id).status == "failed"
+    assert pr_client.created == []  # 响应丢失，本地无记录
+
+    # 重试：新 attempt；diff base...HEAD 非空（提交已在分支上）；远端 PR 复用
+    assert service.retry_task(user, task.task_id).status == TASK_QUEUED
+    _wire(worker, git=FakeGit(status=" M a.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2]),
+          runner=FakeRunner(make_outcome("重试完成。")), pr=pr_client)
+    await worker.tick()
+    final = service.task(task.task_id)
+    assert final.status == TASK_SUCCEEDED
+    assert final.pr_url.endswith("/pull/11")
+    assert pr_client.created == []  # 未重复创建
+    kinds = [e["kind"] for e in service.repo.events_for_task(task.task_id)]
+    assert "reconciled" in kinds
+    attempts = service.repo.attempts_for_task(task.task_id)
+    assert len(attempts) == 2
+    assert attempts[1].attempt_no == 2
 
 
-async def test_disabled_gate_stops_worker_claiming(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin)
-    service.create_task(user, title="t", requirement="r", source="web")
-    service.update_settings(admin, enabled=False)
-    assert await _worker(rig, service, rig.runtime).tick() == 0
+async def test_notification_dedup_across_attempts(rig) -> None:
+    """验收矩阵 8：失败通知与重试成功通知是两条独立回执。"""
+    from backend.modules.delivery.contracts import DeliveryTarget
+
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(
+        user, title="t", requirement="r", source="wechat",
+        source_target=DeliveryTarget(kind="wechat", ref="wx-user-1", channel_account_id="chn_1"),
+    )
+    _wire(worker, runner=FakeRunner(RunnerOutcome(completed=False, error="模型超时")),
+          pr=FakePRClient())
+    await worker.tick()
+    assert service.task(task.task_id).status == "failed"
+
+    service.retry_task(user, task.task_id)
+    _wire(worker, git=FakeGit(status=" M a.py\n", heads=[HEAD1, HEAD1, HEAD1, HEAD2]),
+          runner=FakeRunner(make_outcome()), pr=FakePRClient())
+    await worker.tick()
+    conn = rig.db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT dedup_key FROM deliveries WHERE source='superagent'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 2
+    keys = {str(r["dedup_key"]) for r in rows}
+    assert any("a1:failed" in k for k in keys)
+    assert any("a2:ready" in k for k in keys)
 
 
-async def test_worker_requires_token_before_push(rig) -> None:
-    service, admin, user = _service(rig)
-    _enable(service, admin, token="")
-    task = service.create_task(user, title="t", requirement="r", source="web")
-    rig.runtime.script_events(_completed("done"))
-    workspace_root = rig.tmp_path / "ws"
-    _setup_workspace(workspace_root)
-    worker = _worker(rig, service, rig.runtime, pr_client=_FakePRClient(),
-                     workspace_root=workspace_root)
+async def test_git_error_messages_are_sanitized(rig) -> None:
+    """验收矩阵 10：git 错误里的 token 被脱敏。"""
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    git = FakeGit(fail_on=(("clone", "remote: Invalid credentials for ghp_test_token_1234567890"),))
+    _wire(worker, git=git)
     await worker.tick()
     final = service.task(task.task_id)
     assert final.status == "failed"
-    assert "token" in final.error
+    assert "ghp_test_token" not in final.error
+    assert "***" in final.error
+
+
+async def test_worker_disabled_gate_and_queued_cancel(rig) -> None:
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    service.update_settings(admin, enabled=False)
+    assert await worker.tick() == 0
+    cancelled = await service.cancel_task(user, task.task_id)
+    assert cancelled.status == TASK_CANCELLED
+    service.update_settings(admin, enabled=True)
+    assert await worker.tick() == 0  # 取消后的任务不再执行
+
+
+async def test_startup_recovery_marks_interrupted(rig) -> None:
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    service.repo.claim_next_task()
+    assert service.task(task.task_id).status == TASK_RUNNING
+    assert service.recover_interrupted() == 1
+    final = service.task(task.task_id)
+    assert final.status == "interrupted"
+    attempts = service.repo.attempts_for_task(task.task_id)
+    assert attempts[0].state == "interrupted"
+    # interrupted 可重试
+    assert service.retry_task(user, task.task_id).status == TASK_QUEUED
+
+
+async def test_worker_sanitizes_legacy_workspace_remotes(rig) -> None:
+    """T2：旧工作区 origin 携带 userinfo → 启动清理。"""
+    import subprocess as sp
+
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    legacy = rig.tmp_path / "ws" / "legacy" / "repo"
+    legacy.mkdir(parents=True)
+    sp.run(["git", "init", "-q", str(legacy)], check=True)
+    sp.run(["git", "remote", "add", "origin",
+            "https://ghp_leaked_token@github.com/foo/bar.git"], cwd=str(legacy), check=True)
+    worker._sanitize_legacy_remotes()
+    url = sp.run(["git", "remote", "get-url", "origin"], cwd=str(legacy),
+                 capture_output=True, text=True).stdout.strip()
+    assert url == "https://github.com/foo/bar.git"

@@ -385,15 +385,17 @@ async def run_startup(registry: ModuleRegistry) -> None:
         )
         if registry.runtime is not None:
             registry.superagent.set_run_canceller(registry.runtime.cancel)
+            registry.superagent.runner_ready = True
+            from backend.modules.superagent.runner import HermesCodingRunner
             from backend.modules.superagent.worker import SuperagentWorker
 
             registry.superagent_worker = SuperagentWorker(
                 registry.superagent,
-                runtime=registry.runtime,
+                runner=HermesCodingRunner(registry.runtime),
                 delivery=registry.delivery,
                 channels_provider=lambda: registry.channels,
                 workspace_root=registry.settings.artifacts_dir / "superagent",
-                encryption_secret=str(registry.settings.encryption_secret or ""),
+                artifacts_root=registry.settings.artifacts_dir / "superagent_verify",
                 timezone=registry.settings.project_timezone,
             )
 

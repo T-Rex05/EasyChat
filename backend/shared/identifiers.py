@@ -42,6 +42,9 @@ _PREFIX_LEDGER_ANALYSIS = "lan"
 _PREFIX_MOOD = "mood"
 _PREFIX_INBOX = "inb"
 _PREFIX_SUPERAGENT_TASK = "sag"
+_PREFIX_SUPERAGENT_ATTEMPT = "sat"
+_PREFIX_SUPERAGENT_INPUT = "sai"
+_PREFIX_SUPERAGENT_REPORT = "sar"
 
 
 def _new_id(prefix: str) -> str:
@@ -174,6 +177,18 @@ def new_inbox_id() -> str:
 
 def new_superagent_task_id() -> str:
     return _new_id(_PREFIX_SUPERAGENT_TASK)
+
+
+def new_superagent_attempt_id() -> str:
+    return _new_id(_PREFIX_SUPERAGENT_ATTEMPT)
+
+
+def new_superagent_input_id() -> str:
+    return _new_id(_PREFIX_SUPERAGENT_INPUT)
+
+
+def new_superagent_report_id() -> str:
+    return _new_id(_PREFIX_SUPERAGENT_REPORT)
 
 
 def new_channel_account_id() -> str:
