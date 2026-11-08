@@ -3,15 +3,20 @@
     <header class="page-header">
       <div>
         <h2>超级代理</h2>
-        <p class="hint">在微信里描述需求，后台代理在独立工作区完成编码并自动提交 Pull Request，结果回信给你。</p>
+        <p class="hint">在微信里描述需求（或用 /开发 命令），后台代理在独立工作区完成编码并自动创建 Draft PR，结果回信给你。</p>
       </div>
-      <button v-if="canManage" class="btn btn-secondary" @click="showSettings = !showSettings">
+      <button v-if="caps.manage" class="btn btn-secondary" @click="showSettings = !showSettings">
         {{ showSettings ? '收起配置' : '仓库配置' }}
       </button>
     </header>
 
-    <!-- 仓库配置（仅 superagent.manage） -->
-    <form v-if="showSettings && canManage" class="card settings-card" @submit.prevent="saveSettings">
+    <!-- 受理状态提示（capabilities 驱动，普通用户也能看到准确原因） -->
+    <div v-if="caps.view && gateReasons.length" class="notice-banner">
+      当前暂不能受理新任务：{{ gateReasons.join('；') }}
+    </div>
+
+    <!-- 仓库配置（仅 manage） -->
+    <form v-if="showSettings && caps.manage" class="card settings-card" @submit.prevent="saveSettings">
       <div class="form-row">
         <label class="form-label">启用</label>
         <label class="switch">
@@ -20,7 +25,7 @@
         </label>
       </div>
       <div class="form-group">
-        <label class="form-label">目标仓库（HTTPS）</label>
+        <label class="form-label">目标仓库（GitHub HTTPS）</label>
         <input v-model="settingsDraft.repo_url" class="input" placeholder="https://github.com/owner/repo.git" />
       </div>
       <div class="form-row">
@@ -29,82 +34,107 @@
           <input v-model="settingsDraft.base_branch" class="input" placeholder="main" />
         </div>
         <div class="form-group grow">
-          <label class="form-label">并发上限</label>
-          <input v-model.number="settingsDraft.max_concurrent" class="input" type="number" min="1" max="4" />
+          <label class="form-label">并发上限（当前版本实际串行）</label>
+          <input v-model.number="settingsDraft.max_concurrent" class="input" type="number" min="1" max="4" disabled />
         </div>
       </div>
       <div class="form-group">
         <label class="form-label">
-          GitHub Token（ PAT，需 repo 权限）
+          GitHub Token（PAT，需 repo 权限）
           <span v-if="settings && settings.has_github_token" class="muted">已保存（{{ settings.github_token_mask }}），留空表示不修改</span>
         </label>
         <input v-model="settingsDraft.github_token" class="input" type="password" placeholder="ghp_...（写入后仅存密文）" autocomplete="off" />
       </div>
-      <p class="muted">代理以工作分支提交代码并创建 PR；token 只用于 push 与调 GitHub API，不会写进仓库配置。</p>
+      <div class="form-group">
+        <label class="form-label">验证命令（JSON 数组，可选）</label>
+        <textarea v-model="settingsDraft.verify_profile" class="textarea" rows="3"
+          placeholder='[{"name":"pytest","command":"python -m pytest -q","timeout_seconds":600}]'></textarea>
+        <p class="muted">验证由控制端在工作区执行；失败任务默认仍可出 Draft PR（PR 中记录证据），关闭下方开关后失败即受阻。</p>
+      </div>
+      <div class="form-row">
+        <label class="switch">
+          <input v-model="settingsDraft.allow_unverified_draft" type="checkbox" />
+          <span>验证失败/未配置时仍允许发布 Draft PR（PR 内记录缺失证据）</span>
+        </label>
+      </div>
       <div class="actions">
         <button class="btn btn-primary" type="submit" :disabled="savingSettings">保存配置</button>
       </div>
     </form>
 
-    <!-- 新建任务 -->
-    <form class="card create-card" @submit.prevent="createTask">
+    <!-- 新建任务（create 权限 + gate 可用才可提交；不可用时按钮置灰并给原因） -->
+    <form v-if="caps.create" class="card create-card" @submit.prevent="createTask">
       <div class="form-group">
         <label class="form-label">任务标题</label>
         <input v-model="draft.title" class="input" placeholder="例如：给导出功能增加 CSV 格式" maxlength="120" required />
       </div>
       <div class="form-group">
         <label class="form-label">需求描述（要自包含：目标、验收标准、涉及范围）</label>
-        <textarea v-model="draft.requirement" class="textarea" rows="4" placeholder="代理会独立工作，写清楚它需要知道的一切；信息不足时它会拒绝而非猜测。" required></textarea>
+        <textarea v-model="draft.requirement" class="textarea" rows="4" placeholder="代理会独立工作，写清楚它需要知道的一切；信息不足时它会追问而非猜测。" required></textarea>
       </div>
       <div class="form-group">
         <label class="form-label">补充上下文（可选）</label>
         <textarea v-model="draft.context_extra" class="textarea" rows="2" placeholder="相关链接、已知结论、约束条件…"></textarea>
       </div>
       <div class="actions">
-        <span v-if="!gateReady" class="muted">超级代理未启用或未配置仓库，提交前请先完成配置。</span>
-        <button class="btn btn-primary" type="submit" :disabled="creating || !gateReady">提交任务</button>
+        <span v-if="gateReasons.length" class="muted">{{ gateReasons.join('；') }}</span>
+        <button class="btn btn-primary" type="submit" :disabled="creating || gateReasons.length > 0">提交任务</button>
       </div>
     </form>
 
     <div v-if="error" class="error-banner">{{ error }}</div>
     <div v-if="loading" class="empty">加载中...</div>
-    <div v-else-if="tasks.length === 0" class="empty">还没有编码任务。在微信里直接描述需求，或在这里提交。</div>
+    <div v-else-if="tasks.length === 0" class="empty">
+      还没有编码任务。在微信里发「/开发 <需求>」，或在这里提交。
+    </div>
 
     <div v-else class="list">
       <article v-for="t in tasks" :key="t.task_id" class="card item">
         <div class="item-head">
           <strong>{{ t.title }}</strong>
-          <span class="badge" :class="statusBadge(t.status)">{{ statusText(t.status) }}</span>
+          <span class="badge" :class="statusBadge(t)">{{ statusText(t) }}</span>
+          <span v-if="t.phase" class="badge badge-info">{{ phaseText(t.phase) }}</span>
           <span class="badge badge-info">{{ sourceText(t.source) }}</span>
-          <a v-if="t.pr_url" class="link-btn" :href="t.pr_url" target="_blank" rel="noopener">查看 PR #{{ t.pr_number }}</a>
+          <a v-if="t.pr_url" class="link-btn" :href="t.pr_url" target="_blank" rel="noopener">
+            Draft PR #{{ t.pr_number }}{{ prStateSuffix(t.pr_state) }}
+          </a>
           <button
-            v-if="t.status === 'queued' || t.status === 'running'"
+            v-if="canCancel(t)"
             class="btn btn-sm btn-danger"
             @click="cancel(t)"
-          >取消</button>
+          >{{ t.status === 'cancel_requested' ? '取消中…' : '取消' }}</button>
           <button
-            v-if="t.status === 'failed' || t.status === 'cancelled'"
+            v-if="canRetry(t)"
             class="btn btn-sm btn-secondary"
             @click="retry(t)"
           >重试</button>
         </div>
         <p class="content req">{{ t.requirement }}</p>
-        <p v-if="t.result_summary" class="content summary">摘要：{{ t.result_summary }}</p>
-        <p v-if="t.error" class="content err">失败原因：{{ t.error }}</p>
+        <p v-if="t.result_summary" class="content summary">{{ t.result_summary }}</p>
+        <p v-if="t.error" class="content err">{{ t.error }}</p>
         <p class="muted">
           分支 {{ t.branch }} · 第 {{ t.attempts }} 次执行 · 创建 {{ shortTime(t.created_at) }}
-          <template v-if="t.finished_at"> · 完成 {{ shortTime(t.finished_at) }}</template>
+          <template v-if="t.finished_at"> · 结束 {{ shortTime(t.finished_at) }}</template>
         </p>
-        <button class="link-btn" @click="toggleEvents(t)">{{ expanded === t.task_id ? '收起轨迹' : '执行轨迹' }}</button>
+        <button class="link-btn" @click="toggleDetail(t)">{{ expanded === t.task_id ? '收起轨迹' : '执行轨迹' }}</button>
         <div v-if="expanded === t.task_id" class="events">
-          <div v-if="events.length === 0" class="muted">暂无事件</div>
-          <div v-for="e in events" :key="e.event_id" class="event">
+          <div v-if="detailEvents.length === 0" class="muted">暂无事件</div>
+          <div v-for="e in detailEvents" :key="e.event_id" class="event">
             <span class="event-kind" :class="`k-${e.kind}`">{{ eventText(e.kind) }}</span>
             <span class="event-detail">{{ e.detail }}</span>
             <span class="muted">{{ shortTime(e.created_at) }}</span>
           </div>
         </div>
+        <!-- 追问回答 / 补充输入（waiting_input / blocked / failed 时可见） -->
+        <form v-if="expanded === t.task_id && canSupplement(t)" class="supplement" @submit.prevent="submitSupplement(t)">
+          <input v-model="supplementText" class="input grow" placeholder="回答代理的问题，或补充需求…" required />
+          <button class="btn btn-sm btn-primary" type="submit" :disabled="supplementing">发送并重新入队</button>
+        </form>
       </article>
+    </div>
+
+    <div v-if="nextCursor && tasks.length > 0" class="more">
+      <button class="btn btn-secondary btn-sm" @click="loadMore">加载更多</button>
     </div>
   </div>
 </template>
@@ -112,72 +142,79 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
+  appendSuperagentTaskInput,
   cancelSuperagentTask,
   createSuperagentTask,
+  getSuperagentCapabilities,
   getSuperagentSettings,
   listSuperagentEvents,
   listSuperagentTasks,
   retrySuperagentTask,
   updateSuperagentSettings,
+  type SuperagentCapabilities,
   type SuperagentEvent,
   type SuperagentSettings,
   type SuperagentTask,
 } from '@/api/superagent'
-import { useAuthStore } from '@/stores/auth'
 
-const authStore = useAuthStore()
-const canManage = computed(() => {
-  if (authStore.userRole === 'super_admin') return true
-  return authStore.permissions.includes('superagent.manage')
+const caps = ref<SuperagentCapabilities>({
+  view: true, create: false, cancel: false, manage: false,
+  enabled: false, configured: false, credentials_ready: false,
+  runner_ready: false, reasons: [], repo_url: '',
 })
 
 const settings = ref<SuperagentSettings | null>(null)
 const settingsDraft = reactive({
-  enabled: false,
-  repo_url: '',
-  base_branch: 'main',
-  max_concurrent: 1,
-  github_token: '',
+  enabled: false, repo_url: '', base_branch: 'main', max_concurrent: 1,
+  github_token: '', verify_profile: '[]', allow_unverified_draft: true,
 })
 const showSettings = ref(false)
 const savingSettings = ref(false)
 
 const tasks = ref<SuperagentTask[]>([])
-const events = ref<SuperagentEvent[]>([])
+const nextCursor = ref('')
 const expanded = ref('')
+const detailEvents = ref<SuperagentEvent[]>([])
+const detailAfterId = ref(0)
+const supplementText = ref('')
+const supplementing = ref(false)
 const loading = ref(false)
 const creating = ref(false)
 const error = ref('')
-const gateReady = ref(false)
 let pollTimer: number | null = null
+let activeTimer: number | null = null
+let listInFlight = false
+let detailInFlight = false
 
 const draft = reactive({ title: '', requirement: '', context_extra: '' })
+let createSeq = 0
+
+const gateReasons = computed(() => (caps.value.view && caps.value.create ? caps.value.reasons : []))
 
 function errMsg(e: any): string {
   return e?.response?.data?.message || e?.message || '操作失败'
 }
 
+async function loadCapabilities() {
+  try {
+    caps.value = await getSuperagentCapabilities()
+  } catch {
+    // 无 view 权限：保持默认，列表请求会 403
+  }
+}
+
 async function loadSettings() {
-  if (!canManage.value) return
+  if (!caps.value.manage) return
   try {
     settings.value = await getSuperagentSettings()
     settingsDraft.enabled = settings.value.enabled
     settingsDraft.repo_url = settings.value.repo_url
     settingsDraft.base_branch = settings.value.base_branch || 'main'
     settingsDraft.max_concurrent = settings.value.max_concurrent || 1
-    gateReady.value = Boolean(settings.value.enabled && settings.value.repo_url)
+    settingsDraft.verify_profile = settings.value.verify_profile || '[]'
+    settingsDraft.allow_unverified_draft = settings.value.allow_unverified_draft
   } catch {
-    // 无 manage 权限时忽略
-  }
-}
-
-async function loadGateForUser() {
-  if (canManage.value) return
-  try {
-    await listSuperagentTasks(1)
-    gateReady.value = true
-  } catch {
-    gateReady.value = true // 列表可读即可见提交入口；真正的 gate 由后端校验
+    // 忽略（权限变化瞬间的 403）
   }
 }
 
@@ -189,12 +226,13 @@ async function saveSettings() {
       enabled: settingsDraft.enabled,
       repo_url: settingsDraft.repo_url,
       base_branch: settingsDraft.base_branch,
-      max_concurrent: settingsDraft.max_concurrent,
+      verify_profile: settingsDraft.verify_profile,
+      allow_unverified_draft: settingsDraft.allow_unverified_draft,
     }
     if (settingsDraft.github_token.trim()) payload.github_token = settingsDraft.github_token.trim()
     settings.value = await updateSuperagentSettings(payload)
     settingsDraft.github_token = ''
-    gateReady.value = Boolean(settings.value.enabled && settings.value.repo_url)
+    await loadCapabilities()
   } catch (e: any) {
     error.value = errMsg(e)
   } finally {
@@ -202,23 +240,41 @@ async function saveSettings() {
   }
 }
 
-async function load() {
-  loading.value = true
+async function load(loadMoreMode = false) {
+  if (listInFlight) return // 防竞态：同类请求只有一个在途
+  listInFlight = true
+  if (!loadMoreMode) loading.value = true
   error.value = ''
   try {
-    tasks.value = await listSuperagentTasks()
+    const page = await listSuperagentTasks({ limit: 20, cursor: loadMoreMode ? nextCursor.value : '' })
+    if (loadMoreMode) {
+      const known = new Set(tasks.value.map((t) => t.task_id))
+      tasks.value = [...tasks.value, ...page.tasks.filter((t) => !known.has(t.task_id))]
+    } else {
+      tasks.value = page.tasks
+    }
+    nextCursor.value = page.next_cursor
   } catch (e: any) {
     error.value = errMsg(e)
   } finally {
+    listInFlight = false
     loading.value = false
   }
 }
 
+async function loadMore() {
+  await load(true)
+}
+
 async function createTask() {
+  const seq = ++createSeq
   creating.value = true
   error.value = ''
   try {
-    await createSuperagentTask(draft.title, draft.requirement, draft.context_extra)
+    await createSuperagentTask(
+      draft.title, draft.requirement, draft.context_extra,
+      `web-${seq}-${Date.now()}`,
+    )
     draft.title = ''
     draft.requirement = ''
     draft.context_extra = ''
@@ -235,6 +291,7 @@ async function cancel(t: SuperagentTask) {
   try {
     await cancelSuperagentTask(t.task_id)
     await load()
+    if (expanded.value === t.task_id) await refreshDetail(t.task_id)
   } catch (e: any) {
     error.value = errMsg(e)
   }
@@ -250,40 +307,97 @@ async function retry(t: SuperagentTask) {
   }
 }
 
-async function toggleEvents(t: SuperagentTask) {
+async function toggleDetail(t: SuperagentTask) {
   if (expanded.value === t.task_id) {
     expanded.value = ''
-    events.value = []
+    detailEvents.value = []
+    detailAfterId.value = 0
     return
   }
+  // 切换详情：直接换目标，旧请求结果按 task_id 丢弃（防乱序）
   expanded.value = t.task_id
+  detailEvents.value = []
+  detailAfterId.value = 0
+  supplementText.value = ''
+  await refreshDetail(t.task_id)
+}
+
+async function refreshDetail(taskId: string) {
+  if (detailInFlight) return
+  detailInFlight = true
   try {
-    events.value = await listSuperagentEvents(t.task_id)
+    const page = await listSuperagentEvents(taskId, detailAfterId.value)
+    if (expanded.value !== taskId) return // 旧响应丢弃
+    detailEvents.value = [...detailEvents.value, ...page.events]
+    detailAfterId.value = page.next_after_id
   } catch {
-    events.value = []
+    // 详情刷新失败不打断页面
+  } finally {
+    detailInFlight = false
   }
 }
 
-function statusText(status: string): string {
-  const map: Record<string, string> = {
-    queued: '排队中',
-    running: '执行中',
-    succeeded: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
+async function submitSupplement(t: SuperagentTask) {
+  if (!supplementText.value.trim()) return
+  supplementing.value = true
+  error.value = ''
+  try {
+    await appendSuperagentTaskInput(t.task_id, supplementText.value.trim(), `web-sup-${Date.now()}`)
+    supplementText.value = ''
+    await load()
+    await refreshDetail(t.task_id)
+  } catch (e: any) {
+    error.value = errMsg(e)
+  } finally {
+    supplementing.value = false
   }
-  return map[status] || status
 }
 
-function statusBadge(status: string): string {
+function canCancel(t: SuperagentTask): boolean {
+  if (!caps.value.cancel) return false
+  return t.status === 'queued' || t.status === 'running' || t.status === 'cancel_requested'
+}
+
+function canRetry(t: SuperagentTask): boolean {
+  if (!caps.value.create || t.legacy_config_unknown) return false
+  return ['failed', 'cancelled', 'blocked', 'interrupted'].includes(t.status)
+}
+
+function canSupplement(t: SuperagentTask): boolean {
+  if (!caps.value.create) return false
+  return ['waiting_input', 'blocked', 'failed'].includes(t.status)
+}
+
+function statusText(t: SuperagentTask): string {
+  if (t.status === 'cancel_requested') return '取消中'
   const map: Record<string, string> = {
-    queued: 'badge-warning',
-    running: 'badge-info',
-    succeeded: 'badge-success',
-    failed: 'badge-danger',
-    cancelled: 'badge-warning',
+    queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败',
+    cancelled: '已取消', waiting_input: '等待补充', blocked: '受阻',
+    awaiting_review: '待评审', interrupted: '已中断',
   }
-  return map[status] || 'badge'
+  return map[t.status] || t.status
+}
+
+function statusBadge(t: SuperagentTask): string {
+  if (t.status === 'cancel_requested') return 'badge-warning'
+  const map: Record<string, string> = {
+    queued: 'badge-warning', running: 'badge-info', succeeded: 'badge-success',
+    failed: 'badge-danger', cancelled: 'badge-warning', waiting_input: 'badge-warning',
+    blocked: 'badge-danger', awaiting_review: 'badge-info', interrupted: 'badge-warning',
+  }
+  return map[t.status] || 'badge'
+}
+
+function phaseText(phase: string): string {
+  const map: Record<string, string> = {
+    preparing: '准备中', coding: '编码中', verifying: '验证中', publishing: '发布中',
+  }
+  return map[phase] || phase
+}
+
+function prStateSuffix(state: string): string {
+  const map: Record<string, string> = { open: '（open）', merged: '（已合并）', closed: '（已关闭）' }
+  return map[state] || ''
 }
 
 function sourceText(source: string): string {
@@ -293,14 +407,11 @@ function sourceText(source: string): string {
 
 function eventText(kind: string): string {
   const map: Record<string, string> = {
-    created: '受理',
-    started: '开始',
-    progress: '进行',
-    pr_created: 'PR',
-    no_changes: '无变更',
-    failed: '失败',
-    cancelled: '取消',
-    notified: '已回信',
+    created: '受理', attempt_started: '执行', started: '开始', progress: '进行',
+    question: '追问', blocked: '受阻', pr_created: 'PR', no_changes: '无变更',
+    failed: '失败', cancel_requested: '取消请求', cancelled: '取消',
+    cancelled_after_publication: '发布后取消', notified: '已回信', input: '补充',
+    reconciled: '对账', reverted: '回滚',
   }
   return map[kind] || kind
 }
@@ -310,19 +421,39 @@ function shortTime(iso: string): string {
   return iso.replace('T', ' ').slice(0, 19)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadCapabilities()
   loadSettings()
-  loadGateForUser()
-  load()
-  // 排队/执行中的任务 5 秒轮询刷新；全部终态时自动停止
-  pollTimer = window.setInterval(() => {
-    const active = tasks.value.some((t) => t.status === 'queued' || t.status === 'running')
-    if (active) load()
-  }, 5000)
+  await load()
+  // 增量轮询：有活跃任务时 4s 刷新列表与展开详情；否则 15s 低频（微信新建任务也能出现）
+  pollTimer = window.setInterval(async () => {
+    const active = tasks.value.some(
+      (t) => ['queued', 'running', 'cancel_requested'].includes(t.status),
+    )
+    if (!listInFlight) {
+      if (active) {
+        await load()
+        if (expanded.value) await refreshDetail(expanded.value)
+      } else {
+        await load()
+      }
+    }
+  }, 15000)
+  // 活跃任务的高频刷新
+  activeTimer = window.setInterval(async () => {
+    const active = tasks.value.some(
+      (t) => ['queued', 'running', 'cancel_requested'].includes(t.status),
+    )
+    if (active && !listInFlight) {
+      await load()
+      if (expanded.value) await refreshDetail(expanded.value)
+    }
+  }, 4000)
 })
 
 onUnmounted(() => {
   if (pollTimer !== null) window.clearInterval(pollTimer)
+  if (activeTimer !== null) window.clearInterval(activeTimer)
 })
 </script>
 
@@ -348,6 +479,15 @@ onUnmounted(() => {
 .hint {
   margin: 0;
   color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.notice-banner {
+  background: rgba(240, 173, 78, 0.12);
+  border: 1px solid rgba(240, 173, 78, 0.4);
+  color: #b8860b;
+  border-radius: 8px;
+  padding: 10px 14px;
   font-size: 13px;
 }
 
@@ -459,7 +599,9 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.k-failed {
+.k-failed,
+.k-cancelled,
+.k-blocked {
   color: #d9534f;
 }
 
@@ -468,7 +610,9 @@ onUnmounted(() => {
   color: #5cb85c;
 }
 
-.k-cancelled {
+.k-cancel_requested,
+.k-cancelled_after_publication,
+.k-question {
   color: #f0ad4e;
 }
 
@@ -476,6 +620,22 @@ onUnmounted(() => {
   flex: 1;
   word-break: break-word;
   color: var(--text-secondary);
+}
+
+.supplement {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.supplement .grow {
+  flex: 1;
+}
+
+.more {
+  display: flex;
+  justify-content: center;
 }
 
 .empty {
@@ -491,5 +651,16 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
+}
+
+@media (max-width: 480px) {
+  .item-head strong {
+    flex-basis: 100%;
+  }
+
+  .supplement {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 </style>

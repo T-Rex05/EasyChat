@@ -1,5 +1,18 @@
-// 超级代理 API（对接 backend/modules/superagent）
+// 超级代理 API（对接 backend/modules/superagent；T6 工作台契约）
 import request from './request'
+
+export interface SuperagentCapabilities {
+  view: boolean
+  create: boolean
+  cancel: boolean
+  manage: boolean
+  enabled: boolean
+  configured: boolean
+  credentials_ready: boolean
+  runner_ready: boolean
+  reasons: string[]
+  repo_url: string
+}
 
 export interface SuperagentSettings {
   enabled: boolean
@@ -9,6 +22,8 @@ export interface SuperagentSettings {
   has_github_token: boolean
   pr_labels: string
   max_concurrent: number
+  verify_profile: string
+  allow_unverified_draft: boolean
   updated_at: string
 }
 
@@ -20,12 +35,20 @@ export interface SuperagentTask {
   context_extra: string
   source: string
   status: string
+  phase: string
   branch: string
+  repo_url: string
+  base_branch: string
   pr_url: string
   pr_number: number
+  pr_state: string
+  outcome: string
   result_summary: string
   error: string
   attempts: number
+  active_attempt_id: string
+  cancel_requested: boolean
+  legacy_config_unknown: boolean
   created_at: string
   updated_at: string
   started_at: string
@@ -39,30 +62,65 @@ export interface SuperagentEvent {
   created_at: string
 }
 
+export interface SuperagentReport {
+  report_id: string
+  kind: string
+  summary: string
+  question: string
+  head_sha: string
+  verification_ref: string
+  created_at: string
+}
+
+export interface TaskPage {
+  tasks: SuperagentTask[]
+  next_cursor: string
+}
+
+export async function getSuperagentCapabilities(): Promise<SuperagentCapabilities> {
+  const res = await request.get<{ capabilities: SuperagentCapabilities }>('/api/superagent/capabilities')
+  return res.data.capabilities
+}
+
 export async function getSuperagentSettings(): Promise<SuperagentSettings> {
   const res = await request.get<{ settings: SuperagentSettings }>('/api/superagent/settings')
   return res.data.settings
 }
 
 export async function updateSuperagentSettings(
-  data: Partial<{ enabled: boolean; repo_url: string; base_branch: string; github_token: string; pr_labels: string; max_concurrent: number }>,
+  data: Partial<{
+    enabled: boolean; repo_url: string; base_branch: string; github_token: string
+    pr_labels: string; max_concurrent: number; verify_profile: string; allow_unverified_draft: boolean
+  }>,
 ): Promise<SuperagentSettings> {
   const res = await request.put<{ settings: SuperagentSettings }>('/api/superagent/settings', data)
   return res.data.settings
 }
 
-export async function listSuperagentTasks(limit = 50): Promise<SuperagentTask[]> {
-  const res = await request.get<{ tasks: SuperagentTask[] }>('/api/superagent/tasks', { params: { limit } })
-  return res.data.tasks || []
+export async function listSuperagentTasks(params?: {
+  limit?: number; cursor?: string; status?: string
+}): Promise<TaskPage> {
+  const res = await request.get<TaskPage>('/api/superagent/tasks', { params })
+  return res.data
 }
 
-export async function createSuperagentTask(title: string, requirement: string, contextExtra = ''): Promise<SuperagentTask> {
-  const res = await request.post<{ task: SuperagentTask }>('/api/superagent/tasks', {
-    title,
-    requirement,
-    context_extra: contextExtra,
-  })
+export async function createSuperagentTask(
+  title: string, requirement: string, contextExtra = '', idempotencyKey?: string,
+): Promise<SuperagentTask> {
+  const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
+  const res = await request.post<{ task: SuperagentTask }>(
+    '/api/superagent/tasks',
+    { title, requirement, context_extra: contextExtra },
+    { headers },
+  )
   return res.data.task
+}
+
+export async function appendSuperagentTaskInput(
+  taskId: string, text: string, idempotencyKey?: string,
+): Promise<void> {
+  const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined
+  await request.post(`/api/superagent/tasks/${taskId}/inputs`, { text }, { headers })
 }
 
 export async function cancelSuperagentTask(taskId: string): Promise<SuperagentTask> {
@@ -75,7 +133,17 @@ export async function retrySuperagentTask(taskId: string): Promise<SuperagentTas
   return res.data.task
 }
 
-export async function listSuperagentEvents(taskId: string): Promise<SuperagentEvent[]> {
-  const res = await request.get<{ events: SuperagentEvent[] }>(`/api/superagent/tasks/${taskId}/events`)
-  return res.data.events || []
+export async function listSuperagentEvents(taskId: string, afterId = 0): Promise<{
+  events: SuperagentEvent[]
+  next_after_id: number
+}> {
+  const res = await request.get<{ events: SuperagentEvent[]; next_after_id: number }>(
+    `/api/superagent/tasks/${taskId}/events`, { params: { after_id: afterId } },
+  )
+  return res.data
+}
+
+export async function listSuperagentReports(taskId: string): Promise<SuperagentReport[]> {
+  const res = await request.get<{ reports: SuperagentReport[] }>(`/api/superagent/tasks/${taskId}/reports`)
+  return res.data.reports || []
 }
