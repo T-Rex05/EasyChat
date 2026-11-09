@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from collections import OrderedDict
 from typing import Any
@@ -20,6 +21,16 @@ from backend.modules.access.contracts import (
     PermissionOverride,
     RoleInfo,
     UserSnapshot,
+    ACTIVE_PERMISSION_KEYS,
+    DEFAULT_ROLE_PERMISSIONS,
+    DEFAULT_ROLE_TOOLSETS,
+    DEPRECATED_PERMISSION_KEYS,
+    DEFAULT_TEMPLATE_VERSION,
+    LEGACY_TEMPLATE_VERSION,
+    MODULE_KEYS,
+    MODULE_LABELS,
+    PERMISSION_DEFS,
+    SUPER_ADMIN_ROLE,
 )
 from backend.modules.access.repository import (
     AccessRepository,
@@ -31,21 +42,48 @@ from backend.platform.sqlite import Database
 from backend.shared.context import Principal
 from backend.shared.errors import ConflictError, ForbiddenError, InvalidInputError, UnauthenticatedError
 
-# 弱密钥拒绝（沿用旧 auth_service 规则）
+# 弱密钥拒绝（沿用旧 auth_service 规则）；必须包含仓库模板曾发布过的全部占位值，
+# 使"照抄快速上手"在启动期失败而不是带着公开密钥上线。
 _INSECURE_JWT_SECRETS = frozenset(
-    {"", "secret", "your-secret-key", "your-secret-key-here", "jwt-secret", "jwt_secret", "changeme", "change-me"}
+    {
+        "",
+        "secret",
+        "your-secret-key",
+        "your-secret-key-here",
+        "jwt-secret",
+        "jwt_secret",
+        "changeme",
+        "change-me",
+        "please-change-to-a-random-64-char-secret",
+    }
 )
+# 占位值的模式特征：未来模板默认值换文案也能被拦住（不依赖精确枚举）。
+_INSECURE_SECRET_PATTERNS = ("please-change", "change-me", "changeme")
 _MIN_SECRET_LEN = 32
 
 
 def _validate_secret(secret: str, *, allow_weak: bool) -> str:
     low = secret.strip().lower()
-    if low in _INSECURE_JWT_SECRETS:
+    if low in _INSECURE_JWT_SECRETS or any(p in low for p in _INSECURE_SECRET_PATTERNS):
         if allow_weak:
             return secret
         raise InvalidInputError("JWT_SECRET 不安全，拒绝启动；请设置 32 位以上随机密钥")
     if len(secret) < _MIN_SECRET_LEN and not allow_weak:
         raise InvalidInputError(f"JWT_SECRET 过短（{len(secret)} < {_MIN_SECRET_LEN}），拒绝启动")
+    return secret
+
+
+def validate_deployment_secret(secret: str, *, kind: str = "JWT_SECRET") -> str:
+    """部署密钥启动校验（JWT 与 EASYCHAT_ENCRYPTION_SECRET 共用同一套下限）。
+
+    加密密钥保护的凭据信封（模型 key/SMTP 密码/渠道 token）比 JWT 更敏感，
+    不得只做真值判断；低熵或占位值一律拒绝启动。
+    """
+    low = secret.strip().lower()
+    if low in _INSECURE_JWT_SECRETS or any(p in low for p in _INSECURE_SECRET_PATTERNS):
+        raise InvalidInputError(f"{kind} 不安全，拒绝启动；请设置 32 位以上随机密钥")
+    if len(secret) < _MIN_SECRET_LEN:
+        raise InvalidInputError(f"{kind} 过短（{len(secret)} < {_MIN_SECRET_LEN}），拒绝启动")
     return secret
 
 
@@ -73,6 +111,7 @@ class AccessService:
         renew_threshold_seconds: int = 604_800,
         refresh_grace_seconds: int = 604_800,
         cache_maxsize: int = 1024,
+        sse_ticket_ttl_seconds: int = 60,
         clock: Any = None,
     ) -> None:
         self.repo = AccessRepository(db)
@@ -83,14 +122,38 @@ class AccessService:
         self.clock = clock or time.time
         self._revision = 0
         self._cache_maxsize = cache_maxsize
+        self._sse_ticket_ttl = sse_ticket_ttl_seconds
+        self._sse_ticket_max = 512
+        self._sse_tickets: dict[str, tuple[int, float]] = {}
         self._perm_cache: OrderedDict[int, tuple[int, frozenset[str]]] = OrderedDict()
         self._toolsets_cache: OrderedDict[int, tuple[int, tuple[str, ...]]] = OrderedDict()
         self._user_cache: OrderedDict[int, tuple[int, UserSnapshot]] = OrderedDict()
 
+    # ---- SSE 一次性 ticket（审计 #3：长效 JWT 不得进 URL/访问日志） --------------
+
+    def issue_sse_ticket(self, user_id: int) -> str:
+        """签发秒级一次性 ticket：EventSource 无法带 Header，URL 上只允许出现
+        短时效凭据；ticket 单次消费、进程内有界，泄露后的重放价值可忽略。"""
+        ticket = secrets.token_urlsafe(32)
+        now = self.clock()
+        expired = [key for key, (_, exp) in self._sse_tickets.items() if exp <= now]
+        for key in expired:
+            self._sse_tickets.pop(key, None)
+        while len(self._sse_tickets) >= self._sse_ticket_max:
+            self._sse_tickets.pop(next(iter(self._sse_tickets)))
+        self._sse_tickets[ticket] = (int(user_id), now + self._sse_ticket_ttl)
+        return ticket
+
+    def consume_sse_ticket(self, ticket: str) -> Principal:
+        entry = self._sse_tickets.pop(ticket, None)  # 单次消费
+        if entry is None or self.clock() > entry[1]:
+            raise UnauthenticatedError("ticket 无效或已过期")
+        return self.snapshot_principal(entry[0])
+
     # ---- 种子 ------------------------------------------------------------------
 
     def seed(self) -> None:
-        """同步权限定义与内置角色。默认授权仅在角色零授权时播种，不覆盖自定义。"""
+        """同步权限定义与内置角色（按模板版本记录；显式清空/legacy 角色不再补种）。"""
         self.repo.upsert_permission_defs()
         self.repo.seed_builtin_roles()
         self.invalidate_all()
@@ -100,6 +163,10 @@ class AccessService:
     @property
     def permission_revision(self) -> int:
         return self._revision
+
+    @property
+    def sse_ticket_ttl(self) -> int:
+        return self._sse_ticket_ttl
 
     def invalidate_all(self) -> None:
         """任何角色/授权/用户状态变更后整体失效（有界缓存，revision 递增）。"""
@@ -260,6 +327,7 @@ class AccessService:
             revokes=frozenset(revokes),
             all_registered_permissions=ALL_PERMISSION_KEYS,
         )
+        # 防御：DEPRECATED 键过滤已在 policy 内完成；这里保留断言语义（避免未来重构回归）
         self._store(self._perm_cache, user_id, perms)
         return perms
 
@@ -305,10 +373,88 @@ class AccessService:
 
     # ---- 管理：用户 ------------------------------------------------------------------
 
+    def _is_super_admin(self, user_id: int) -> bool:
+        return self._user(user_id).role == SUPER_ADMIN_ROLE
+
+    def _count_active_super_admins(self) -> int:
+        conn = self.repo.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT count(*) AS c FROM users WHERE role=? AND status=1",
+                (SUPER_ADMIN_ROLE,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return int(row["c"]) if row else 0
+
+    def _require_owner_management(self, actor: Principal, target_user_id: int) -> None:
+        """拥有者身份只能由拥有者管理：目标或结果涉及 super_admin 时，actor 必须是。"""
+        if self._is_super_admin(actor.user_id):
+            return
+        if self._is_super_admin(target_user_id):
+            raise ForbiddenError("拥有者身份只能由超级管理员管理")
+        raise ForbiddenError("分配拥有者角色需要超级管理员确认")
+
+    def _require_not_last_owner(
+        self, user_id: int, *, new_role: str | None = None, new_status: int | None = None
+    ) -> None:
+        user = self._user(user_id)
+        if user.role != SUPER_ADMIN_ROLE:
+            return
+        losing = (new_role is not None and new_role != SUPER_ADMIN_ROLE) or (
+            new_status is not None and new_status != 1
+        )
+        if losing and self._count_active_super_admins() <= 1:
+            raise ForbiddenError("系统拥有者保护：不能降级或禁用最后一个超级管理员")
+
+    def capabilities(self, principal: Principal) -> dict[str, Any]:
+        """当前用户的功能能力（9 模块 + 工具 + 拥有者标志；前端菜单/路由/按钮唯一消费点）。
+
+        聚合规则：模块 enabled = 任一归属权限在有效权限中；read/use/manage
+        按目录 op 聚合（use/exec 含 read；manage 含 use）。工具 = 角色 toolsets。
+        """
+        perms = self.effective_permissions(principal.user_id)
+        from backend.modules.access.contracts import permission_catalog
+
+        catalog = permission_catalog()
+        modules: dict[str, dict[str, Any]] = {
+            key: {"label": MODULE_LABELS.get(key, key), "enabled": False,
+                  "read": False, "use": False, "manage": False}
+            for key in MODULE_KEYS
+        }
+        for key in perms:
+            entry = catalog.get(key)
+            if entry is None:
+                continue
+            module = modules.get(entry["module"])
+            if module is None:
+                continue  # internal 模块（files）不进功能模块视图
+            module["enabled"] = True
+            op = entry["op"]
+            if op == "read":
+                module["read"] = True
+            elif op in ("use", "execute"):
+                module["use"] = True
+                module["read"] = True
+            elif op == "manage":
+                module["manage"] = True
+                module["use"] = True
+                module["read"] = True
+        return {
+            "modules": modules,
+            "tools": list(self.hermes_toolsets(principal.user_id)),
+            "super_admin": self._is_super_admin(principal.user_id),
+            "permissions": sorted(perms),
+        }
+
     def set_user_role(self, actor: Principal, user_id: int, role: str) -> None:
         self.require_permission(actor, "system.manage")
         if self.repo.get_role_id_by_name(role) is None:
             raise InvalidInputError(f"角色不存在: {role}")
+        self._require_owner_management(actor, user_id)
+        if role == SUPER_ADMIN_ROLE and not self._is_super_admin(actor.user_id):
+            raise ForbiddenError("分配拥有者角色需要超级管理员确认")
+        self._require_not_last_owner(user_id, new_role=role)
         self.repo.set_user_role(user_id, role)
         self.invalidate_all()
 
@@ -316,6 +462,8 @@ class AccessService:
         self.require_permission(actor, "system.manage")
         if status not in (0, 1):
             raise InvalidInputError("status 只能为 0 或 1")
+        self._require_owner_management(actor, user_id)
+        self._require_not_last_owner(user_id, new_status=status)
         self.repo.set_user_status(user_id, status)
         self.invalidate_all()
 
@@ -340,11 +488,55 @@ class AccessService:
             self.require_permission(actor, "system.manage")
         return self._user(user_id)
 
+    def get_user_effective_detail(self, actor: Principal, user_id: int) -> dict[str, Any]:
+        """用户有效权限明细（来源可解释：角色授权 + 单独授予/撤销；撤销优先）。
+
+        本人可查自己；他人需要 system.manage。deprecated 键标注 lifecycle。
+        """
+        if actor.user_id != user_id:
+            self.require_permission(actor, "system.manage")
+        user = self._user(user_id)
+        role_perms = self._role_permissions(user.role)
+        grants, revokes = self.repo.get_user_overrides(user_id)
+        effective = self.effective_permissions(user_id)
+        items = []
+        for key in sorted(ALL_PERMISSION_KEYS | set(role_perms) | set(grants) | set(revokes)):
+            entry = {
+                "permission": key,
+                "from_role": key in role_perms,
+                "override": ("grant" if key in grants else "revoke" if key in revokes else ""),
+                "effective": key in effective,
+            }
+            items.append(entry)
+        return {
+            "user_id": user_id,
+            "role": user.role,
+            "super_admin": user.role == SUPER_ADMIN_ROLE,
+            "permissions": items,
+            "effective_permissions": sorted(effective),
+        }
+
     # ---- 管理：角色 ------------------------------------------------------------------
 
     def list_roles(self, actor: Principal) -> list[RoleInfo]:
         self.require_permission(actor, "system.manage")
         return self.repo.list_roles()
+
+    def _validate_role_payload(
+        self, *, permissions: list[str] | None, toolsets: list[str] | None
+    ) -> None:
+        """创建与更新共用的权限/工具组合法性校验（含生命周期）。"""
+        if permissions is not None:
+            unknown = set(permissions) - set(ALL_PERMISSION_KEYS)
+            if unknown:
+                raise InvalidInputError(f"未注册的权限: {sorted(unknown)}")
+            deprecated = set(permissions) & DEPRECATED_PERMISSION_KEYS
+            if deprecated:
+                raise InvalidInputError(f"已退役权限不可授予: {sorted(deprecated)}")
+        if toolsets is not None:
+            unknown_tools = set(toolsets) - set(VALID_TOOLSETS)
+            if unknown_tools:
+                raise InvalidInputError(f"未注册的工具集: {sorted(unknown_tools)}")
 
     def create_role(
         self,
@@ -357,25 +549,22 @@ class AccessService:
         toolsets: list[str] | None = None,
     ) -> int:
         self.require_permission(actor, "system.manage")
-        if permissions:
-            unknown = set(permissions) - set(ALL_PERMISSION_KEYS)
-            if unknown:
-                raise InvalidInputError(f"未注册的权限: {sorted(unknown)}")
-        if toolsets:
-            unknown_tools = set(toolsets) - set(VALID_TOOLSETS)
-            if unknown_tools:
-                raise InvalidInputError(f"未注册的工具集: {sorted(unknown_tools)}")
+        self._validate_role_payload(permissions=permissions, toolsets=toolsets)
         role_id = self.repo.create_role(name, display_name, description, permissions, toolsets)
         self.invalidate_all()
         return role_id
 
     def update_role(self, actor: Principal, role_id: int, **kwargs: Any) -> None:
         self.require_permission(actor, "system.manage")
-        perms = kwargs.get("permissions")
-        if perms is not None:
-            unknown = set(perms) - set(ALL_PERMISSION_KEYS)
-            if unknown:
-                raise InvalidInputError(f"未注册的权限: {sorted(unknown)}")
+        # 创建与更新路径执行同等校验（方案 §5.3：此前更新只查 permissions）
+        self._validate_role_payload(
+            permissions=kwargs.get("permissions"), toolsets=kwargs.get("toolsets"),
+        )
+        row = self.repo.get_role_by_id(role_id)
+        if row is not None and row.is_system and row.name == SUPER_ADMIN_ROLE and (
+            kwargs.get("permissions") is not None or kwargs.get("toolsets") is not None
+        ):
+            raise InvalidInputError("super_admin 拥有全部权限，不可修改其角色配置")
         self.repo.update_role(role_id, **kwargs)
         self.invalidate_all()
 
@@ -386,11 +575,79 @@ class AccessService:
 
     def list_permissions(self, actor: Principal) -> list[dict[str, Any]]:
         self.require_permission(actor, "system.manage")
-        return self.repo.list_permission_defs()
+        # 附带统一目录元数据（module/op/depends/risk/scope/internal），前端 9 功能项按此渲染
+        from backend.modules.access.contracts import permission_catalog
+
+        catalog = permission_catalog()
+        return [{**item, **catalog.get(item["key"], {})} for item in self.repo.list_permission_defs()]
 
     def list_toolsets(self, actor: Principal) -> list[dict[str, Any]]:
         self.require_permission(actor, "system.manage")
         return self.repo.list_toolset_defs()
+
+    def _effective_template_diff(self, role_name: str) -> dict[str, Any]:
+        """模板 vs 数据库当前授权的差异（只读；不做任何修改）。"""
+        template = DEFAULT_ROLE_PERMISSIONS.get(role_name, ())
+        template = tuple(k for k in template if k not in DEPRECATED_PERMISSION_KEYS)
+        current = set(self.repo.snapshot_role_permissions(role_name))
+        template_set = set(template)
+        state = self.repo.get_role_seed_state(role_name) or {}
+        version = str(state.get("template_version") or "unseeded")
+        return {
+            "role": role_name,
+            "template_version": version,
+            "pending": version != DEFAULT_TEMPLATE_VERSION,
+            "missing_from_role": sorted(template_set - current),
+            "not_in_template": sorted(current - template_set),
+            "toolsets_in_db": self.repo.role_toolsets_by_name(role_name),
+            "toolsets_in_template": list(DEFAULT_ROLE_TOOLSETS.get(role_name, ())),
+        }
+
+    def permission_upgrade_preview(self, actor: Principal) -> dict[str, Any]:
+        """全部内置角色的模板差异预览（P3：先呈现，不修改授权）。"""
+        self.require_permission(actor, "system.manage")
+        from backend.modules.access.contracts import DEFAULT_ROLE_PERMISSIONS, permission_catalog
+
+        catalog = permission_catalog()
+        roles = []
+        for role_name in DEFAULT_ROLE_PERMISSIONS:
+            diff = self._effective_template_diff(role_name)
+            high_risk_missing = [
+                k for k in diff["missing_from_role"]
+                if catalog.get(k, {}).get("risk") in ("high", "medium")
+            ]
+            roles.append({**diff, "high_risk_missing": high_risk_missing})
+        return {"current_template_version": DEFAULT_TEMPLATE_VERSION, "roles": roles}
+
+    def apply_role_template(self, actor: Principal, role_name: str) -> dict[str, Any]:
+        """显式应用当前模板到内置角色（新增授权必须由拥有者确认，方案 §1/§3）。
+
+        - 仅 super_admin 可执行（system.manage 不够——这是授权升级动作）；
+        - 应用前留存授权快照（role_seed_state.snapshot_json），支持审计与回滚；
+        - deprecated 键不写入。
+        """
+        if not self._is_super_admin(actor.user_id):
+            raise ForbiddenError("应用权限模板需要超级管理员确认")
+        if role_name not in DEFAULT_ROLE_PERMISSIONS:
+            raise InvalidInputError(f"非内置角色: {role_name}")
+        snapshot = self.repo.snapshot_role_permissions(role_name)
+        template = [
+            k for k in DEFAULT_ROLE_PERMISSIONS[role_name]
+            if k not in DEPRECATED_PERMISSION_KEYS
+        ]
+        self.repo.set_role_permissions_by_name(role_name, template)
+        template_toolsets = list(DEFAULT_ROLE_TOOLSETS.get(role_name, ()))
+        self.repo.set_role_toolsets_by_name(role_name, template_toolsets)
+        self.repo.record_template_upgrade(
+            role_name, version=DEFAULT_TEMPLATE_VERSION, snapshot=snapshot,
+        )
+        self.invalidate_all()
+        return {
+            "role": role_name,
+            "applied_version": DEFAULT_TEMPLATE_VERSION,
+            "previous_permissions": snapshot,
+            "previous_toolsets": None,
+        }
 
 
 def principal_role(principal: Principal) -> str:

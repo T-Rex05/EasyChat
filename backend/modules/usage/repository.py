@@ -39,10 +39,16 @@ def _usage_row(usage: NormalizedUsage | None) -> dict[str, Any]:
         "reasoning_tokens": usage.reasoning_tokens,
         "total_tokens": usage.total_tokens,
     }
+    # 有些 OpenAI 兼容端点只给 prompt/completion，不给 total；排行仍应可算。
+    total_tokens = usage.total_tokens
+    prompt_tokens = usage.prompt_tokens()
+    if total_tokens is None and prompt_tokens is not None and usage.output_tokens is not None:
+        total_tokens = prompt_tokens + usage.output_tokens
+        raw["total_tokens"] = total_tokens
     return {
-        "prompt_tokens": usage.prompt_tokens(),
+        "prompt_tokens": prompt_tokens,
         "completion_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
+        "total_tokens": total_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cached_tokens": usage.cache_read_tokens,
         "usage_complete": 1 if usage.usage_complete else 0,
@@ -161,13 +167,23 @@ class UsageRepository:
                     call_id,
                 ),
             )
+            # 未完成就收到 usage：这次补全同时完成调用，避免之后 complete_call
+            # 再把同一份 usage 加一遍。
+            if not row["completed_at"]:
+                conn.execute(
+                    "UPDATE llm_calls SET status='ok', error=NULL, completed_at=? "
+                    "WHERE call_id=? AND completed_at IS NULL",
+                    (completed_utc.isoformat(timespec="milliseconds"), call_id),
+                )
             if d_prompt == 0 and d_completion == 0 and d_total == 0:
                 return True  # 明细已更新，汇总无变化
-            created_at = datetime.fromisoformat(str(row["created_at"]))
-            stat_date = stat_date_for(created_at)
+            # 首次完成/补全都归属同一完成日；否则跨午夜会把 tokens 拆到两天。
+            accounting_at = row["completed_at"] or completed_utc
+            stat_date = stat_date_for(datetime.fromisoformat(str(accounting_at)))
             self._apply_stats_delta(
                 conn, stat_date=stat_date, owner_id=int(row["owner_id"]), source=str(row["source"]),
-                d_prompt=d_prompt, d_completion=d_completion, d_total=d_total, d_calls=0,
+                d_prompt=d_prompt, d_completion=d_completion, d_total=d_total,
+                d_calls=0 if row["completed_at"] else 1,
             )
             return True
 
@@ -220,6 +236,8 @@ class UsageRepository:
             rows = conn.execute(
                 """SELECT s.user_id,
                           COALESCE(u.username, CASE WHEN s.user_id=0 THEN '系统任务' ELSE NULL END) AS username,
+                          SUM(s.prompt_tokens) AS input_tokens,
+                          SUM(s.completion_tokens) AS output_tokens,
                           SUM(s.total_tokens) AS total_tokens,
                           SUM(s.call_count) AS api_calls,
                           COUNT(DISTINCT s.stat_date) AS active_days,
@@ -235,13 +253,21 @@ class UsageRepository:
             ).fetchall()
             out = []
             for i, r in enumerate(rows):
+                user_id = int(r["user_id"])
+                api_calls = int(r["api_calls"] or 0)
+                total_tokens = int(r["total_tokens"] or 0)
                 out.append(
                     {
                         "rank": i + 1,
-                        "user_id": int(r["user_id"]),
-                        "username": r["username"] or f"用户{r['user_id']}",
-                        "total_tokens": int(r["total_tokens"] or 0),
-                        "api_calls": int(r["api_calls"] or 0),
+                        "user_id": user_id,
+                        # 旧 Trace 前端字段兼容；新调用方仍可使用 user_id。
+                        "owner_id": user_id,
+                        "username": r["username"] or f"用户{user_id}",
+                        "input_tokens": int(r["input_tokens"] or 0),
+                        "output_tokens": int(r["output_tokens"] or 0),
+                        "total_tokens": total_tokens,
+                        "api_calls": api_calls,
+                        "call_count": api_calls,
                         "active_days": int(r["active_days"] or 0),
                         "sources": {
                             "chat": int(r["chat_tokens"] or 0),
@@ -260,11 +286,26 @@ class UsageRepository:
         conn = self.db.connect()
         try:
             rows = conn.execute(
-                "SELECT stat_date, source, total_tokens, call_count FROM daily_user_stats "
-                "WHERE user_id=? AND stat_date>=? ORDER BY stat_date",
+                """SELECT stat_date,
+                          SUM(prompt_tokens) AS input_tokens,
+                          SUM(completion_tokens) AS output_tokens,
+                          SUM(total_tokens) AS total_tokens,
+                          SUM(call_count) AS call_count
+                   FROM daily_user_stats
+                   WHERE user_id=? AND stat_date>=?
+                   GROUP BY stat_date ORDER BY stat_date""",
                 (owner_id, cutoff),
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [
+                {
+                    "stat_date": str(r["stat_date"]),
+                    "input_tokens": int(r["input_tokens"] or 0),
+                    "output_tokens": int(r["output_tokens"] or 0),
+                    "total_tokens": int(r["total_tokens"] or 0),
+                    "call_count": int(r["call_count"] or 0),
+                }
+                for r in rows
+            ]
         finally:
             conn.close()
 

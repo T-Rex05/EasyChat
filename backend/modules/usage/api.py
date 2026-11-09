@@ -125,7 +125,8 @@ class UsageService:
         else:
             if actor.role != "super_admin" and "trace.manage" not in self._permissions(actor):
                 owner_id = actor.user_id
-        return self.repo.list_calls(owner_id=owner_id, limit=limit, offset=offset)
+        rows = self.repo.list_calls(owner_id=owner_id, limit=limit, offset=offset)
+        return [self._call_view(row) for row in rows]
 
     def get_call(self, actor: Principal, call_id: str) -> dict[str, Any]:
         row = self.repo.get_call(call_id)
@@ -133,11 +134,21 @@ class UsageService:
             raise NotFoundError(f"调用不存在: {call_id}")
         if not self._can_view_owner(actor, int(row["owner_id"])):
             raise ForbiddenError("无权查看他人调用明细")
-        return row
+        return self._call_view(row)
+
+    @staticmethod
+    def _call_view(row: dict[str, Any]) -> dict[str, Any]:
+        """补充旧 Trace 前端使用的输入/输出字段，不改数据库列名。"""
+        out = dict(row)
+        out["input_tokens"] = int(row.get("prompt_tokens") or 0)
+        out["output_tokens"] = int(row.get("completion_tokens") or 0)
+        return out
 
     def ranking(self, actor: Principal, *, days: int = 7, limit: int = 20) -> dict[str, Any]:
-        """Token 排行：保留 trace.view 查看排行语义（架构 §6/§7）。"""
-        if actor.role != "super_admin" and "trace.view" not in self._permissions(actor):
+        """Token 排行：trace.view 或 trace.manage（管理语义含查看；方案 §5.1 入口一致）。"""
+        if actor.role != "super_admin" and not (
+            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
+        ):
             raise ForbiddenError("缺少权限: trace.view")
         rows = self.repo.ranking(days=days, limit=limit, today_utc=self._clock())
         return {"ranking": rows, "days": days}

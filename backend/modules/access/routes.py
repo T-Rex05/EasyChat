@@ -100,6 +100,7 @@ def build_access_router(access: AccessService) -> APIRouter:
             "created_at": user.created_at,
             "permissions": sorted(access.effective_permissions(user.user_id)),
             "hermes_tools": list(access.hermes_toolsets(user.user_id)),
+            "capabilities": access.capabilities(principal),
         }
 
     @router.post("/api/auth/refresh")
@@ -124,6 +125,13 @@ def build_access_router(access: AccessService) -> APIRouter:
     async def list_users_auth(authorization: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
         principal = access.authenticate_token(_bearer_token(authorization))
         return access.list_users(principal)
+
+    @router.post("/api/chat/sse-ticket")
+    async def issue_sse_ticket(authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        """EventSource 无法携带 Header：前端用长效 JWT（Header 认证）换取
+        秒级一次性 ticket，URL 上不再出现 30 天期凭据（审计 #3）。"""
+        principal = access.authenticate_token(_bearer_token(authorization))
+        return {"ticket": access.issue_sse_ticket(principal.user_id), "expires_in": access.sse_ticket_ttl}
 
     # ---- /api/admin ----
 
@@ -159,6 +167,30 @@ def build_access_router(access: AccessService) -> APIRouter:
     async def admin_permissions(authorization: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:
         principal = access.authenticate_token(_bearer_token(authorization))
         return access.list_permissions(principal)
+
+    @router.get("/api/auth/capabilities")
+    async def auth_capabilities(authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        """当前用户 capabilities（前端菜单/路由/按钮的唯一权限来源）。"""
+        principal = access.authenticate_token(_bearer_token(authorization))
+        return access.capabilities(principal)
+
+    @router.get("/api/admin/users/{user_id}/effective-perms")
+    async def admin_user_effective_perms(user_id: int, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        """用户有效权限明细（来源可解释：角色/单独授予/撤销；撤销优先）。"""
+        principal = access.authenticate_token(_bearer_token(authorization))
+        return access.get_user_effective_detail(principal, user_id)
+
+    @router.get("/api/admin/permission-upgrade-preview")
+    async def admin_upgrade_preview(authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        """内置角色模板差异预览（不修改授权；升级需拥有者显式应用）。"""
+        principal = access.authenticate_token(_bearer_token(authorization))
+        return access.permission_upgrade_preview(principal)
+
+    @router.post("/api/admin/roles/{role_name}/apply-template")
+    async def admin_apply_template(role_name: str, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        """显式应用当前权限模板到内置角色（仅 super_admin；先留快照）。"""
+        principal = access.authenticate_token(_bearer_token(authorization))
+        return access.apply_role_template(principal, role_name)
 
     @router.get("/api/admin/toolsets")
     async def admin_toolsets(authorization: Annotated[str | None, Header()] = None) -> list[dict[str, Any]]:

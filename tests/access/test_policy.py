@@ -44,7 +44,12 @@ def test_super_admin_gets_all_registered_permissions():
         revokes=frozenset({"chat.use"}),  # revoke 也无法收回 super_admin 全集
         all_registered_permissions=ALL_PERMISSION_KEYS,
     )
-    assert result == ALL_PERMISSION_KEYS
+    # 权限整改 P1：super_admin 全集同样剔除 deprecated 键（不参与有效授权）
+    from backend.modules.access.contracts import DEPRECATED_PERMISSION_KEYS
+
+    assert result == ALL_PERMISSION_KEYS - DEPRECATED_PERMISSION_KEYS
+    assert "terminal.audit" not in result
+    assert "evolution.manage" not in result
 
 
 def test_normal_role_cannot_exceed_registered():

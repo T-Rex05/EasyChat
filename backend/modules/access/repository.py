@@ -22,6 +22,9 @@ from backend.modules.access.contracts import (
     PermissionOverride,
     RoleInfo,
     UserSnapshot,
+    DEFAULT_TEMPLATE_VERSION,
+    LIFECYCLE_ACTIVE,
+    LIFECYCLE_DEPRECATED,
 )
 
 # ---- scrypt 密码哈希（沿用旧 auth_service 格式，存量 SHA256+salt 登录时升级） ----
@@ -183,6 +186,14 @@ class AccessRepository:
         conn = self.db.connect()
         try:
             row = conn.execute("SELECT id FROM roles WHERE name=?", (name,)).fetchone()
+            return self.get_role(int(row["id"])) if row else None
+        finally:
+            conn.close()
+
+    def get_role_by_id(self, role_id: int) -> RoleInfo | None:
+        conn = self.db.connect()
+        try:
+            row = conn.execute("SELECT id FROM roles WHERE id=?", (int(role_id),)).fetchone()
             return self.get_role(int(row["id"])) if row else None
         finally:
             conn.close()
@@ -367,33 +378,42 @@ class AccessRepository:
     # ---- permission defs 与种子 ----
 
     def upsert_permission_defs(self) -> None:
-        """同步权限定义（只更新元数据，不触碰任何授权）。"""
+        """同步权限定义与生命周期（只更新元数据，不触碰任何授权）。
+
+        源码中不再注册的键不会被删除：存量行保留作审计（方案 §5.2）。
+        """
         now = utc_now_iso()
         with self.db.transaction() as conn:
             for d in PERMISSION_DEFS:
                 conn.execute(
-                    "INSERT INTO permission_defs(key, label, description, group_name, group_label, sort_order, created_at) "
-                    "VALUES(?,?,?,?,?,?,?) "
+                    "INSERT INTO permission_defs(key, label, description, group_name, group_label, sort_order, lifecycle, created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(key) DO UPDATE SET label=excluded.label, description=excluded.description, "
-                    "group_name=excluded.group_name, group_label=excluded.group_label, sort_order=excluded.sort_order",
-                    (d["key"], d["label"], d["description"], d["group_name"], d["group_label"], d["sort_order"], now),
+                    "group_name=excluded.group_name, group_label=excluded.group_label, "
+                    "sort_order=excluded.sort_order, lifecycle=excluded.lifecycle",
+                    (d["key"], d["label"], d["description"], d["group_name"], d["group_label"],
+                     d["sort_order"], d["lifecycle"], now),
                 )
 
     def list_permission_defs(self) -> list[dict[str, Any]]:
         conn = self.db.connect()
         try:
             rows = conn.execute(
-                "SELECT key, label, description, group_name, group_label, sort_order FROM permission_defs ORDER BY group_name, sort_order"
+                "SELECT key, label, description, group_name, group_label, sort_order, lifecycle "
+                "FROM permission_defs ORDER BY group_name, sort_order"
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()
 
     def seed_builtin_roles(self) -> None:
-        """播种内置角色与默认授权/工具集。
+        """播种内置角色与默认授权/工具集（按模板版本记录，方案 §5.2 修复）。
 
-        默认授权仅在角色**一条授权都没有**时播种（不覆盖管理员自定义）；
-        内置角色本身幂等创建。super_admin 的全集在运行时计算，不落库。
+        - 角色在 role_seed_state 无记录 → 首次初始化：播种 v2 模板并登记版本；
+        - 已有记录 → 一律跳过：管理员显式清空授权、存量 legacy 角色都不会被补种；
+        - 存量库由迁移 0023 回填 template_version='legacy'，升级经拥有者
+          显式 apply_role_template（先快照再应用）。
+        super_admin 的全集在运行时计算，不落库。
         """
         now = utc_now_iso()
         with self.db.transaction() as conn:
@@ -411,14 +431,103 @@ class AccessRepository:
                 rid = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
                 if rid is None:
                     continue
-                count = conn.execute(
-                    "SELECT count(*) AS c FROM role_permissions WHERE role_id=?", (int(rid["id"]),)
-                ).fetchone()["c"]
-                if count == 0:
-                    conn.executemany(
-                        "INSERT OR IGNORE INTO role_permissions(role_id, permission, updated_at) VALUES(?,?,?)",
-                        [(int(rid["id"]), p, now) for p in perms],
-                    )
+                seeded = conn.execute(
+                    "SELECT 1 FROM role_seed_state WHERE role_name=?", (role_name,)
+                ).fetchone()
+                if seeded is not None:
+                    continue
+                conn.executemany(
+                    "INSERT OR IGNORE INTO role_permissions(role_id, permission, updated_at) VALUES(?,?,?)",
+                    [(int(rid["id"]), p, now) for p in perms],
+                )
+                conn.execute(
+                    "INSERT INTO role_seed_state(role_name, template_version, seeded_at, snapshot_json) "
+                    "VALUES(?,?,?,?) ON CONFLICT(role_name) DO NOTHING",
+                    (role_name, DEFAULT_TEMPLATE_VERSION, now, "[]"),
+                )
+
+    # ---- 模板版本与升级（P3 受控迁移） ------------------------------------------
+
+    def get_role_seed_state(self, role_name: str) -> dict[str, Any] | None:
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT role_name, template_version, seeded_at, snapshot_json "
+                "FROM role_seed_state WHERE role_name=?",
+                (role_name,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def _mark_role_seeded(self, role_name: str, version: str = "legacy") -> None:
+        """测试/迁移辅助：登记初始化状态（不写授权）。"""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO role_seed_state(role_name, template_version, seeded_at, snapshot_json) "
+                "VALUES(?,?,?,?) ON CONFLICT(role_name) DO NOTHING",
+                (role_name, version, utc_now_iso(), "[]"),
+            )
+
+    def set_role_permissions_by_name(self, role_name: str, permissions: list[str]) -> None:
+        """管理辅助（测试与模板应用共用）：整体替换角色授权。"""
+        with self.db.transaction() as conn:
+            row = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
+            if row is None:
+                raise NotFoundError(f"角色不存在: {role_name}")
+            conn.execute("DELETE FROM role_permissions WHERE role_id=?", (int(row["id"]),))
+            now = utc_now_iso()
+            conn.executemany(
+                "INSERT OR IGNORE INTO role_permissions(role_id, permission, updated_at) VALUES(?,?,?)",
+                [(int(row["id"]), perm, now) for perm in permissions],
+            )
+
+    def snapshot_role_permissions(self, role_name: str) -> list[str]:
+        """授权快照（升级前留存）。"""
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT rp.permission FROM role_permissions rp JOIN roles r ON r.id=rp.role_id "
+                "WHERE r.name=? ORDER BY rp.permission",
+                (role_name,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [str(r["permission"]) for r in rows]
+
+    def record_template_upgrade(self, role_name: str, *, version: str, snapshot: list[str]) -> None:
+        """登记模板升级；预览/拥有者确认等先决条件由调用方检查。"""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE role_seed_state SET template_version=?, seeded_at=?, snapshot_json=? "
+                "WHERE role_name=?",
+                (version, utc_now_iso(), json.dumps(snapshot, ensure_ascii=False), role_name),
+            )
+            if cur.rowcount != 1:
+                raise NotFoundError(f"角色缺少初始化记录: {role_name}")
+
+    def set_role_toolsets_by_name(self, role_name: str, toolsets: list[str]) -> None:
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE roles SET hermes_tools=?, updated_at=? WHERE name=?",
+                (json.dumps(toolsets, ensure_ascii=False), utc_now_iso(), role_name),
+            )
+            if cur.rowcount != 1:
+                raise NotFoundError(f"角色不存在: {role_name}")
+
+    def role_toolsets_by_name(self, role_name: str) -> list[str]:
+        conn = self.db.connect()
+        try:
+            row = conn.execute("SELECT hermes_tools FROM roles WHERE name=?", (role_name,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise NotFoundError(f"角色不存在: {role_name}")
+        try:
+            data = json.loads(str(row["hermes_tools"] or "[]"))
+        except ValueError:
+            return []
+        return [str(x) for x in data] if isinstance(data, list) else []
 
     def list_toolset_defs(self) -> list[dict[str, Any]]:
         return [dict(t) for t in TOOLSET_DEFS]
