@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 from backend.modules.delivery.contracts import (
+    DELIVERY_CANCELLED,
     DELIVERY_FAILED,
     DELIVERY_PENDING,
     DELIVERY_RETRY_WAIT,
@@ -44,6 +45,8 @@ def _lease_from_row(row: Any, attempts: int) -> DeliveryLease:
         attempts=attempts,
         max_attempts=int(d.get("max_attempts") or 5),
         subject=str(d.get("subject") or ""),
+        dedup_key=str(d.get("dedup_key") or ""),
+        created_at=str(d.get("created_at") or ""),
     )
 
 
@@ -137,13 +140,16 @@ class DeliveryRepository:
                 delivery_id=lease.delivery_id, owner_id=lease.owner_id, run_id=lease.run_id,
                 source=lease.source, target=lease.target, content_text=lease.content_text,
                 artifact_id=lease.artifact_id, attempts=attempts, max_attempts=max_attempts,
-                subject=lease.subject,
+                subject=lease.subject, dedup_key=lease.dedup_key,
+                created_at=lease.created_at,
             )
 
     def finish(
         self, delivery_id: str, *, status: str, error: str = "", sent_at: bool = False
     ) -> bool:
-        if status not in (DELIVERY_SENT, DELIVERY_FAILED, DELIVERY_UNCERTAIN):
+        if status not in (
+            DELIVERY_SENT, DELIVERY_FAILED, DELIVERY_UNCERTAIN, DELIVERY_CANCELLED
+        ):
             raise ValueError(f"非法投递终态: {status}")
         now = utc_now_iso()
         with self.db.transaction() as conn:
@@ -163,6 +169,62 @@ class DeliveryRepository:
                  delivery_id, DELIVERY_SENDING),
             )
             return cur.rowcount == 1
+
+    def cancel(
+        self, delivery_id: str, *, reason: str = "用户取消"
+    ) -> bool:
+        """取消尚未发送的单条投递；sending/sent/uncertain 不动。"""
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE deliveries SET status=?, error=?, updated_at=? "
+                "WHERE id=? AND status IN (?,?)",
+                (
+                    DELIVERY_CANCELLED, reason[:500], utc_now_iso(), delivery_id,
+                    DELIVERY_PENDING, DELIVERY_RETRY_WAIT,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def count_sent_reminders(
+        self, owner_id: int, start_iso: str, end_iso: str
+    ) -> int:
+        """统计实际送达的提醒（scheduling 文本计划）数量。
+
+        提醒与简报/关怀都走同一 delivery 账本；以 source + dedup_key 前缀
+        区分业务类型，避免 scheduling 反向 JOIN delivery 的表。
+        """
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT count(*) AS c FROM deliveries "
+                "WHERE owner_id=? AND source='schedule' "
+                "AND dedup_key LIKE 'schedule:%' AND status=? "
+                "AND sent_at IS NOT NULL "
+                "AND julianday(sent_at)>=julianday(?) "
+                "AND julianday(sent_at)<julianday(?)",
+                (owner_id, DELIVERY_SENT, start_iso, end_iso),
+            ).fetchone()
+            return int(row["c"]) if row else 0
+        finally:
+            conn.close()
+
+    def cancel_unsent_by_owner(
+        self, owner_id: int, *, source: str = "", reason: str = "用户取消"
+    ) -> int:
+        """按 owner/source 批量作废 pending/retry_wait；不碰 sending/sent/uncertain。"""
+        sql = (
+            "UPDATE deliveries SET status=?, error=?, updated_at=? "
+            "WHERE owner_id=? AND status IN (?,?)"
+        )
+        params: list[Any] = [
+            DELIVERY_CANCELLED, reason[:500], utc_now_iso(), int(owner_id),
+            DELIVERY_PENDING, DELIVERY_RETRY_WAIT,
+        ]
+        if source:
+            sql += " AND source=?"
+            params.append(source)
+        with self.db.transaction() as conn:
+            return int(conn.execute(sql, params).rowcount)
 
     def recover_inflight(self) -> int:
         """进程重启时仍在 sending 的投递：外部结果未知，进入 uncertain，不盲目重发。"""

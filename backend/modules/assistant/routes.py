@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.modules.assistant.api import AssistantService
+from backend.modules.files.contracts import DEFAULT_MAX_ATTACHMENTS
 from backend.modules.assistant.repository import (
     RUN_CANCELLED,
     RUN_COMPLETED,
@@ -37,6 +38,7 @@ class StreamPostBody(BaseModel):
     model_id: int | None = None
     images: list[dict[str, str]] = []
     files: list[dict[str, str]] = []
+    attachment_ids: list[str] = []
 
 
 def _sse_frame(seq: int | None, payload: dict[str, Any]) -> str:
@@ -197,8 +199,14 @@ def build_web_chat_router(
         principal = _principal_from_token((authorization or "").replace("Bearer ", "").strip() or None)
         session_id = await _resolve_session(principal, body.thread_id)
         client_msg_id = body.client_msg_id or f"auto-{session_id[:8]}-{body.message[:12]}"
+        if len(body.attachment_ids) > DEFAULT_MAX_ATTACHMENTS:
+            raise InvalidInputError("附件数量超过上限")
+        for attachment_id in body.attachment_ids:
+            await assistant.get_attachment(principal, attachment_id)
         try:
-            receipt = await assistant.submit(_make_command(principal, session_id, client_msg_id, body.message))
+            receipt = await assistant.submit(_make_command(
+                principal, session_id, client_msg_id, body.message, tuple(body.attachment_ids),
+            ))
         except BusyError as busy:
             return JSONResponse(status_code=409, content={"error": str(busy)})
         except AppError as exc:
@@ -300,7 +308,8 @@ def build_web_chat_router(
     return router
 
 
-def _make_command(principal, session_id: str, client_msg_id: str, message: str):
+def _make_command(principal, session_id: str, client_msg_id: str, message: str,
+                  attachment_ids: tuple[str, ...] = ()):
     from backend.modules.assistant.contracts import RunCommand
 
     return RunCommand(
@@ -309,6 +318,7 @@ def _make_command(principal, session_id: str, client_msg_id: str, message: str):
         source="web",
         client_message_id=client_msg_id,
         text=message,
+        attachment_ids=attachment_ids,
     )
 
 

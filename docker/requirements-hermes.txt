@@ -12,3 +12,6 @@ tenacity>=8.0
 python-dotenv>=1.2.2
 loguru==0.7.0
 pytz>=2025.2
+# Hermes web_search 的免费兜底 Provider；无 API Key 时可用。
+ddgs>=9.0.0
+lxml>=5.0

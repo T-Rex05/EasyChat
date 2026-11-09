@@ -118,3 +118,6 @@ rubric_result.json
 
 # ==================== 模板（待确认） ====================
 # backend/templates/
+
+# Browser automation tool artifacts
+.playwright-mcp/

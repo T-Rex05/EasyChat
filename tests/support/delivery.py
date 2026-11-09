@@ -13,12 +13,15 @@ class FakeSender:
         self.scripted: list[Any] = []
         self.deliverable = True
         self.can_deliver_calls = 0
+        self.can_deliver_error: Exception | None = None
 
     def script(self, *results: Any) -> None:
         self.scripted.extend(results)
 
     async def can_deliver(self, target: DeliveryTarget) -> bool:
         self.can_deliver_calls += 1
+        if self.can_deliver_error is not None:
+            raise self.can_deliver_error
         return self.deliverable
 
     async def send_text(

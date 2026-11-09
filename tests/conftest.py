@@ -14,6 +14,30 @@ import pytest
 
 from tests.support.rig import TestRig, make_rig
 
+# AgentForge 旧架构（backend.service / 旧 SSE / 旧 KB）已经移除；这些根目录测试
+# 没有迁移到模块化架构，保留文件仅作历史参考。默认收集时跳过，避免 `pytest`
+# 在 import 阶段整体中断，导致维护中套件也无法运行。
+collect_ignore_glob = ["test_*.py"]
+collect_ignore = [
+    "test_adaptive_retrieval.py",
+    "test_auth_service.py",
+    "test_context_enrichment.py",
+    "test_delegation_integration.py",
+    "test_host_whitelist.py",
+    "test_kb_metadata_global.py",
+    "test_kb_topic_marker.py",
+    "test_llm_gateway.py",
+    "test_memory_consistency.py",
+    "test_paper_reproduction.py",
+    "test_report_quality.py",
+    "test_run_registry.py",
+    "test_session_title.py",
+    "test_skill_service.py",
+    "test_skill_tool_permissions.py",
+    "test_sse_contract.py",
+    "test_ssh_auth_inject.py",
+]
+
 
 @pytest.fixture
 async def rig(tmp_path):

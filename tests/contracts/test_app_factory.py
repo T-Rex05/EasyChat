@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import create_app, error_to_response
+from backend.app import SPAStaticFiles, create_app, error_to_response
 from backend.bootstrap import AppSettings, default_settings
 from backend.shared.context import ExecutionContext, Principal
 from backend.shared.errors import (
@@ -187,6 +187,21 @@ def test_lifespan_idempotent_shutdown(tmp_path):
     # 再次进入 lifespan（重启场景）
     with TestClient(app):
         pass
+
+
+def test_spa_history_routes_fall_back_to_index(tmp_path):
+    """直接打开 /login 等 history 路由不能返回 FastAPI JSON 404。"""
+    from fastapi import FastAPI
+
+    (tmp_path / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+    app = FastAPI()
+    app.mount("/", SPAStaticFiles(directory=tmp_path, html=True), name="spa")
+    with TestClient(app) as client:
+        assert client.get("/").text == "<html>spa</html>"
+        assert client.get("/login").text == "<html>spa</html>"
+        assert client.get("/schedules").text == "<html>spa</html>"
+        assert client.get("/api/missing").status_code == 404
+        assert client.get("/assets/missing.js").status_code == 404
 
 
 def test_execution_context_values_are_frozen():

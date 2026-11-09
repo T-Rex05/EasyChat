@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from backend.modules.assistant.contracts import RunCommand
-from backend.modules.delivery.api import DeliveryService
+from backend.modules.delivery.api import CompositeDeliverySender, DeliveryService
 from backend.modules.delivery.contracts import (
     DELIVERY_FAILED,
     DELIVERY_RETRY_WAIT,
@@ -68,7 +68,7 @@ async def test_text_delivery_succeeds_once(env):
 async def test_retry_resumes_only_unsent_chunks(env):
     rig, service, sender, clock = env
     user = _user(rig)
-    text = ("A" * 1000) + "\n\n" + ("B" * 1000)
+    text = ("A" * 300) + "\n\n" + ("B" * 300)
     delivery_id = service.enqueue_text(
         owner_id=user.user_id, target=TARGET, text=text, dedup_key="dlv-chunk",
     )
@@ -102,6 +102,72 @@ async def test_uncertain_is_not_auto_resent(env):
     assert len(sender.sent) == 1
 
 
+async def test_composite_channel_check_error_is_uncertain_not_failed(env):
+    rig, _ignored, _sender, clock = env
+    user = _user(rig)
+
+    class BrokenSender:
+        async def can_deliver(self, target):
+            raise RuntimeError("数据库繁忙")
+
+        async def send_text(self, target, text, *, context_token=""):
+            raise AssertionError("不应调用")
+
+    class NoChannel:
+        async def can_deliver(self, target):
+            return False
+
+        async def send_text(self, target, text, *, context_token=""):
+            raise AssertionError("不应调用")
+
+    service = DeliveryService(
+        rig.db,
+        sender=CompositeDeliverySender([BrokenSender(), NoChannel()]),
+        clock=clock,
+    )
+    delivery_id = service.enqueue_text(
+        owner_id=user.user_id, target=TARGET, text="你好", dedup_key="dlv-composite-err",
+    )
+    assert await DeliveryWorker(service).tick() == 1
+    assert service.status(user.user_id, delivery_id).status == DELIVERY_UNCERTAIN
+
+
+async def test_email_target_must_be_owner_recipient(env):
+    rig, _service, sender, clock = env
+    user = _user(rig)
+    service = DeliveryService(
+        rig.db, sender=sender, clock=clock,
+        email_recipient_check=lambda owner_id, address: False,
+    )
+    delivery_id = service.enqueue_text(
+        owner_id=user.user_id,
+        target=DeliveryTarget(kind="email", ref="attacker@example.com"),
+        text=" spam ", dedup_key="dlv-email-open-relay",
+    )
+    worker = DeliveryWorker(service)
+    assert await worker.tick() == 1
+    status = service.status(user.user_id, delivery_id)
+    assert status.status == DELIVERY_FAILED
+    assert "收件人" in (status.error or "")
+    assert sender.sent == []
+
+
+async def test_unexpected_delivery_error_does_not_leave_sending(env):
+    rig, service, sender, _ = env
+    user = _user(rig)
+    sender.can_deliver_error = RuntimeError("模拟数据库繁忙")
+    delivery_id = service.enqueue_text(
+        owner_id=user.user_id, target=TARGET, text="你好", dedup_key="dlv-error",
+    )
+    worker = DeliveryWorker(service)
+    assert await worker.tick() == 1
+    status = service.status(user.user_id, delivery_id)
+    assert status.status == DELIVERY_UNCERTAIN
+    assert "数据库繁忙" in (status.error or "")
+    # 已经进入终态，不会再次被认领而重复发送。
+    assert await worker.tick() == 0
+
+
 async def test_unbound_target_stops_delivery(env):
     rig, service, sender, _ = env
     user = _user(rig)
@@ -111,6 +177,7 @@ async def test_unbound_target_stops_delivery(env):
     )
     await DeliveryWorker(service).tick()
     assert sender.sent == []
+    assert sender.can_deliver_calls == 1  # 一次解析，不再 can/send 双探测
     assert service.status(user.user_id, delivery_id).status == DELIVERY_FAILED
 
 

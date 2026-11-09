@@ -17,6 +17,9 @@ class RuntimeRequest:
     system_context: str
     allowed_tools: frozenset[str]
     skill_versions: tuple[tuple[str, str], ...]
+    persona_context: str = ""
+    context_prefix: str = ""
+    persist_user_message: str = ""
 
 
 @dataclass(frozen=True, slots=True)

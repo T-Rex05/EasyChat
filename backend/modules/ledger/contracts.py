@@ -10,6 +10,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from backend.shared.errors import InvalidInputError
+
+# ---- 提交语义错误（调用方按类型分支，不匹配文案） --------------------------------
+
+
+class LedgerCommitError(InvalidInputError):
+    """提单失败的业务错误基类；仍是 InvalidInputError，兼容既有 API 契约。"""
+
+
+class LedgerControlMismatch(LedgerCommitError):
+    """控制总额与明细不一致；只有显式 confirm_mismatch 才能提交。"""
+
+
+class LedgerAlreadyCommitted(LedgerCommitError):
+    """批次已经提交；不同 request_id 不允许重复提交。"""
+
+
 # ---- 方向 ---------------------------------------------------------------------
 DIRECTION_EXPENSE = "expense"
 DIRECTION_INCOME = "income"

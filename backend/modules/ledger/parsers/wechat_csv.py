@@ -98,14 +98,14 @@ def parse_csv_text(
                 raise BillParseError("未找到账单表头（前 40 行无时间/金额列）")
             text_line = control_line(values)
             if text_line:
-                control_lines.append(text_line)
+                _append_control_line(control_lines, text_line, options, warnings)
             continue
         if not any(str(v).strip() for v in values if v is not None):
             continue
         if is_control_line(values):
             text_line = control_line(values)
             if text_line:
-                control_lines.append(text_line)
+                _append_control_line(control_lines, text_line, options, warnings)
             continue
         if not looks_like_data(values, indexes):
             continue
@@ -145,3 +145,14 @@ def _has_totals(totals: ControlTotals) -> bool:
         value is not None
         for value in (totals.count, totals.income_minor, totals.expense_minor, totals.neutral_minor)
     )
+
+
+def _append_control_line(
+    control_lines: list[str], text: str, options: ParseOptions, warnings: list[str],
+) -> None:
+    """控制行保留上限（审计 #8）：到帽后丢弃并告警一次，不让保留量随输入无限增长。"""
+    if len(control_lines) >= options.max_control_lines:
+        if not warnings or not warnings[-1].startswith("控制行超过上限"):
+            warnings.append(f"控制行超过上限 {options.max_control_lines}，其余已忽略")
+        return
+    control_lines.append(text)

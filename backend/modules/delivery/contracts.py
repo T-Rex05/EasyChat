@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
-
 TARGET_WECHAT = "wechat"
 TARGET_EMAIL = "email"
 
@@ -17,6 +16,8 @@ DELIVERY_SENT = "sent"
 DELIVERY_RETRY_WAIT = "retry_wait"
 DELIVERY_UNCERTAIN = "uncertain"
 DELIVERY_FAILED = "failed"
+# 用户删除/关闭情绪后，尚未发送的 care 投递作废；不能伪装成发送失败。
+DELIVERY_CANCELLED = "cancelled"
 
 PART_PENDING = "pending"
 PART_SENT = "sent"
@@ -35,6 +36,23 @@ class DeliveryTarget:
     ref: str
     channel_account_id: str = ""
     context_token: str = ""
+
+
+class ChannelTargetLike(Protocol):
+    kind: str
+    ref: str
+    channel_account_id: str
+    context_token: str
+
+
+def target_from_channel(target: ChannelTargetLike) -> DeliveryTarget:
+    """渠道值的唯一适配点，避免每个调用方各自 **dict 展开。"""
+    return DeliveryTarget(
+        kind=target.kind,
+        ref=target.ref,
+        channel_account_id=target.channel_account_id,
+        context_token=target.context_token,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +104,8 @@ class DeliveryLease:
     attempts: int
     max_attempts: int
     subject: str = ""
+    dedup_key: str = ""
+    created_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)

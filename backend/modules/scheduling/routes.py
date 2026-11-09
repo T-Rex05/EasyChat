@@ -4,19 +4,24 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from backend.modules.delivery.contracts import DeliveryTarget
+from backend.modules.delivery.contracts import DeliveryTarget, target_from_channel
 from backend.modules.scheduling.api import SchedulingService
 from backend.shared.errors import InvalidInputError, UnauthenticatedError
 
 
 class ScheduleCreateBody(BaseModel):
     title: str = ""
-    text: str = Field(min_length=1)
+    text: str = ""
     at: str = ""
     every_seconds: int = 0
     daily_at: str = ""
+    weekly_at: str = ""
+    weekday: int | None = None
+    timezone: str = ""
+    content_kind: str = "text"
+    briefing_kind: str = ""
     target_kind: str = ""
     target_ref: str = ""
 
@@ -37,6 +42,9 @@ def _schedule_dict(schedule) -> dict[str, Any]:
         "next_run_at": schedule.next_run_at,
         "enabled": schedule.enabled,
         "last_run_at": schedule.last_run_at,
+        "weekday": schedule.weekday,
+        "content_kind": schedule.content_kind,
+        "briefing_kind": schedule.briefing_kind,
         "target": {
             "kind": schedule.target.kind, "ref": schedule.target.ref,
             "channel_account_id": schedule.target.channel_account_id,
@@ -56,10 +64,13 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
             return DeliveryTarget(kind=kind, ref=ref)
         if kind == "email" or ref:
             raise InvalidInputError("邮箱目标需要同时提供 target_kind=email 与 target_ref")
-        resolved = channels.delivery_target_for_owner(principal.user_id)
+        resolved = (
+            channels.delivery_target_for_owner(principal.user_id)
+            if channels is not None else None
+        )
         if not resolved:
             raise InvalidInputError("没有可用的微信绑定，请先绑定渠道或提供邮箱目标")
-        return DeliveryTarget(**resolved)
+        return target_from_channel(resolved)
 
     router = APIRouter(prefix="/api/schedules", tags=["scheduling"])
 
@@ -76,6 +87,8 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
             principal, title=body.title, text=body.text,
             target=_target(principal, body.target_kind, body.target_ref),
             at=body.at, every_seconds=body.every_seconds, daily_at=body.daily_at,
+            weekly_at=body.weekly_at, weekday=body.weekday, timezone=body.timezone,
+            content_kind=body.content_kind, briefing_kind=body.briefing_kind,
         )
         return {"schedule": _schedule_dict(schedule)}
 
@@ -98,7 +111,8 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
         principal = _principal(authorization)
         return {"occurrences": [
             {"occurrence_id": o.occurrence_id, "scheduled_at": o.scheduled_at,
-             "state": o.state, "delivery_id": o.delivery_id, "missed": o.missed}
+             "state": o.state, "delivery_id": o.delivery_id, "job_id": o.job_id,
+             "missed": o.missed}
             for o in service.occurrences(principal, schedule_id)
         ]}
 

@@ -9,9 +9,12 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
-from typing import Any, Iterable
+import types
+from collections.abc import Mapping
+from typing import Any, Iterable, Union, get_args, get_origin
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +47,13 @@ def resolve_enabled_toolsets(role_toolsets: Iterable[str]) -> tuple[list[str], l
     return enabled, []
 
 
-def register_safe_project_tools(thread_context_provider: Any) -> int:
-    """注册安全项目工具（时间/待办/提醒/时间解析）到 Hermes registry。
+def register_safe_project_tools(
+    thread_context_provider: Any, *, extra_tools: Iterable[Any] = ()
+) -> int:
+    """注册项目工具（基础工具 + 可选业务工具）到 Hermes registry。
 
-    幂等；必须在 AIAgent 构造之前调用。handler 用 LangChain 官方 invoke()
-    入口（工具签名可能要求 config），thread_id 经 provider 注入。
-    返回本次实际新注册数量。
+    幂等；已在 registry 的同名同 toolset 工具跳过。handler 用 LangChain 官方
+    invoke()/ainvoke() 入口，thread_id 与 ToolContext 经 RunnableConfig 注入。
     """
     ensure = _ensure_hermes_loaded
     ensure()
@@ -57,7 +61,8 @@ def register_safe_project_tools(thread_context_provider: Any) -> int:
     from backend.tools.tools_decorator import get_project_tools
 
     registered = 0
-    for tool in get_project_tools():
+    tools = [*get_project_tools(), *extra_tools]
+    for tool in tools:
         name = getattr(tool, "name", getattr(tool, "__name__", "unknown"))
         if name in _registered_tools:
             continue
@@ -69,6 +74,8 @@ def register_safe_project_tools(thread_context_provider: Any) -> int:
             schema=schema,
             handler=_make_handler(tool, thread_context_provider),
             description=schema.get("description", ""),
+            is_async=_is_async_tool(tool),
+            override=True,
         )
         _registered_tools.add(name)
         registered += 1
@@ -82,7 +89,10 @@ def _tool_schema(tool: Any) -> dict[str, Any]:
         properties = {}
         required = []
         for name, field in getattr(args_schema, "model_fields", {}).items():
-            properties[name] = {"type": "string", "description": field.description or ""}
+            properties[name] = {
+                "type": _json_type(field.annotation),
+                "description": field.description or "",
+            }
             if field.is_required():
                 required.append(name)
         return {
@@ -93,15 +103,69 @@ def _tool_schema(tool: Any) -> dict[str, Any]:
         return {"description": getattr(tool, "description", ""), "parameters": {"type": "object", "properties": {}}}
 
 
+def _json_type(annotation: Any) -> str:
+    """Pydantic 注解 → JSON Schema 基础类型；未知类型保守按 string。"""
+    origin = get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        args = [item for item in get_args(annotation) if item is not type(None)]
+        return _json_type(args[0]) if len(args) == 1 else "string"
+    if annotation is bool:
+        return "boolean"
+    if annotation is int:
+        return "integer"
+    if annotation is float:
+        return "number"
+    if origin in (list, tuple, set, frozenset):
+        return "array"
+    if origin is dict or annotation is dict or origin is Mapping:
+        return "object"
+    return "string"
+
+
+def _is_async_tool(tool: Any) -> bool:
+    for candidate in (getattr(tool, "coroutine", None), getattr(tool, "func", None)):
+        if candidate is not None and inspect.iscoroutinefunction(candidate):
+            return True
+    return False
+
+
 def _make_handler(tool: Any, thread_context_provider: Any):
-    def _handler(args, **_kwargs):
+    """同步工具走 invoke；异步工具走 ainvoke，避免把 coroutine 当字符串。"""
+
+    def _config(provided: Any = None) -> dict[str, Any] | None:
+        from backend.shared.tool_context import config_with, current, from_config
+
         thread_id = None
         try:
             thread_id = thread_context_provider()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
-        run_config = {"configurable": {"thread_id": thread_id}} if thread_id else None
-        result = tool.invoke(args or {}, config=run_config)
+        context = from_config(provided) or current()
+        if context is not None:
+            # Todo 等旧工具用 thread_id 做隔离；没有 Hermes 线程时退回 session，
+            # 绝不落到所有会话共享的 "default"。
+            tid = thread_id or context.session_id or context.run_id
+            return config_with(context, thread_id=str(tid) if tid else None)
+        return {"configurable": {"thread_id": thread_id}} if thread_id else None
+
+    if _is_async_tool(tool):
+        def _async_handler(args, **kwargs):
+            # 必须先同步解析 config，再返回协程：Hermes 可能只把协程移到新线程，
+            # 届时 contextvar 已不可见，不能在协程内部才读 current()。
+            config = _config(kwargs.get("config"))
+
+            async def _invoke():
+                result = await tool.ainvoke(args or {}, config=config)
+                if not isinstance(result, str):
+                    result = json.dumps(result, ensure_ascii=False, default=str)
+                return result
+
+            return _invoke()
+
+        return _async_handler
+
+    def _handler(args, **kwargs):
+        result = tool.invoke(args or {}, config=_config(kwargs.get("config")))
         if not isinstance(result, str):
             result = json.dumps(result, ensure_ascii=False, default=str)
         return result

@@ -2,6 +2,11 @@ import importlib
 import sys
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("backend.observer.trace_observer", reason="legacy trace observer removed")
+pytest.importorskip("backend.service.trace", reason="legacy trace service removed")
+
 
 def usage(raw):
     return importlib.import_module("backend.utils.llm_usage").trace_usage(raw)

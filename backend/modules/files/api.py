@@ -105,6 +105,11 @@ class FileService:
 
     # ---- 保存 ------------------------------------------------------------------
 
+    @staticmethod
+    def detect_upload_mime(head: bytes, original_name: str) -> str:
+        """上传入口预检使用同一内容签名规则；最终保存仍重新检查类型与大小。"""
+        return detect_content_mime(head, original_name)
+
     async def save_stream(
         self,
         principal: Principal,
@@ -263,7 +268,7 @@ class FileService:
             self.repo.update_receipt(receipt_id, state=FILE_FAILED, error="空文件")
             raise InvalidInputError("空文件不能保存")
 
-        verified_mime = detect_content_mime(head, original_name or metadata.declared_mime)
+        verified_mime = self.detect_upload_mime(head, original_name or metadata.declared_mime)
         extension = verified_extension(verified_mime, original_name)
         kind = kind_for(verified_mime, extension, declared=metadata.kind)
         # 内容上限：图片像素、压缩容器展开量（拒绝时不返回“已保存”）

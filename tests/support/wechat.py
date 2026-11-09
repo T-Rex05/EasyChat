@@ -63,7 +63,8 @@ class FakeTransport:
         return {"ret": 0}
 
     async def download_to(
-        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0
+        self, url: str, dest_path: Path, *, max_bytes: int, timeout: float = 60.0,
+        allowed_hosts=None,
     ) -> int:
         self.download_calls.append(url)
         data = self.downloads.get(url)

@@ -99,26 +99,19 @@ def _get_thread_id(config) -> str:
     return "default"
 
 
-def _current_user_id(default=None):
-    """获取当前用户 ID（权威来源：`hermes_adapter._CURRENT_USER_ID_CTX`）。
+def _current_user_id(default=None, config=None):
+    """获取当前用户 ID（配置通道优先，contextvar 兜底）。
 
-    该 ContextVar 由 HermesRuntime 在每次请求进入时 `set()`，因此必须在使用处
-    **局部导入**（与 `code_executor.py` / `kg_tools.py` 里的既有用法一致）。
-
-    历史上这里曾引用过两个不存在的名字，导致工具静默失效：
-    - `_CURRENT_USER_ID_CTX` 未导入 → `NameError`
-    - `_MEMORY_USER_CTX`（`hermes_adapter` 里根本没有这个名字）→ `ImportError`
-    统一走本助手，避免再次出现"写一个名字、读另一个名字"。
+    身份只来自 RunDispatcher 构造的可信 ``ToolContext``；工具参数永远不能
+    指定 user_id。没有身份时返回 default，由调用方决定拒绝而不是假设 user 0。
     """
-    try:
-        from backend.hermes_adapter import _CURRENT_USER_ID_CTX
-        uid = _CURRENT_USER_ID_CTX.get()
-    except Exception:
-        uid = None
-    if uid is None:
+    from backend.shared.tool_context import resolve
+
+    context = resolve(config)
+    if context is None:
         return default
     try:
-        return int(uid)
+        return int(context.principal.user_id)
     except (ValueError, TypeError):
         return default
 
@@ -126,11 +119,10 @@ def _current_user_id(default=None):
 def _get_todo_key(config) -> str:
     """生成待办列表的键（user_id:thread_id），实现用户隔离。"""
     thread_id = _get_thread_id(config)
-    # 获取当前用户 ID
-    user_id = _current_user_id()
+    user_id = _current_user_id(config=config)
     if user_id is None:
-        log.warning("[Todo] 无法获取 user_id，使用默认值 0")
-        user_id = 0
+        # 无身份时拒绝写入共享键，避免所有匿名请求串到 user 0。
+        raise RuntimeError("缺少可信用户身份，拒绝访问待办")
     return f"{user_id}:{thread_id}"
 
 
@@ -204,8 +196,10 @@ def cronjob_create(
         str: 创建结果（成功返回任务ID，失败返回错误信息）
     """
     try:
-        # 获取当前用户 ID（权威来源：hermes_adapter._CURRENT_USER_ID_CTX）
-        user_id = _current_user_id(default=1)
+        # 获取当前用户 ID（权威来源：ToolContext / RunDispatcher）
+        user_id = _current_user_id()
+        if user_id is None:
+            return "❌ 缺少可信用户身份，拒绝创建定时任务。"
 
         # 权限检查
         from backend.permission.checker import has_permission
@@ -398,8 +392,10 @@ def list_delivery_configs() -> str:
             - wechat_bound: 微信是否已绑定
     """
     try:
-        # 获取当前用户 ID（权威来源：hermes_adapter._CURRENT_USER_ID_CTX）
-        user_id = _current_user_id(default=1)
+        # 获取当前用户 ID（权威来源：ToolContext / RunDispatcher）
+        user_id = _current_user_id()
+        if user_id is None:
+            return "❌ 缺少可信用户身份，拒绝读取投递配置。"
 
         from backend.db.schema import get_conn
         import json as _json

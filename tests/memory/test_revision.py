@@ -81,7 +81,8 @@ def test_source_type_and_confidence_retained(env):
     assert inferred.confidence == pytest.approx(0.3)
 
 
-def test_signal_job_processed_once(tmp_path):
+@pytest.mark.asyncio
+async def test_signal_job_processed_once(tmp_path):
     rig, _ = make_memory_rig(tmp_path)
     queue = JobQueue(rig.db, clock=rig.clock)
     service = MemoryService(rig.db, access=rig.access, queue=queue)
@@ -101,13 +102,14 @@ def test_signal_job_processed_once(tmp_path):
     assert second.duplicate is True and second.signal_id == first.signal_id
 
     worker = MemoryWorker(service, queue)
-    assert worker.tick() == 1
-    assert worker.tick() == 0
+    assert await worker.tick() == 1
+    assert await worker.tick() == 0
     records = service.list(user)
     assert len([r for r in records if r.content == "喜欢喝乌龙茶"]) == 1
 
 
-def test_correct_signal_uses_expected_version(tmp_path):
+@pytest.mark.asyncio
+async def test_correct_signal_uses_expected_version(tmp_path):
     rig, _ = make_memory_rig(tmp_path)
     queue = JobQueue(rig.db, clock=rig.clock)
     service = MemoryService(rig.db, access=rig.access, queue=queue)
@@ -119,12 +121,13 @@ def test_correct_signal_uses_expected_version(tmp_path):
                  "content": "喜欢拿铁", "reason": "用户纠正"},
     )
     assert receipt.duplicate is False
-    MemoryWorker(service, queue).tick()
+    await MemoryWorker(service, queue).tick()
     assert service.repo.get(record.memory_id).content == "喜欢拿铁"
     assert service.repo.get(record.memory_id).version == 2
 
 
-def test_stage_complete_without_content_is_noop(tmp_path):
+@pytest.mark.asyncio
+async def test_stage_complete_without_content_is_noop(tmp_path):
     rig, _ = make_memory_rig(tmp_path)
     queue = JobQueue(rig.db, clock=rig.clock)
     service = MemoryService(rig.db, access=rig.access, queue=queue)
@@ -133,7 +136,7 @@ def test_stage_complete_without_content_is_noop(tmp_path):
         user, signal="stage_complete", source_event_id="sig-stage",
         payload={"session_id": "sess-1"},
     )
-    MemoryWorker(service, queue).tick()
+    await MemoryWorker(service, queue).tick()
     assert service.list(user) == []
 
 

@@ -90,7 +90,7 @@ def test_0013_database_upgrades_without_rewriting_old_checksums(tmp_path: Path) 
     assert "0014" not in before
 
     applied = db.migrate()
-    assert applied == ["0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022"]
+    assert applied == ["0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023"]
     after = _checksums(db)
     assert after["0012"] == before["0012"]
     assert after["0013"] == before["0013"]
@@ -103,6 +103,7 @@ def test_0013_database_upgrades_without_rewriting_old_checksums(tmp_path: Path) 
     assert after["0020"]
     assert after["0021"]
     assert after["0022"]
+    assert after["0023"]
 
 
 def test_partial_url_unique_index_allows_multiple_empty_urls(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-﻿"""账本服务：导入状态机、去重提交、退款核对、受控统计与图片候选。
+"""账本服务：导入状态机、去重提交、退款核对、受控统计与图片候选。
 
 边界（设计 §4/§10）：
 - 只有本模块写 ledger_* 表；routes/LLM 工具只调用本服务；
@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import tempfile
@@ -49,6 +50,8 @@ from backend.modules.ledger.contracts import (
     Coverage,
     ImageCandidate,
     ImportView,
+    LedgerAlreadyCommitted,
+    LedgerControlMismatch,
     MetricResult,
     ParsedRow,
     Period,
@@ -199,6 +202,8 @@ class LedgerService:
         self.timezone = timezone
         self.max_rows = max_rows
         self.clock = clock or (lambda: None)
+        # 审计 #8：进程内在途解析守卫——重复/并发 POST 不能叠加整份解析
+        self._parsing_imports: set[str] = set()
         # 视觉 Adapter 由部署方注入；未配置时识别接口明确报错而不是编造数据。
         self.vision = vision
         self.pdf = pdf
@@ -317,7 +322,11 @@ class LedgerService:
         """解析已登记文件：状态机 parsing → needs_review/validated/failed。
 
         可重入：重复解析会替换本批次的标准化行，不影响其他批次。
+        审计 #8：解析体是纯同步 CPU/内存密集代码，必须在 to_thread 中执行
+        （不阻塞共享事件循环），并以在途守卫拒绝并发的重复解析。
         """
+        if import_id in self._parsing_imports:
+            raise InvalidInputError("该导入正在解析中，请稍后查看结果")
         row = self.repo.get_import(import_id)
         owner_id = int(row["owner_id"])
         principal = self.access.snapshot_principal(owner_id)
@@ -325,6 +334,7 @@ class LedgerService:
             self.repo.update_import(import_id, state=IMPORT_FAILED, error="权限已撤销，无法导入")
             raise InvalidInputError("权限已撤销，无法导入")
         self.repo.update_import(import_id, state=IMPORT_PARSING, error=None)
+        self._parsing_imports.add(import_id)
         try:
             file_record = self.files.get(principal, str(row["file_id"]))
             path = self.files.internal_path(principal, file_record.file_id)
@@ -339,7 +349,8 @@ class LedgerService:
                 timezone=self.timezone, default_currency=str(row.get("currency") or "CNY"),
                 max_rows=self.max_rows, mapping=mapping,
             )
-            statement = parse_saved_file(
+            statement = await asyncio.to_thread(
+                parse_saved_file,
                 path, file_name=file_record.original_name,
                 mime=file_record.verified_mime, options=options,
             )
@@ -356,6 +367,8 @@ class LedgerService:
                 # 存储暂不可用（磁盘/权限/挂载）不应永久失败：回退到 saved 让 worker 重试
                 raise
             return _import_view(self.repo.get_import(import_id, owner_id=owner_id))
+        finally:
+            self._parsing_imports.discard(import_id)
 
         self.repo.delete_source_rows(import_id)
         source_rows = [_row_payload(parsed) for parsed in statement.rows]
@@ -511,12 +524,12 @@ class LedgerService:
         if state == IMPORT_COMMITTED:
             if request_id and str(row.get("commit_request_id") or "") == request_id:
                 return _commit_result(import_id, previous, duplicate=True)
-            raise InvalidInputError("该批次已提交，如需重新导入请使用新文件")
+            raise LedgerAlreadyCommitted("该批次已提交，如需重新导入请使用新文件")
         if state not in (IMPORT_VALIDATED, IMPORT_NEEDS_REVIEW):
             raise InvalidInputError(f"当前状态不能提交: {state}")
         control = (row.get("quality") or {}).get("control") or {}
         if control.get("checked") and not control.get("ok") and not confirm_mismatch:
-            raise InvalidInputError(
+            raise LedgerControlMismatch(
                 "账单控制总额与明细不一致，确认无误后才能提交"
                 f"（{'; '.join(control.get('mismatches') or [])}）"
             )
@@ -647,6 +660,12 @@ class LedgerService:
             )
             if not ok:
                 continue
+            try:
+                self._validate_refund_side(
+                    principal, refund_tx_id, suggestion.amount_minor,
+                )
+            except InvalidInputError:
+                continue  # 自动匹配同样受退款侧镜像上限约束（审计 #10）
             _link_id, created = self.repo.create_refund_link(
                 owner_id=principal.user_id,
                 refund_transaction_id=refund_tx_id,
@@ -892,6 +911,21 @@ class LedgerService:
             for item in suggestions
         ]
 
+    def _validate_refund_side(
+        self, principal: Principal, refund_transaction_id: str, amount_minor: int, *,
+        exclude_original_id: str = "",
+    ) -> None:
+        """退款侧镜像上限（审计 #10）：单笔退款在所有原支付上的已确认关联
+        累计不得超过退款交易自身金额，防止同一退款撑大消耗净额的抵扣。"""
+        refund = self.repo.get_transaction(refund_transaction_id, owner_id=principal.user_id)
+        siblings = [
+            link for link in self.repo.links_for_refund(refund_transaction_id, owner_id=principal.user_id)
+            if str(link["original_transaction_id"]) != exclude_original_id
+        ]
+        used = sum(int(link["amount_minor"]) for link in siblings if link["confirmation"] == "confirmed")
+        if used + int(amount_minor) > abs(int(refund["amount_minor"])):
+            raise InvalidInputError("退款累计关联金额不能超过退款交易金额")
+
     def link_refund(
         self, principal: Principal, *, refund_transaction_id: str,
         original_transaction_id: str, amount_minor: int | None = None,
@@ -907,6 +941,7 @@ class LedgerService:
         amount = int(amount_minor if amount_minor is not None else refund["amount_minor"])
         if amount <= 0:
             raise InvalidInputError("退款金额必须大于 0")
+        self._validate_refund_side(principal, refund_transaction_id, amount)
         existing = self.repo.links_for_original(
             original_transaction_id, owner_id=principal.user_id,
         )
@@ -970,6 +1005,10 @@ class LedgerService:
         )
         if not ok:
             raise InvalidInputError(reason)
+        self._validate_refund_side(
+            principal, str(link["refund_transaction_id"]), int(link["amount_minor"]),
+            exclude_original_id=str(link["original_transaction_id"]),
+        )
         self.repo.update_refund_link(link_id, confirmation="confirmed")
         return self.repo.get_refund_link(link_id, owner_id=principal.user_id)
 

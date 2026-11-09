@@ -146,7 +146,7 @@ def _consume(
         return False
     if is_control_line(values):
         text = control_line(values)
-        if text:
+        if text and len(control_lines) < options.max_control_lines:
             control_lines.append(text)
         return False
     if not looks_like_data(values, indexes):

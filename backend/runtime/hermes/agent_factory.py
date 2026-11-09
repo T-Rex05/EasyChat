@@ -33,7 +33,7 @@ def build_agent(request: Any, profile: dict[str, Any], *, hermes_home: Any, mode
         "session_db": SessionDB(),  # 不传等于静默关闭持久化
         "skip_memory": True,  # 记忆走 EasyChat memory 模块（Task 9 桥接）
         "enabled_toolsets": enabled_toolsets,
-        "compression_enabled": True,  # 会话压缩保留（原始工具结果证据在 state.db）
+        # 压缩由内核配置默认开启（agent_init: compression.enabled，非构造参数）
     }
     if profile.get("base_url"):
         kwargs["base_url"] = _normalize_base_url(str(profile["base_url"]), str(profile.get("provider", "")))
@@ -114,7 +114,7 @@ def _fallback_profile(models: Any) -> dict[str, Any] | None:
     if models is None:
         return None
     try:
-        selection = models.select_for_run(auxiliary=False)
+        selection = models.select_for_run(auxiliary=True)
     except Exception:  # noqa: BLE001
         return None
     for profile in selection.fallback:

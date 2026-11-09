@@ -35,4 +35,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8001/healthz || exit 1
 
 # 单 worker：SQLite + 进程内调度器/worker，不支持多副本共享状态
-CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+# --no-access-log：访问日志默认记录完整 query string，长效凭据绝不能落盘（审计 #3）
+CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--no-access-log"]

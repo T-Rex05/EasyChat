@@ -46,6 +46,9 @@ class ParseOptions:
     timezone: str = "Asia/Shanghai"
     default_currency: str = "CNY"
     max_rows: int = 100_000
+    # 审计 #8：控制行与数据行共用有界预算——无上限保留会让 50MB 输入
+    # 在内存里放大 ~15-20 倍并阻塞共享事件循环。
+    max_control_lines: int = 5_000
     sheet_names: tuple[str, ...] = ()
     mapping: ColumnMapping | None = None
 

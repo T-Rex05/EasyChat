@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from backend.modules.models.contracts import ModelProfile, ModelSelection
@@ -73,7 +74,7 @@ class ModelsService:
         for cid in chain:
             profile = self.repo.get_config(cid)
             if profile is not None:
-                out.append(profile.__dict__)
+                out.append(asdict(profile))
         return out
 
     def save_fallback_chain(self, actor: Principal, config_ids: list[int]) -> None:

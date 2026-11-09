@@ -63,6 +63,20 @@ def test_ranking_days_window(env):
     assert next(r for r in svc.ranking(admin, days=365)["ranking"] if r["user_id"] == 7)["total_tokens"] == 150
 
 
+def test_ranking_exposes_input_output_and_legacy_aliases(env):
+    """排行页同时依赖输入/输出和 owner_id/call_count 旧字段。"""
+    svc, db, clock, perms = env
+    admin = Principal(user_id=1, role="super_admin", permission_revision=0)
+    c = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    svc.complete_call(c, _u(100))
+    row = next(r for r in svc.ranking(admin)["ranking"] if r["user_id"] == 7)
+    assert row["owner_id"] == 7
+    assert row["input_tokens"] == 90
+    assert row["output_tokens"] == 10
+    assert row["call_count"] == 1
+    assert row["api_calls"] == 1
+
+
 def test_ranking_requires_trace_view(env):
     svc, db, clock, perms = env
     svc.begin_call(owner_id=7, source="chat", provider="p", model="m")

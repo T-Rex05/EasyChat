@@ -9,6 +9,7 @@ import time
 import requests
 import importlib.util
 from datetime import datetime
+from pathlib import Path
 
 # Windows 编码修复
 if sys.stdout.encoding != 'utf-8':
@@ -16,7 +17,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # 项目根目录
-PROJECT_ROOT = r"E:\PythonCode\AgentForge"
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 os.chdir(PROJECT_ROOT)
 
 # 导入 ab_test_recorder
@@ -178,7 +179,7 @@ def run_single_test(test_case, run_num, recorder, token):
                         full_response.append(d.get("content", ""))
                     elif d.get("type") == "chat_complete":
                         break
-                except:
+                except Exception:
                     pass
 
         elapsed = time.time() - start_time
@@ -265,7 +266,7 @@ def main():
     print("=" * 60)
 
     token = get_token()
-    print(f"✅ Token 获取成功")
+    print("✅ Token 获取成功")
 
     recorder = ABTestRecorder(group="A")
 
@@ -294,7 +295,7 @@ def main():
     recorder.save()
     print(f"\n{'='*60}")
     print(f"测试全部完成！成功: {completed}, 失败: {failed}")
-    print(f"结果文件: tests/results/test_results_a.json")
+    print("结果文件: tests/results/test_results_a.json")
     print(f"{'='*60}")
     recorder.print_summary()
 

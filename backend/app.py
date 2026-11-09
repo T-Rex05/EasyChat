@@ -111,7 +111,9 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_usage_router(_LazyModule(registry, "usage"), authenticate))
     app.include_router(build_models_router(_LazyModule(registry, "models"), authenticate))
     app.include_router(build_web_chat_router(_LazyModule(registry, "assistant"), authenticate, authenticate_ticket))
-    app.include_router(build_assistant_compat_router(authenticate))
+    app.include_router(build_assistant_compat_router(
+        authenticate, _LazyModule(registry, "assistant"), _LazyModule(registry, "files"),
+    ))
     app.include_router(build_channels_router(_LazyModule(registry, "channels"), authenticate))
     app.include_router(build_files_router(_LazyModule(registry, "files"), authenticate))
     app.include_router(build_ledger_router(_LazyModule(registry, "ledger"), authenticate))

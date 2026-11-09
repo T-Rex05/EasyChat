@@ -87,6 +87,20 @@ class MemoryService:
             self.repo.set_status(old.memory_id, STATUS_ARCHIVED)
         return self.repo.create_memory(owner_id=principal.user_id, candidate=candidate)
 
+    def remember_explicit(self, actor: Principal, candidate: MemoryCandidate) -> MemoryRecord:
+        """用户明确要求记住：来源由服务端强制 user_confirmed，不信任模型字段。"""
+        from dataclasses import replace
+
+        from backend.modules.memory.contracts import SOURCE_USER_CONFIRMED
+
+        confirmed = replace(
+            candidate,
+            source_type=SOURCE_USER_CONFIRMED,
+            confidence=1.0,
+            scope="user",
+        )
+        return self.remember(actor, confirmed)
+
     def revise(
         self,
         actor: Principal,

@@ -147,6 +147,20 @@ def test_lease_expiry_recovered_and_reclaimed(queue):
     assert lease2.attempts == 2
 
 
+def test_expired_lease_with_exhausted_attempts_becomes_failed(queue):
+    jq, _db, clock = queue
+    jid = jq.enqueue(kind="k", dedup_key="d-max", payload={}, max_attempts=1)
+    lease = jq.claim("w1")
+    assert lease is not None and lease.attempts == 1
+    clock.advance(301)
+    recovered = jq.recover_expired_leases()
+    assert recovered == [jid]
+    row = jq.get(jid)
+    assert row["state"] == JOB_FAILED
+    assert row["attempts"] == 1
+    assert jq.claim("w2") is None
+
+
 def test_complete_with_stale_lease_fails(queue):
     """过期lease不能完成——条件更新失败抛错（进程内串行仍需条件保护）。"""
     jq, _db, clock = queue

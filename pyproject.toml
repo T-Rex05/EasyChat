@@ -50,6 +50,10 @@ dev = [
 # Ollama 本地模型
 ollama = ["langchain-ollama>=1.0.0"]
 
+# 微信扫码登录 / 免费联网搜索兜底
+qr = ["qrcode[pil]>=7.4"]
+websearch = ["ddgs>=9.0.0", "lxml>=5.0"]
+
 [project.scripts]
 agentforge = "agentforge_cli:main"
 

@@ -1,187 +1,50 @@
-# AgentForge Docker 部署指南
+# EasyChat Docker 部署
+
+单容器：应用 + SQLite + 进程内 worker；不依赖 MySQL/Redis/Neo4j/Milvus。
 
 ## 快速启动
 
-### 1. 首次启动
-
 ```powershell
 cd docker
-
-# 1. 复制配置文件
-copy .env.example .env
-
-# 2. 编辑 .env，填入 LLM API Key 等配置
-notepad .env
-
-# 3. 启动所有服务
-.\start.ps1 start
+Copy-Item .env.example .env
+# 编辑 .env：至少设置 EASYCHAT_JWT_SECRET（>=32 位随机串）
+docker compose up --build -d
 ```
 
-### 2. 迁移现有数据（如果有本地 MySQL 数据）
+打开 `http://127.0.0.1:8001/`；健康检查：
 
 ```powershell
-# 先确保 Docker MySQL 已启动
-.\start.ps1 start
-
-# 执行迁移
-.\start.ps1 migrate
-# 按提示输入本地 MySQL 密码
+docker compose ps
+Invoke-RestMethod http://127.0.0.1:8001/healthz   # {"status":"ok"}
+Invoke-RestMethod http://127.0.0.1:8001/readyz    # {"status":"ready"}
 ```
 
----
-
-## 服务地址
-
-| 服务 | 地址 | 用户名/密码 |
-|------|------|------------|
-| **MySQL** | localhost:3306 | root / agentforge123 |
-| **Neo4j Web UI** | http://localhost:7474 | neo4j / agentforge123 |
-| **Milvus gRPC** | localhost:19530 | - |
-
----
-
-## 常用命令
+停止 / 查看日志：
 
 ```powershell
-.\start.ps1 start     # 启动所有服务
-.\start.ps1 stop      # 停止所有服务
-.\start.ps1 restart   # 重启所有服务
-.\start.ps1 status    # 查看服务状态
-.\start.ps1 logs      # 查看所有日志
-.\start.ps1 logs mysql    # 查看 MySQL 日志
-.\start.ps1 logs neo4j    # 查看 Neo4j 日志
-.\start.ps1 migrate   # 迁移 MySQL 数据
-.\start.ps1 reset     # 重置所有数据（危险！）
+docker compose logs -f easychat
+docker compose down
 ```
 
----
+数据保存在命名卷 `easychat_data`（`/app/data`）；普通 `down` 不删卷，`down -v` 才会删除业务数据。
 
-## 配置说明
+## 配置
 
-### .env 文件
+`.env.example` 已列出端口、JWT、加密密钥和能力开关。默认全部能力关闭，适合只验证 Web 启动、SQLite 迁移和基础 API：
 
-```env
-# MySQL
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=root
-MYSQL_PASSWORD=agentforge123
-MYSQL_DATABASE=agentforge
+- `EASYCHAT_HERMES_ENABLED=false`：不启动真实 Hermes/LLM；
+- `EASYCHAT_WECHAT_ENABLED=false`：不启动微信监听；
+- `EASYCHAT_ENCRYPTION_SECRET`：启用微信或邮件时必须设置，否则对应能力保持关闭；
+- 微信/模型/SMTP 凭证不要写进镜像或 `.env.example`，运行时录入或由部署环境提供。
 
-# Neo4j
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=agentforge123
+## 已验证的启动路径
 
-# Milvus
-MILVUS_HOST=localhost
-MILVUS_PORT=19530
+- 镜像内前端静态资源由 `agent_frontend` 构建阶段生成，挂载到 `/app/static`；
+- 启动执行 SQLite 迁移至当前最新版本；
+- `/healthz` 只表示进程存活，`/readyz` 才表示 lifespan 装配完成；
+- 容器健康检查使用镜像内 `curl` 请求 `/healthz`；
+- `python-multipart` 是文件上传路由的必需依赖，已列入 `requirements-core.txt`。
 
-# LLM
-LLM_API_KEY=your_openai_api_key
-LLM_MODEL=gpt-4o-mini
+## 构建注意
 
-# Embedding
-RAG_EMBEDDING_API_KEY=your_openai_api_key
-RAG_EMBEDDING_MODEL=text-embedding-3-small
-```
-
----
-
-## 启动顺序
-
-```
-1. MySQL (健康检查通过)
-   ↓
-2. Neo4j (健康检查通过)
-   ↓
-3. Milvus (依赖 etcd + minio)
-   ↓
-4. AgentForge 应用
-```
-
----
-
-## 数据持久化
-
-数据存储在 `docker/volumes/` 目录：
-
-```
-volumes/
-├── mysql/data/      # MySQL 数据
-├── neo4j/data/      # Neo4j 图数据
-├── neo4j/logs/      # Neo4j 日志
-├── etcd/            # Milvus 元数据
-├── minio/           # Milvus 对象存储
-└── milvus/          # Milvus 数据
-```
-
----
-
-## 故障排查
-
-### MySQL 连接失败
-```powershell
-# 检查容器状态
-docker ps | findstr mysql
-
-# 查看日志
-docker logs agentforge-mysql
-```
-
-### Neo4j 连接失败
-```powershell
-# 检查是否需要 APOC 插件
-docker exec -it agentforge-neo4j cypher-shell -u neo4j -p agentforge123 "RETURN 1"
-```
-
-### Milvus 连接失败
-```powershell
-# 检查健康状态
-curl http://localhost:9091/healthz
-
-# 查看 etcd 状态
-docker logs milvus-etcd
-```
-
----
-
-## 与 AgentForge 应用集成
-
-启动 Docker 服务后，运行 AgentForge：
-
-```powershell
-cd ..  # 回到项目根目录
-
-# 方式1: 直接运行（推荐开发时使用）
-python main.py
-
-# 方式2: 也用 Docker 运行
-# 取消 docker-compose.yml 中 agentforge 服务的注释
-docker-compose up -d agentforge
-```
-
----
-
-## 生产环境建议
-
-1. **修改默认密码**
-   - 修改 `.env` 中的所有密码
-   - 特别是 `MYSQL_ROOT_PASSWORD` 和 `NEO4J_PASSWORD`
-
-2. **配置持久化**
-   - 数据已挂载到 `volumes/` 目录
-   - 建议定期备份此目录
-
-3. **资源限制**
-   - 在 `docker-compose.yml` 中添加资源限制：
-   ```yaml
-   deploy:
-     resources:
-       limits:
-         memory: 2G
-   ```
-
-4. **安全加固**
-   - 不要暴露不必要的端口
-   - 使用 Docker 网络隔离
+默认构建从 PyPI/Docker Hub 拉取依赖；在受限网络中可能遇到 registry 超时或 wheel hash mismatch。此时先确认网络/镜像源可达，再执行 `docker compose build --pull`。本机冒烟时曾用可达 PyPI 镜像构建临时测试镜像；临时 Dockerfile 不进入仓库，不能替代默认 Dockerfile 在可靠网络下的复跑。

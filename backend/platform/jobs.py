@@ -92,6 +92,53 @@ class JobQueue:
             )
             return job_id
 
+    def enqueue_tx(
+        self,
+        conn: Any,
+        *,
+        kind: str,
+        dedup_key: str,
+        payload: Mapping[str, Any],
+        owner_id: int | None = None,
+        payload_version: int = 1,
+        delay_seconds: float = 0.0,
+        max_attempts: int = 5,
+    ) -> str:
+        """在调用方事务内幂等入队（run 终态/调度发生与 job 同事务）。"""
+        payload_json = json.dumps(dict(payload), ensure_ascii=False)
+        row = conn.execute("SELECT id FROM jobs WHERE dedup_key=?", (dedup_key,)).fetchone()
+        if row is not None:
+            return str(row["id"])
+        job_id = new_job_id()
+        now = self.clock()
+        conn.execute(
+            """INSERT INTO jobs(id, kind, dedup_key, owner_id, payload_version, payload,
+                state, available_at, created_at, updated_at, max_attempts)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                job_id, kind, dedup_key, owner_id, payload_version, payload_json,
+                JOB_PENDING, now + delay_seconds, utc_now_iso(), utc_now_iso(), max_attempts,
+            ),
+        )
+        return job_id
+
+    def count_for_owner(
+        self, *, kind: str, owner_id: int, payload_field: str, payload_value: str
+    ) -> int:
+        """按 kind+owner+JSON 字段计数（用于每日采样上限等业务约束）。"""
+        if not payload_field.isalnum():
+            raise ValueError("payload_field 必须是简单字段名")
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT count(*) AS c FROM jobs WHERE kind=? AND owner_id=? "
+                f"AND json_extract(payload, '$.{payload_field}')=?",
+                (kind, owner_id, payload_value),
+            ).fetchone()
+            return int(row["c"]) if row else 0
+        finally:
+            conn.close()
+
     # ---- 认领与完成 ------------------------------------------------------------
 
     def claim(self, worker_id: str, *, kinds: Sequence[str] | None = None) -> Lease | None:
@@ -129,6 +176,25 @@ class JobQueue:
                 lease_until=lease_until,
                 lease_owner=worker_id,
             )
+
+    def purge_payloads(self, owner_id: int, kind: str) -> int:
+        """删除未完成同类任务，并清空终态任务的敏感 payload。
+
+        未完成任务若只清空 payload，worker 会拿到 owner=0 的脏任务；直接删除。
+        已领取的 lease 持有旧快照，业务层仍需自行校验 opt-in。
+        """
+        now = utc_now_iso()
+        with self.db.transaction() as conn:
+            deleted = conn.execute(
+                "DELETE FROM jobs WHERE owner_id=? AND kind=? AND state IN (?,?)",
+                (int(owner_id), kind, JOB_PENDING, JOB_RETRY_WAIT),
+            ).rowcount
+            updated = conn.execute(
+                "UPDATE jobs SET payload='{}', updated_at=? WHERE owner_id=? AND kind=? "
+                "AND state IN (?,?,?)",
+                (now, int(owner_id), kind, JOB_SUCCEEDED, JOB_FAILED, JOB_CANCELLED),
+            ).rowcount
+            return int(deleted) + int(updated)
 
     def complete(self, lease: Lease) -> None:
         self._transition(lease, JOB_SUCCEEDED)
@@ -176,16 +242,38 @@ class JobQueue:
         now = self.clock()
         with self.db.transaction() as conn:
             rows = conn.execute(
-                "SELECT id FROM jobs WHERE state=? AND lease_until IS NOT NULL AND lease_until<=?",
+                "SELECT id, attempts, max_attempts FROM jobs "
+                "WHERE state=? AND lease_until IS NOT NULL AND lease_until<=?",
                 (JOB_LEASED, now),
             ).fetchall()
             if not rows:
                 return []
             ids = [str(r["id"]) for r in rows]
-            conn.executemany(
-                "UPDATE jobs SET state=?, lease_until=NULL, lease_owner=NULL, updated_at=? WHERE id=?",
-                [(JOB_PENDING, utc_now_iso(), jid) for jid in ids],
-            )
+            retryable = [
+                str(r["id"]) for r in rows
+                if int(r["attempts"]) < int(r["max_attempts"])
+            ]
+            exhausted = [
+                str(r["id"]) for r in rows
+                if int(r["attempts"]) >= int(r["max_attempts"])
+            ]
+            if retryable:
+                conn.executemany(
+                    "UPDATE jobs SET state=?, lease_until=NULL, lease_owner=NULL, "
+                    "updated_at=? WHERE id=?",
+                    [(JOB_PENDING, utc_now_iso(), jid) for jid in retryable],
+                )
+            if exhausted:
+                conn.executemany(
+                    "UPDATE jobs SET state=?, lease_until=NULL, lease_owner=NULL, "
+                    "last_error=?, updated_at=? WHERE id=?",
+                    [
+                        (
+                            JOB_FAILED, "lease 过期且重试次数耗尽", utc_now_iso(), jid,
+                        )
+                        for jid in exhausted
+                    ],
+                )
             return ids
 
     # ---- 查询 ------------------------------------------------------------------

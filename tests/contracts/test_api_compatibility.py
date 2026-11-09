@@ -6,6 +6,7 @@ import pytest
 
 from backend.app import create_app
 from backend.bootstrap import AppSettings
+from backend.modules.usage.contracts import NormalizedUsage
 
 
 def _settings(tmp_path):
@@ -62,7 +63,7 @@ async def test_register_login_and_memory_ownership(client):
     assert (await c.get("/api/usage/ranking", headers=headers)).status_code == 200
     assert (await c.get("/api/history", headers=headers)).status_code == 503
     assert (await c.get("/chat/exec-approval/pending", headers=headers)).json()["pending"] is False
-    assert (await c.post("/api/chat/upload-images", headers=headers)).status_code == 503
+    assert (await c.post("/api/chat/upload-images", headers=headers)).status_code == 422
     assert (await c.get("/api/deliveries", headers=headers)).status_code == 200
     # 未配置部署密钥/渠道时，邮件模块明确 503；配置后普通用户 403
     assert (await c.get("/api/email/config", headers=headers)).status_code == 503
@@ -89,10 +90,56 @@ async def test_assistant_route_reports_unavailable_without_runtime(client):
     })
     token = registered.json()["token"]
     response = await c.get("/chat/stream", params={
-        "message": "hi", "thread_id": "1_1", "token": token,
-    })
+        "message": "hi", "thread_id": "1_1",
+    }, headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 503
     assert response.json()["error"] == "capability_unavailable"
+
+
+async def test_usage_endpoints_match_usage_view_contract(client):
+    """用量页依赖输入/输出/合计/调用次数；API 不能只返回 DB 内部列名。"""
+    c, app = client
+    registered = await c.post("/api/auth/register", json={
+        "username": "usage_view_user", "password": "password6",
+    })
+    token = registered.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    me = await c.get("/api/auth/me", headers=headers)
+    owner_id = int(me.json()["id"])
+    registry = app.state.registry
+    registry.access.repo.set_user_role(owner_id, "super_admin")
+    registry.access.invalidate_all()
+
+    call_id = registry.usage.begin_call(
+        owner_id=owner_id, source="chat", provider="p", model="m",
+    )
+    registry.usage.complete_call(
+        call_id,
+        NormalizedUsage(
+            input_tokens=12, output_tokens=8, total_tokens=20,
+            cache_read_tokens=0, cache_write_tokens=0, reasoning_tokens=0,
+            usage_complete=True,
+        ),
+    )
+
+    ranking = await c.get("/api/usage/ranking", headers=headers)
+    assert ranking.status_code == 200
+    row = next(r for r in ranking.json()["ranking"] if r["user_id"] == owner_id)
+    assert row["owner_id"] == owner_id
+    assert row["input_tokens"] == 12
+    assert row["output_tokens"] == 8
+    assert row["call_count"] == 1
+    assert row["total_tokens"] == 20
+
+    daily = await c.get("/api/usage/me/daily", headers=headers)
+    assert daily.status_code == 200
+    assert daily.json()[0]["input_tokens"] == 12
+    assert daily.json()[0]["call_count"] == 1
+
+    calls = await c.get("/api/usage/calls", headers=headers)
+    assert calls.status_code == 200
+    assert calls.json()[0]["input_tokens"] == 12
+    assert calls.json()[0]["output_tokens"] == 8
 
 
 async def test_email_compat_paths_use_new_service(tmp_path):

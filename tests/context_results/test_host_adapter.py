@@ -7,7 +7,12 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from backend.context.tool_results.runtime import bind_runtime, current_runtime
+
+if not Path("backend/hermes_adapter.py").exists():
+    pytest.skip("legacy backend/hermes_adapter.py removed", allow_module_level=True)
 
 
 def handler_factory():

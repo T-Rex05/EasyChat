@@ -122,6 +122,77 @@ def test_cleanup_calls_keeps_daily_stats(usage):
     assert entry["total_tokens"] == 300  # 汇总保留
 
 
+def test_daily_usage_aggregates_sources_with_input_output(usage):
+    """每日卡必须按天聚合多来源，并返回输入/输出/合计，而不是 raw source 行。"""
+    svc, db, clock, now = usage
+    owner = Principal(user_id=7, role="user", permission_revision=0)
+    c1 = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    svc.complete_call(c1, _u(inp=100, out=20, total=120))
+    c2 = svc.begin_call(owner_id=7, source="memory", provider="p", model="m")
+    svc.complete_call(c2, _u(inp=30, out=10, total=40))
+
+    rows = svc.my_daily_usage(owner, days=7)
+    assert len(rows) == 1
+    assert rows[0]["input_tokens"] == 130
+    assert rows[0]["output_tokens"] == 30
+    assert rows[0]["total_tokens"] == 160
+    assert rows[0]["call_count"] == 2
+
+
+def test_call_list_exposes_legacy_input_output_aliases(usage):
+    """前端调用表历史上用 input/output；API 需兼容，不要求前端读 DB 列名。"""
+    svc, db, clock, now = usage
+    owner = Principal(user_id=7, role="user", permission_revision=0)
+    call_id = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    svc.complete_call(call_id, _u(inp=12, out=8, total=20))
+
+    row = svc.list_calls(owner)[0]
+    assert row["input_tokens"] == 12
+    assert row["output_tokens"] == 8
+    assert svc.get_call(owner, call_id)["input_tokens"] == 12
+
+
+def test_missing_total_is_derived_from_prompt_and_completion(usage):
+    """兼容端点可能不返回 total；不能因此显示 0 token。"""
+    svc, db, clock, now = usage
+    admin = Principal(user_id=1, role="super_admin", permission_revision=0)
+    call_id = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    svc.complete_call(call_id, _u(inp=100, out=50, total=None))
+    entry = next(r for r in svc.ranking(admin)["ranking"] if r["user_id"] == 7)
+    assert entry["total_tokens"] == 150
+    assert svc.repo.get_call(call_id)["total_tokens"] == 150
+
+
+def test_report_usage_before_complete_counts_once(usage):
+    """先 report 再 complete 不能双计；report 本身完成这次调用。"""
+    svc, db, clock, now = usage
+    admin = Principal(user_id=1, role="super_admin", permission_revision=0)
+    call_id = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    assert svc.report_usage(call_id, _u(inp=100, out=50, total=150)) is True
+    assert svc.complete_call(call_id, _u(inp=100, out=50, total=150)) is False
+    entry = next(r for r in svc.ranking(admin)["ranking"] if r["user_id"] == 7)
+    assert entry["total_tokens"] == 150
+    assert entry["call_count"] == 1
+
+
+def test_late_usage_uses_completion_day_across_midnight(usage):
+    """跨午夜补全不能把 tokens 记到创建日，必须跟随首次完成日。"""
+    svc, db, clock, now = usage
+    admin = Principal(user_id=1, role="super_admin", permission_revision=0)
+    owner = Principal(user_id=7, role="user", permission_revision=0)
+    clock.now = datetime(2026, 1, 1, 15, 59, tzinfo=timezone.utc).timestamp()  # 上海 23:59
+    call_id = svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    clock.advance(120)  # 上海次日 00:01 完成
+    svc.complete_call(call_id, NormalizedUsage())
+    svc.report_usage(call_id, _u(inp=100, out=50, total=150))
+
+    rows = svc.my_daily_usage(owner, days=7)
+    assert len(rows) == 1
+    assert rows[0]["stat_date"] == "2026-01-02"
+    assert rows[0]["total_tokens"] == 150
+    assert next(r for r in svc.ranking(admin)["ranking"] if r["user_id"] == 7)["total_tokens"] == 150
+
+
 def test_owner_permission_on_details(usage):
     svc, db, clock, now = usage
     svc.begin_call(owner_id=7, source="chat", provider="p", model="m")

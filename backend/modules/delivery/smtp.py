@@ -1,16 +1,23 @@
-"""SMTP 配置/收件人与邮件发送 Adapter（Task 14）。默认关闭，未启用不建立连接。"""
+"""SMTP 配置/收件人与邮件发送 Adapter（Task 14）。默认关闭，未启用不建立连接。
+
+审计 #4/#7：收件人注册不等于可信——登记的地址必须逐个确认所有权
+（verified=1）才能投递；且每一行只允许一个合法邮箱地址（逗号分隔/
+控制字符在注册与投递两处都 fail-closed），防止单行扇出为多个信封收件人。
+"""
 from __future__ import annotations
 
 import asyncio
+import secrets
 import smtplib
 import socket
 import uuid
 from dataclasses import dataclass
+from email.headerregistry import Address
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel
 
 from backend.modules.delivery.contracts import DeliveryTarget, SendResult
@@ -18,6 +25,36 @@ from backend.platform.sqlite import Database, utc_now_iso
 from backend.shared.context import Principal
 from backend.shared.crypto import decrypt_secret, encrypt_secret, mask_secret
 from backend.shared.errors import InvalidInputError, NotFoundError
+
+CONFIRM_TOKEN_TTL_HOURS = 24
+
+
+def _token_expiry_iso() -> str:
+    """确认令牌过期时间（ISO，与 utc_now_iso 同格式，可安全字符串比较）。"""
+    from datetime import datetime, timedelta, timezone
+
+    return (
+        datetime.now(timezone.utc) + timedelta(hours=CONFIRM_TOKEN_TTL_HOURS)
+    ).isoformat(timespec="milliseconds")
+
+
+def validate_single_address(address: str) -> str:
+    """强制单合法邮箱地址（审计 #7）：拒绝逗号/控制字符/非 addr-spec 值，
+    返回规整后的地址。这是注册与投递共用的唯一格式契约。"""
+    value = (address or "").strip()
+    if not value or len(value) > 254:
+        raise InvalidInputError("收件人必须是单个合法邮箱地址")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise InvalidInputError("收件人必须是单个合法邮箱地址")
+    if any(ch in ",<>" for ch in value):
+        raise InvalidInputError("收件人必须是单个合法邮箱地址（不允许逗号/尖括号）")
+    try:
+        parsed = Address(addr_spec=value)
+    except (ValueError, IndexError) as exc:
+        raise InvalidInputError("收件人必须是单个合法邮箱地址") from exc
+    if str(parsed).lower() != value.lower():
+        raise InvalidInputError("收件人必须是单个合法邮箱地址")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,22 +155,52 @@ class EmailRepository:
     # ---- 收件人 ------------------------------------------------------------------
 
     def add_recipient(self, *, owner_id: int, name: str, address: str) -> dict[str, Any]:
-        email = address.strip()
-        if "@" not in email or len(email) > 254:
-            raise InvalidInputError("收件人邮箱不合法")
+        # 审计 #4：注册只创建"待确认"行（verified=0），所有权由确认链接证明；
+        # 审计 #7：地址必须是单个合法邮箱，逗号列表/控制字符在此拒绝。
+        email = validate_single_address(address)
         recipient_id = f"rcp_{uuid.uuid4().hex}"
+        token = secrets.token_urlsafe(24)
+        expires = _token_expiry_iso()
         with self.db.transaction() as conn:
             conn.execute(
-                "INSERT INTO email_recipients(id, owner_id, name, address, active, created_at) "
-                "VALUES(?,?,?,?,1,?) ON CONFLICT(owner_id, address) DO UPDATE SET "
-                "name=excluded.name, active=1",
-                (recipient_id, owner_id, name[:100], email, utc_now_iso()),
+                "INSERT INTO email_recipients(id, owner_id, name, address, active, verified, "
+                "confirm_token, token_expires_at, created_at) VALUES(?,?,?,?,1,0,?,?,?) "
+                "ON CONFLICT(owner_id, address) DO UPDATE SET name=excluded.name, active=1, "
+                "verified=0, confirm_token=excluded.confirm_token, "
+                "token_expires_at=excluded.token_expires_at",
+                (recipient_id, owner_id, name[:100], email, token, expires, utc_now_iso()),
             )
             row = conn.execute(
                 "SELECT * FROM email_recipients WHERE owner_id=? AND address=?",
                 (owner_id, email),
             ).fetchone()
-            return dict(row)
+            result = dict(row)
+        result.pop("confirm_token", None)  # token 只经确认邮件送达，不出现在 API 响应
+        return result
+
+    def confirm_recipient(self, token: str) -> dict[str, Any]:
+        """一次性确认：命中且未过期的 token 将对应行置为 verified=1。"""
+        value = (token or "").strip()
+        if not value:
+            raise InvalidInputError("确认令牌为空")
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM email_recipients WHERE confirm_token=?", (value,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise NotFoundError("确认令牌无效")
+        if str(row["token_expires_at"] or "") < utc_now_iso():
+            raise InvalidInputError("确认令牌已过期，请重新登记收件人")
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE email_recipients SET verified=1, confirm_token='', token_expires_at='' "
+                "WHERE id=?",
+                (str(row["id"]),),
+            )
+        return {"id": str(row["id"]), "address": str(row["address"]), "verified": True}
 
     def list_recipients(self, owner_id: int) -> list[dict[str, Any]]:
         conn = self.db.connect()
@@ -162,6 +229,8 @@ class EmailService:
     def __init__(self, db: Database, *, access: Any, encryption_secret: str) -> None:
         self.repo = EmailRepository(db, encryption_secret=encryption_secret)
         self.access = access
+        # 所有权确认邮件的发送器；bootstrap 在 SmtpEmailSender 构造后装配（审计 #4）
+        self.confirmation_sender: Any = None
 
     def get_config(self, actor: Principal) -> EmailConfigView:
         principal = self.access.validate_principal(actor)
@@ -180,12 +249,75 @@ class EmailService:
             self.access.require_permission(principal, "system.manage")
         return self.repo.add_recipient(owner_id=target, name=name, address=address)
 
+    async def send_confirmation(self, owner_id: int, address: str) -> bool:
+        """所有权确认邮件（审计 #4，best-effort）：SMTP 未启用或发送失败不
+        阻断注册，但收件人在确认前不可投递。"""
+        try:
+            normalized = validate_single_address(address).lower()
+        except InvalidInputError:
+            return False
+        row = next(
+            (r for r in self.repo.list_recipients(int(owner_id))
+             if str(r.get("address") or "").strip().lower() == normalized),
+            None,
+        )
+        token = str(row.get("confirm_token") or "") if row else ""
+        if not token:
+            return False
+        sender = self.confirmation_sender
+        if sender is None:
+            return False  # bootstrap 未装配发送器（SMTP 能力关闭）
+        target = DeliveryTarget(kind="email", ref=normalized)
+        body = (
+            "请确认将该邮箱加入 EasyChat 收件人（链接 24 小时内有效，且只能使用一次）：\n\n"
+            f"/api/email/recipients/confirm?token={token}\n\n"
+            "在部署主机上打开示例：\n"
+            f"curl 'http://127.0.0.1:8001/api/email/recipients/confirm?token={token}'\n\n"
+            "如果这不是你的操作，请忽略本邮件。"
+        )
+        try:
+            result = await sender.send_text(
+                target, body, subject="EasyChat 收件人确认",
+            )
+        except Exception:  # noqa: BLE001  确认邮件失败不影响注册结果
+            return False
+        return bool(result and getattr(result, "ok", False))
+
+    def is_recipient_allowed(self, owner_id: int, address: str) -> bool:
+        """投递前校验：owner 自己登记、active 且 **已完成所有权确认** 的单个地址。
+
+        审计 #4：verified=0 的行（含全部存量行）fail-closed；审计 #7：目标与
+        存量值都不是单个合法邮箱时一律拒绝（防逗号列表扇出）。
+        """
+        try:
+            target = validate_single_address(address).lower()
+        except InvalidInputError:
+            return False
+        for row in self.repo.list_recipients(int(owner_id)):
+            if not bool(row.get("active")) or not bool(row.get("verified")):
+                continue
+            stored = str(row.get("address") or "")
+            try:
+                if validate_single_address(stored).lower() == target:
+                    return True
+            except InvalidInputError:
+                continue  # 存量脏数据 fail-closed
+        return False
+
+    def confirm_recipient(self, token: str) -> dict[str, Any]:
+        """所有权确认（无需登录：token 本身即凭证，一次性）。"""
+        return self.repo.confirm_recipient(token)
+
     def list_recipients(self, actor: Principal, owner_id: int | None = None) -> list[dict[str, Any]]:
         principal = self.access.validate_principal(actor)
         target = owner_id or principal.user_id
         if target != principal.user_id:
             self.access.require_permission(principal, "system.manage")
-        return self.repo.list_recipients(target)
+        rows = self.repo.list_recipients(target)
+        for row in rows:
+            row.pop("confirm_token", None)  # token 只经邮件送达
+            row.pop("token_expires_at", None)
+        return rows
 
     def deactivate(self, actor: Principal, recipient_id: str, owner_id: int | None = None) -> None:
         principal = self.access.validate_principal(actor)
@@ -208,8 +340,11 @@ class SmtpEmailSender:
         config = self.email.repo.view()
         return bool(config.enabled and config.host and config.sender_email)
 
-    async def send_text(self, target: DeliveryTarget, text: str, *, context_token: str = "") -> SendResult:
-        return await self._send(target, subject="EasyChat 提醒", body=text, attachment=None)
+    async def send_text(
+        self, target: DeliveryTarget, text: str, *, context_token: str = "",
+        subject: str = "EasyChat 提醒",
+    ) -> SendResult:
+        return await self._send(target, subject=subject, body=text, attachment=None)
 
     async def send_artifact(
         self, target: DeliveryTarget, artifact_path: str, *, subject: str, body: str = ""
@@ -228,8 +363,13 @@ class SmtpEmailSender:
         if not (config.enabled and config.host and config.sender_email):
             return SendResult.failed("SMTP 未启用或配置不完整")
         try:
+            to_address = validate_single_address(target.ref)
+        except InvalidInputError as exc:
+            # 审计 #7：信封收件人必须是单个合法地址，多地址/脏值在发送前拒绝。
+            return SendResult.failed(str(exc))
+        try:
             await asyncio.to_thread(
-                self._sync_send, config, self.email.repo.resolved_password(), target.ref,
+                self._sync_send, config, self.email.repo.resolved_password(), to_address,
                 subject, body, attachment,
             )
             return SendResult.sent()
@@ -256,7 +396,7 @@ class SmtpEmailSender:
             message = EmailMessage()
             message["Subject"] = subject
             message["From"] = f"{config.sender_name} <{config.sender_email}>"
-            message["To"] = to_address
+            message["To"] = Address(addr_spec=to_address)  # 单地址对象，绝不再解析出多个信封收件人
             message.set_content(body)
             if attachment is not None:
                 message.add_attachment(
@@ -310,10 +450,22 @@ def build_email_router(service: EmailService, authenticate: Any) -> APIRouter:
     @router.post("/recipients")
     async def add_recipient(body: EmailRecipientBody,
                             authorization: Annotated[str | None, Header()] = None):
-        return {"recipient": service.add_recipient(
-            _principal(authorization), name=body.name, address=body.address,
+        principal = _principal(authorization)
+        row = service.add_recipient(
+            principal, name=body.name, address=body.address,
             owner_id=body.owner_id,
-        )}
+        )
+        confirmed = await service.send_confirmation(int(row["owner_id"]), str(row["address"]))
+        return {"recipient": row, "confirmation_sent": confirmed}
+
+    @router.get("/recipients/confirm")
+    async def confirm_recipient(token: str = Query(default="")):
+        # 无需登录：token 即所有权凭证，一次性且 24 小时过期（审计 #4）
+        from backend.shared.errors import UnauthenticatedError as _U
+
+        if not token.strip():
+            raise _U("缺少确认令牌")
+        return {"ok": True, **service.confirm_recipient(token)}
 
     @router.delete("/recipients/{recipient_id}")
     async def delete_recipient(recipient_id: str, owner_id: int | None = None,
@@ -412,6 +564,7 @@ def build_email_compat_router(service: EmailService, authenticate: Any) -> APIRo
         principal = _principal(authorization)
         email = str(body.get("email") or "")
         row = service.add_recipient(principal, name="", address=email)
+        await service.send_confirmation(int(row["owner_id"]), str(row["address"]))
         return {"ok": True, "id": row["id"]}
 
     @router.put("/api/personal-emails/{email_id}/active")

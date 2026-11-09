@@ -123,12 +123,13 @@ class HermesRuntimeAdapter(ExecutionRuntime):
 
     # ---- Agent 缓存 ----------------------------------------------------------------
 
-    def _cache_key(self, request: RuntimeRequest) -> tuple:
+    def _cache_key(self, request: RuntimeRequest, profile: dict[str, Any] | None = None) -> tuple:
         """缓存键：owner/session、模型配置版本、权限/策略版本、技能摘要。
 
         同 session 不同 owner、模型/权限/技能版本不同 → 不同 Agent，禁止复用。
         """
         ctx = request.context
+        profile = profile if profile is not None else self._resolve_model(request)
         skills_digest = ",".join(f"{name}@{ver}" for name, ver in request.skill_versions)
         return (
             ctx.principal.user_id,
@@ -138,17 +139,19 @@ class HermesRuntimeAdapter(ExecutionRuntime):
             ctx.principal.permission_revision,
             request.allowed_tools and frozenset(request.allowed_tools) or frozenset(),
             skills_digest,
+            (profile.get("profile_id"), profile.get("config_version"),
+             profile.get("fallback_versions", ())),
         )
 
     def _acquire(self, request: RuntimeRequest) -> _AgentHandle:
         self._evict_idle()
-        key = self._cache_key(request)
+        profile = self._resolve_model(request)
+        key = self._cache_key(request, profile)
         handle = self._cache.get(key)
         if handle is not None:
             self._cache.move_to_end(key)
             handle.last_used = time.monotonic()
             return handle
-        profile = self._resolve_model(request)
         agent = self._agent_factory(request, profile)
         handle = _AgentHandle(key=key, agent=agent,
                               model_provider=str(profile.get("provider", "")),
@@ -160,7 +163,7 @@ class HermesRuntimeAdapter(ExecutionRuntime):
 
     def _resolve_model(self, request: RuntimeRequest) -> dict[str, Any]:
         if self.models is not None:
-            selection = self.models.select_for_run()
+            selection = self.models.select_for_run(auxiliary=True)
             profile = selection.chat
             return {
                 "config_type": "URL",
@@ -169,6 +172,11 @@ class HermesRuntimeAdapter(ExecutionRuntime):
                 "model": profile.model,
                 "provider": profile.provider,
                 "profile_id": profile.config_id,
+                "config_version": profile.config_version,
+                "fallback_versions": tuple(
+                    (fallback.config_id, fallback.config_version)
+                    for fallback in selection.fallback
+                ),
             }
         return {"config_type": "URL", "base_url": "", "api_key": None, "model": "", "provider": ""}
 
