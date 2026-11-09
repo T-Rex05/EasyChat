@@ -119,6 +119,7 @@ def build_access_router(access: AccessService) -> APIRouter:
             "role": principal.role,
             "permissions": sorted(access.effective_permissions(principal.user_id)),
             "hermes_tools": list(access.hermes_toolsets(principal.user_id)),
+            "capabilities": access.capabilities(principal),
         }
 
     @router.get("/api/auth/users")

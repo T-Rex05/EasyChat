@@ -493,6 +493,50 @@ class AccessRepository:
             conn.close()
         return [str(r["permission"]) for r in rows]
 
+    def apply_role_template_atomic(
+        self, role_name: str, *, permissions: list[str], toolsets: list[str], version: str,
+    ) -> tuple[list[str], list[str]]:
+        """单事务应用模板（评审 P1-1：快照/替换/登记不再分裂为多个事务）。
+
+        合并语义：新授权 = 模板 ∪ 现有自定义（deprecated 键不写入）；
+        返回 (升级前快照, 合并后授权)。并发双击在 BEGIN IMMEDIATE 下串行，
+        第二次执行时快照已是合并结果——登记的 template_version 相同，无进一步变化。
+        """
+        with self.db.transaction() as conn:
+            role = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
+            if role is None:
+                raise NotFoundError(f"角色不存在: {role_name}")
+            role_id = int(role["id"])
+            state = conn.execute(
+                "SELECT 1 FROM role_seed_state WHERE role_name=?", (role_name,)
+            ).fetchone()
+            if state is None:
+                raise NotFoundError(f"角色缺少初始化记录: {role_name}")
+            snapshot = [
+                str(r["permission"])
+                for r in conn.execute(
+                    "SELECT rp.permission FROM role_permissions rp WHERE rp.role_id=? "
+                    "ORDER BY rp.permission",
+                    (role_id,),
+                ).fetchall()
+            ]
+            merged = sorted(set(permissions) | set(snapshot))
+            now = utc_now_iso()
+            conn.execute("DELETE FROM role_permissions WHERE role_id=?", (role_id,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO role_permissions(role_id, permission, updated_at) VALUES(?,?,?)",
+                [(role_id, perm, now) for perm in merged],
+            )
+            conn.execute(
+                "UPDATE roles SET hermes_tools=?, updated_at=? WHERE id=?",
+                (json.dumps(sorted(set(toolsets) | set(self.role_toolsets_by_name(role_name))), ensure_ascii=False), now, role_id),
+            )
+            conn.execute(
+                "UPDATE role_seed_state SET template_version=?, seeded_at=?, snapshot_json=? WHERE role_name=?",
+                (version, now, json.dumps(snapshot, ensure_ascii=False), role_name),
+            )
+            return snapshot, merged
+
     def record_template_upgrade(self, role_name: str, *, version: str, snapshot: list[str]) -> None:
         """登记模板升级；预览/拥有者确认等先决条件由调用方检查。"""
         with self.db.transaction() as conn:

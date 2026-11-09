@@ -83,7 +83,7 @@ async function load() {
 }
 
 async function apply(roleName: string) {
-  if (!confirm(`确认把「${roleName}」升级到 ${preview.value?.current_template_version} 模板？\n新增授权将生效（当前授权已留快照）。`)) return
+  if (!confirm(`确认把「${roleName}」升级到 ${preview.value?.current_template_version} 模板？\n模板新增权限将生效；模板外自定义授权与工具组保留（合并语义）。\n当前授权已留存快照，可回滚。`)) return
   applying.value = roleName
   message.value = ''
   try {

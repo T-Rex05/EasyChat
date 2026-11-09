@@ -16,6 +16,7 @@ from typing import Any
 
 from backend.modules.access import policy
 from backend.modules.access.contracts import (
+    permission_catalog,
     ALL_PERMISSION_KEYS,
     VALID_TOOLSETS,
     PermissionOverride,
@@ -384,13 +385,21 @@ class AccessService:
             conn.close()
         return int(row["c"]) if row else 0
 
-    def _require_owner_management(self, actor: Principal, target_user_id: int) -> None:
-        """拥有者身份只能由拥有者管理：目标或结果涉及 super_admin 时，actor 必须是。"""
+    def _require_owner_management(
+        self, actor: Principal, target_user_id: int, *, granting_owner: bool = False
+    ) -> None:
+        """拥有者边界：admin 可管理普通用户；涉及拥有者身份（目标/结果）时必须 super_admin。
+
+        - 目标是 super_admin（改角色/禁用/写覆盖）→ 仅 super_admin；
+        - 把普通用户提升为 super_admin → 仅 super_admin（granting_owner）；
+        - admin 对普通用户的常规管理不受影响（修复 P0-1 回归）。
+        """
         if self._is_super_admin(actor.user_id):
             return
         if self._is_super_admin(target_user_id):
             raise ForbiddenError("拥有者身份只能由超级管理员管理")
-        raise ForbiddenError("分配拥有者角色需要超级管理员确认")
+        if granting_owner:
+            raise ForbiddenError("分配拥有者角色需要超级管理员确认")
 
     def _require_not_last_owner(
         self, user_id: int, *, new_role: str | None = None, new_status: int | None = None
@@ -411,8 +420,6 @@ class AccessService:
         按目录 op 聚合（use/exec 含 read；manage 含 use）。工具 = 角色 toolsets。
         """
         perms = self.effective_permissions(principal.user_id)
-        from backend.modules.access.contracts import permission_catalog
-
         catalog = permission_catalog()
         modules: dict[str, dict[str, Any]] = {
             key: {"label": MODULE_LABELS.get(key, key), "enabled": False,
@@ -448,9 +455,7 @@ class AccessService:
         self.require_permission(actor, "system.manage")
         if self.repo.get_role_id_by_name(role) is None:
             raise InvalidInputError(f"角色不存在: {role}")
-        self._require_owner_management(actor, user_id)
-        if role == SUPER_ADMIN_ROLE and not self._is_super_admin(actor.user_id):
-            raise ForbiddenError("分配拥有者角色需要超级管理员确认")
+        self._require_owner_management(actor, user_id, granting_owner=(role == SUPER_ADMIN_ROLE))
         self._require_not_last_owner(user_id, new_role=role)
         self.repo.set_user_role(user_id, role)
         self.invalidate_all()
@@ -468,6 +473,11 @@ class AccessService:
         self.require_permission(actor, "system.manage")
         if permission not in ALL_PERMISSION_KEYS:
             raise InvalidInputError(f"未注册的权限: {permission}")
+        if permission in DEPRECATED_PERMISSION_KEYS:
+            raise InvalidInputError("已退役权限不可授予（与角色 CRUD 口径一致；存量行仅作审计）")
+        # 覆盖写会影响 super_admin 的有效授权语义（虽然 policy 当前短路忽略），
+        # 与角色/状态同边界：涉及拥有者目标时必须 super_admin。
+        self._require_owner_management(actor, user_id)
         self.repo.set_user_permission(user_id, permission, granted)
         self.invalidate_all()
 
@@ -573,8 +583,6 @@ class AccessService:
     def list_permissions(self, actor: Principal) -> list[dict[str, Any]]:
         self.require_permission(actor, "system.manage")
         # 附带统一目录元数据（module/op/depends/risk/scope/internal），前端 9 功能项按此渲染
-        from backend.modules.access.contracts import permission_catalog
-
         catalog = permission_catalog()
         return [{**item, **catalog.get(item["key"], {})} for item in self.repo.list_permission_defs()]
 
@@ -603,8 +611,6 @@ class AccessService:
     def permission_upgrade_preview(self, actor: Principal) -> dict[str, Any]:
         """全部内置角色的模板差异预览（P3：先呈现，不修改授权）。"""
         self.require_permission(actor, "system.manage")
-        from backend.modules.access.contracts import DEFAULT_ROLE_PERMISSIONS, permission_catalog
-
         catalog = permission_catalog()
         roles = []
         for role_name in DEFAULT_ROLE_PERMISSIONS:
@@ -627,23 +633,24 @@ class AccessService:
             raise ForbiddenError("应用权限模板需要超级管理员确认")
         if role_name not in DEFAULT_ROLE_PERMISSIONS:
             raise InvalidInputError(f"非内置角色: {role_name}")
-        snapshot = self.repo.snapshot_role_permissions(role_name)
+        # 合并语义（与升级面板「模板外自定义授权保留」承诺一致）：
+        # 新权限 = 模板 ∪ 现有；工具组 = 模板 ∪ 现有。
         template = [
             k for k in DEFAULT_ROLE_PERMISSIONS[role_name]
             if k not in DEPRECATED_PERMISSION_KEYS
         ]
-        self.repo.set_role_permissions_by_name(role_name, template)
-        template_toolsets = list(DEFAULT_ROLE_TOOLSETS.get(role_name, ()))
-        self.repo.set_role_toolsets_by_name(role_name, template_toolsets)
-        self.repo.record_template_upgrade(
-            role_name, version=DEFAULT_TEMPLATE_VERSION, snapshot=snapshot,
+        snapshot, merged = self.repo.apply_role_template_atomic(
+            role_name,
+            permissions=template,
+            toolsets=list(DEFAULT_ROLE_TOOLSETS.get(role_name, ())),
+            version=DEFAULT_TEMPLATE_VERSION,
         )
         self.invalidate_all()
         return {
             "role": role_name,
             "applied_version": DEFAULT_TEMPLATE_VERSION,
             "previous_permissions": snapshot,
-            "previous_toolsets": None,
+            "merged_permissions": sorted(merged),
         }
 
 

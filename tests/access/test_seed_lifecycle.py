@@ -88,14 +88,37 @@ async def test_fresh_database_seeds_v2_template(rig) -> None:
 
 
 async def test_deprecated_permissions_do_not_participate_in_effective_grants(rig) -> None:
-    """验收 1/8：deprecated 键（terminal.audit/evolution.manage）不参与有效授权。"""
+    """验收 1/8：deprecated 键（terminal.audit/evolution.manage）不参与有效授权。
+
+    两条来源都封死：service 拒绝 override 写入（与角色 CRUD 同口径）；
+    存量行（绕过 service 直插）也在 policy 统一过滤。
+    """
     ready, access = await _env(rig)
     admin = ready.seed_user(role="admin")
+    principal = access.snapshot_principal(admin.user_id)
+    # service 写入被拒（评审 P2-1 口径对齐）
+    with pytest.raises(Exception, match="已退役"):
+        access.set_user_permission(principal, admin.user_id, "terminal.audit", True)
+    # 存量行（直插，模拟旧库残留）不参与有效授权
     access.repo.set_user_permission(admin.user_id, "terminal.audit", True)
     access.invalidate_all()
     perms = access.effective_permissions(admin.user_id)
     assert "terminal.audit" not in perms
     assert "evolution.manage" not in perms
+
+
+async def test_admin_can_manage_normal_users(rig) -> None:
+    """评审 P0-1 回归正向用例：admin 对普通用户的常规管理不受拥有者边界影响。"""
+    ready, access = await _env(rig)
+    admin = ready.seed_user(role="admin", grants=("system.manage",))
+    normal = ready.seed_user(role="user")
+    another = ready.seed_user(role="user")
+    principal = access.snapshot_principal(admin.user_id)
+    # 改角色 / 禁用 / 启用 / 写覆盖 全部允许
+    access.set_user_role(principal, normal.user_id, "admin")
+    access.set_user_status(principal, another.user_id, 0)
+    access.set_user_status(principal, another.user_id, 1)
+    access.set_user_permission(principal, normal.user_id, "chat.use", True)
 
 
 def test_permission_catalog_covers_all_active_permissions() -> None:

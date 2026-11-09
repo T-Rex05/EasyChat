@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from tests.access.test_seed_lifecycle import _env  # noqa: F401  复用环境装配
 
@@ -140,3 +139,27 @@ def _any_user_of(access, role: str) -> int:
         conn.close()
     assert row is not None
     return int(row[0])
+
+
+async def test_apply_preserves_custom_permissions_and_toolsets(rig) -> None:
+    """评审 P1-2：合并语义——模板外自定义授权与工具组在升级后保留。"""
+    ready, access = await _env(rig)
+    owner = ready.seed_user(role="super_admin")
+    ready.seed_user(role="user")
+    principal = access.snapshot_principal(owner.user_id)
+    access.repo._mark_role_seeded("user", "legacy")  # noqa: SLF001
+    custom = ["chat.use", "trace.manage"]  # trace.manage 是模板外自定义
+    access.repo.set_role_permissions_by_name("user", custom)
+    access.repo.set_role_toolsets_by_name("user", ["terminal"])  # 自定义高风险工具
+    access.invalidate_all()
+
+    access.apply_role_template(principal, "user")
+    perms = access.effective_permissions(_any_user_of(access, "user"))
+    # 模板新增生效
+    assert "superagent.create" in perms
+    # 模板外自定义保留
+    assert "trace.manage" in perms
+    toolsets = access.repo.role_toolsets_by_name("user")
+    assert "terminal" in toolsets and "web" in toolsets  # 并集
+    state = access.repo.get_role_seed_state("user")
+    assert json.loads(str(state["snapshot_json"])) == sorted(custom)  # 快照为升级前状态

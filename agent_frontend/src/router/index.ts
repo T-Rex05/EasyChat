@@ -85,7 +85,13 @@ let chatUserIdSynced = false
 router.beforeEach(async (to, _from, next) => {
   const token = localStorage.getItem('authToken')
   const userRole = localStorage.getItem('userRole') || ''
-  const permissions: string[] = JSON.parse(localStorage.getItem('userPermissions') || '[]')
+  let permissions: string[] = []
+  try {
+    const parsed = JSON.parse(localStorage.getItem('userPermissions') || '[]')
+    permissions = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === 'string') : []
+  } catch {
+    localStorage.removeItem('userPermissions')
+  }
   let capabilities: { modules?: Record<string, { read: boolean; use: boolean; manage: boolean }> } | null = null
   try {
     capabilities = JSON.parse(localStorage.getItem('userCapabilities') || 'null')

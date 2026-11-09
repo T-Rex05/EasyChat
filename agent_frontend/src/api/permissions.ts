@@ -17,8 +17,8 @@ export interface UserCapabilities {
 }
 
 export async function getMyCapabilities(): Promise<UserCapabilities> {
-  const res = await request.get<{ capabilities: UserCapabilities }>('/api/auth/capabilities')
-  return res.data.capabilities
+  const res = await request.get<UserCapabilities>('/api/auth/capabilities')
+  return res.data
 }
 
 export interface EffectivePermItem {

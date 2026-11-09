@@ -280,13 +280,8 @@ function onModeChange(module: string) {
     if (mode === 'use') {
       modeChangeNote.value = '已自动包含文件上传/读取依赖（账单导入与报告下载需要）。'
     } else {
-      const stillNeedsFile = form.permissions.includes('ledger.export')
-      if (!stillNeedsFile) {
-        form.permissions = form.permissions.filter(k => k !== 'file.upload')
-        if (!form.permissions.includes('file.read') || form.permissions.filter(k => k === 'file.read').length === 1) {
-          // 保守：只移除 upload，read 由高级区手动管理
-        }
-      }
+      // 关闭/只读：只移除 upload（export 的 read 依赖由高级区手动管理）
+      form.permissions = form.permissions.filter(k => k !== 'file.upload')
       modeChangeNote.value = ''
     }
   } else {
@@ -301,10 +296,6 @@ function onAtomToggle(_key: string) {
 
 onMounted(async () => {
   // 权限定义（含 lifecycle/module/risk 元数据）——单一来源，无离线兜底
-  try {
-    const defs = await AdminAPI.getPermissionTree()
-    void defs
-  } catch { /* 列表加载失败不阻塞；元数据由下方扁平接口补充 */ }
   try {
     const defs = await AdminAPI.getPermissionDefinitions()
     for (const d of defs || []) permMeta.value[d.key] = d
