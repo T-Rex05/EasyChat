@@ -2,25 +2,33 @@
   <div class="schedules-page">
     <header class="page-header">
       <div>
-        <h2>提醒</h2>
-        <p class="hint">只保留最新一次错过实例；发送结果以投递账本为准。</p>
+        <h2>定时任务</h2>
+        <p class="hint">按计划推送提醒或 AI 前沿日报；只保留最新一次错过实例。</p>
       </div>
-      <button class="btn btn-primary" @click="showCreate = !showCreate">新建提醒</button>
+      <button class="btn btn-primary" @click="showCreate = !showCreate">新建任务</button>
     </header>
 
     <form v-if="showCreate" class="card create-card" @submit.prevent="create">
       <div class="row">
-        <input v-model="draft.title" class="input" placeholder="标题（可选）" />
-        <select v-model="draft.kind" class="select">
+        <select v-model="draft.content" class="select" @change="onContentChange">
+          <option value="text">提醒文本</option>
+          <option value="ai_news">AI 前沿日报（最多 10 条）</option>
+        </select>
+        <input v-model="draft.title" class="input" :placeholder="draft.content === 'ai_news' ? '标题（默认：AI 前沿日报）' : '标题（可选）'" />
+        <select v-if="draft.content === 'text'" v-model="draft.kind" class="select">
           <option value="once">一次</option>
           <option value="daily">每天</option>
           <option value="interval">间隔</option>
         </select>
-        <input v-if="draft.kind === 'once'" v-model="draft.at" class="input" type="datetime-local" required />
+        <input v-if="draft.content === 'ai_news'" v-model="draft.dailyAt" class="input" type="time" required />
+        <input v-else-if="draft.kind === 'once'" v-model="draft.at" class="input" type="datetime-local" required />
         <input v-else-if="draft.kind === 'daily'" v-model="draft.dailyAt" class="input" type="time" required />
         <input v-else v-model.number="draft.everySeconds" class="input" type="number" min="60" placeholder="间隔秒数" required />
       </div>
-      <textarea v-model="draft.text" class="textarea" rows="3" placeholder="提醒内容" required></textarea>
+      <p v-if="draft.content === 'ai_news'" class="muted">
+        每天抓取 OpenAI、DeepMind、TechCrunch、The Verge、MIT、arXiv 的 AI 资讯，排序后最多取 10 条，并用已配置模型生成中文摘要；模型不可用时保留原始标题。
+      </p>
+      <textarea v-else v-model="draft.text" class="textarea" rows="3" placeholder="提醒内容" required></textarea>
       <div class="row">
         <select v-model="draft.targetKind" class="select">
           <option value="">默认微信</option>
@@ -42,12 +50,13 @@
     <div v-else class="list">
       <article v-for="s in schedules" :key="s.schedule_id" class="card item">
         <div class="item-head">
-          <strong>{{ s.title || '提醒' }}</strong>
+          <strong>{{ s.title || (isAiNews(s) ? 'AI 前沿日报' : '提醒') }}</strong>
+          <span v-if="isAiNews(s)" class="tag ai">AI 日报</span>
           <span class="tag" :class="{ off: !s.enabled }">{{ s.enabled ? '启用' : '暂停' }}</span>
           <button class="btn btn-sm btn-secondary" @click="toggle(s)">{{ s.enabled ? '暂停' : '启用' }}</button>
           <button class="btn btn-sm btn-danger" @click="remove(s)">删除</button>
         </div>
-        <p class="content">{{ s.text }}</p>
+        <p class="content">{{ isAiNews(s) ? '每天抓取并排序最新 AI 资讯（最多 10 条），发送到指定目标。' : s.text }}</p>
         <p class="muted">
           {{ kindText(s) }} · 目标 {{ s.target.kind }}:{{ s.target.ref }}
           · 下次 {{ s.next_run_at || '—' }}
@@ -80,6 +89,8 @@ interface Schedule {
   enabled: boolean
   next_run_at: string
   target: { kind: string; ref: string }
+  content_kind?: string
+  briefing_kind?: string
 }
 interface Occurrence {
   occurrence_id: string
@@ -97,14 +108,26 @@ const saving = ref(false)
 const error = ref('')
 const showCreate = ref(false)
 const draft = reactive({
-  title: '', text: '', kind: 'daily', at: '', dailyAt: '09:00',
+  title: '', text: '', kind: 'daily', at: '', dailyAt: '08:00',
   everySeconds: 3600, targetKind: '', targetRef: '',
+  content: 'text',
 })
+
+function onContentChange() {
+  if (draft.content !== 'ai_news') return
+  draft.kind = 'daily'
+  if (!draft.title.trim()) draft.title = 'AI 前沿日报'
+  if (!draft.dailyAt) draft.dailyAt = '08:00'
+}
 
 function toIso(local: string) {
   return local ? new Date(local).toISOString() : ''
 }
+function isAiNews(s: Schedule) {
+  return s.content_kind === 'briefing' && s.briefing_kind === 'ai_news'
+}
 function kindText(s: Schedule) {
+  if (isAiNews(s)) return `每天 ${s.at_time} · AI 前沿`
   if (s.kind === 'once') return `一次 ${s.at_time}`
   if (s.kind === 'daily') return `每天 ${s.at_time}`
   return `每 ${s.interval_seconds}s`
@@ -128,11 +151,15 @@ async function create() {
   error.value = ''
   try {
     const body: Record<string, unknown> = {
-      title: draft.title, text: draft.text, target_kind: draft.targetKind,
+      title: draft.title,
+      text: draft.content === 'ai_news' ? '' : draft.text,
+      target_kind: draft.targetKind,
       target_ref: draft.targetKind === 'email' ? draft.targetRef : '',
+      content_kind: draft.content === 'ai_news' ? 'briefing' : 'text',
+      briefing_kind: draft.content === 'ai_news' ? 'ai_news' : '',
     }
-    if (draft.kind === 'once') body.at = toIso(draft.at)
-    else if (draft.kind === 'daily') body.daily_at = draft.dailyAt
+    if (draft.content === 'ai_news' || draft.kind === 'daily') body.daily_at = draft.dailyAt
+    else if (draft.kind === 'once') body.at = toIso(draft.at)
     else body.every_seconds = draft.everySeconds
     await request.post('/api/schedules', body)
     draft.text = ''
@@ -196,6 +223,7 @@ onMounted(load)
 .muted { color: var(--text-tertiary); font-size: 12px; }
 .tag { background: var(--bg-tertiary); color: #2e7d32; border-radius: 999px; padding: 1px 8px; font-size: 12px; }
 .tag.off { color: #999; }
+.tag.ai { color: #6a4cff; background: rgba(106, 76, 255, 0.12); }
 .link-btn { border: 0; background: transparent; color: var(--accent, #4a7cff); cursor: pointer; padding: 4px 0; }
 .occurrences { border-top: 1px solid var(--border-primary); margin-top: 8px; padding-top: 8px; display: grid; gap: 4px; }
 .occurrence { display: grid; grid-template-columns: 1.2fr 1fr 1fr; font-size: 12px; }

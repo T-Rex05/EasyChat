@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-sidebar">
+  <div class="chat-sidebar" :style="{ width: `${panelWidth}px` }">
     <div class="sidebar-header">
       <h3>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="14" y2="13"/></svg>
@@ -54,6 +54,8 @@
 
       <div v-if="hasMore" class="load-more-indicator">加载中...</div>
     </div>
+    <PanelResizeHandle label="调整历史记录栏宽度" :width="panelWidth"
+      :min="180" :max="420" :initial="280" @resize="panelWidth = $event" />
   </div>
 </template>
 
@@ -63,6 +65,9 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useChatStore } from '@/stores/chat'
 import { getUserSessions, deleteSession, renameSession } from '@/api/session'
 import { useAuthStore } from '@/stores/auth'
+import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
+
+const panelWidth = ref(280)
 
 const sidebarStore = useSidebarStore()
 const chatStore = useChatStore()
@@ -189,6 +194,7 @@ onMounted(() => {
 
 <style scoped>
 .chat-sidebar {
+  position: relative;
   width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--bg-sidebar, var(--bg-secondary)); border-right: 1px solid var(--border-primary);
   height: 100%; overflow: hidden;

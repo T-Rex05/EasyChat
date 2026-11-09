@@ -34,6 +34,7 @@ export async function savePlatformConfig(
     platform,
     account_id: String(cfg.account_id || '').trim(),
     token: String(cfg.token || '').trim(),
+    base_url: String(cfg.base_url || '').trim(),
     bot_user_id: String(cfg.bot_user_id || ''),
     display_name: String(cfg.nickname || ''),
   })
@@ -55,6 +56,7 @@ export interface QrStartResult {
 export interface QrStatusResult {
   status: string
   qr_image?: string
+  qr_scan_data?: string
   credentials?: Record<string, string>
   error?: string
 }
@@ -73,7 +75,7 @@ export async function startWechatQr(): Promise<QrStartResult> {
 export async function checkWechatQrStatus(sessionId: string): Promise<QrStatusResult> {
   const res = await request.get<{ qr: any }>(`/api/channels/wechat/qr/${sessionId}`)
   const qr = res.data.qr
-  return { status: qr.status, qr_image: qr.qr_image, error: qr.error }
+  return { status: qr.status, qr_image: qr.qr_image, qr_scan_data: qr.qr_content || '', error: qr.error }
 }
 
 export async function bindWechatQr(sessionId: string): Promise<{ ok: boolean; wechat_user_id: string; bot_configured: boolean }> {
@@ -108,9 +110,10 @@ export async function getUserBindings(): Promise<{ bindings: UserBinding[] }> {
   }
 }
 
-export async function createUserBinding(data: { platform: string; open_id: string; nickname: string }): Promise<{ ok: boolean; id: number | string }> {
+export async function createUserBinding(data: { platform: string; account_id: string; open_id: string; nickname: string }): Promise<{ ok: boolean; id: number | string }> {
   const res = await request.post<{ binding: any }>('/api/channels/bindings', {
     platform: data.platform,
+    account_id: data.account_id,
     external_user_id: data.open_id,
   })
   return { ok: true, id: res.data.binding?.id || '' }

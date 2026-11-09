@@ -1,6 +1,7 @@
 // 用户与角色管理 API
 
 import request from './request'
+import { groupPermissions, type PermissionGroup, type PermissionItem } from '@/utils/permissionGroups'
 
 // ── 类型定义 ──
 
@@ -54,9 +55,30 @@ export async function updateUserStatus(userId: number, status: number): Promise<
  * 获取权限分组树
  * 返回: [{ group_name, group_label, permissions: [{ key, label, description }] }]
  */
-export async function getPermissionTree(): Promise<any[]> {
-  const response = await request.get<any[]>('/api/admin/permissions')
+export interface PermissionDefinition {
+  key: string
+  label: string
+  description: string
+  group_name: string
+  group_label: string
+  sort_order: number
+  lifecycle: string
+  module?: string
+  op?: string
+  depends?: string[]
+  risk?: string
+  scope?: string
+  internal?: boolean
+}
+
+export async function getPermissionDefinitions(): Promise<PermissionDefinition[]> {
+  const response = await request.get<PermissionDefinition[]>('/api/admin/permissions')
   return response.data
+}
+
+export async function getPermissionTree(): Promise<PermissionGroup[]> {
+  const response = await request.get<(PermissionItem | PermissionGroup)[]>('/api/admin/permissions')
+  return groupPermissions(response.data)
 }
 
 // ── Toolset 定义 ──
@@ -72,8 +94,12 @@ export interface ToolsetDef {
  * 获取全部 toolset 定义（角色管理「AI 对话工具」选项，后端单一数据源）
  */
 export async function getToolsetDefinitions(): Promise<ToolsetDef[]> {
-  const response = await request.get<ToolsetDef[]>('/api/admin/toolsets')
-  return response.data
+  const response = await request.get<(ToolsetDef & { description?: string })[]>('/api/admin/toolsets')
+  return response.data.map(tool => ({
+    ...tool,
+    desc: tool.desc || tool.description || '',
+    group: tool.group || 'hermes',
+  }))
 }
 
 // ── 角色管理 ──

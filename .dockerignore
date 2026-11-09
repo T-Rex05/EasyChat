@@ -43,7 +43,7 @@ desktop.ini
 # ── Node（node_modules 不进上下文；源码/锁文件必须进前端构建阶段） ──
 node_modules/
 agent_frontend/node_modules/
-agent_frontend/dist/
+# agent_frontend/dist/  # 官方镜像 node 阶段自建；本地 dist 直拷构建需进上下文
 agent_frontend/.vite/
 
 # ── Git ──

@@ -175,7 +175,10 @@ async function saveVersion() {
 async function activate(versionId: string) {
   if (!selected.value) return
   try {
-    await request.post(`/api/skills/${selected.value.skill_id}/activate`, { version_id: versionId })
+    await request.post(`/api/skills/${selected.value.skill_id}/activate`, {
+      version_id: versionId,
+      expected_active_version_id: selected.value.active_version_id,
+    })
     await openSkill(selected.value.skill_id)
     await load()
   } catch (e: any) {

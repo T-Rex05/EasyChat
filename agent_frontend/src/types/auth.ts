@@ -26,3 +26,19 @@ export interface AuthState {
   user: User | null
   isAuthenticated: boolean
 }
+
+// 权限整改 P2：统一 capability 出口（/api/auth/me.capabilities）
+export interface ModuleCapability {
+  label: string
+  enabled: boolean
+  read: boolean
+  use: boolean
+  manage: boolean
+}
+
+export interface UserCapabilities {
+  modules: Record<string, ModuleCapability>
+  tools: string[]
+  super_admin: boolean
+  permissions: string[]
+}

@@ -15,61 +15,61 @@ const routes: RouteRecordRaw[] = [
     path: '/chat',
     name: 'Chat',
     component: () => import('../views/ChatView.vue'),
-    meta: { title: '智能对话', icon: '', requiresAuth: true, permission: 'chat.use' },
+    meta: { title: '智能对话', icon: '', requiresAuth: true, permission: 'chat.use', capModule: 'chat', capLevel: 'use' },
   },
   {
     path: '/skills',
     name: 'Skills',
     component: () => import('../views/SkillsView.vue'),
-    meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create' },
+    meta: { title: '技能管理', icon: '', requiresAuth: true, permission: 'skill.create', capModule: 'skills', capLevel: 'use' },
   },
   {
     path: '/wechat',
     name: 'WeChatSettings',
     component: () => import('../views/WeChatSettingsView.vue'),
-    meta: { title: '微信偏好', icon: '💬', requiresAuth: true, permission: 'chat.use' },
+    meta: { title: '微信偏好', icon: '💬', requiresAuth: true, permission: 'chat.use', capModule: 'chat', capLevel: 'use' },
   },
   {
     path: '/schedules',
     name: 'Schedules',
     component: () => import('../views/SchedulesView.vue'),
-    meta: { title: '提醒', icon: '', requiresAuth: true, permission: 'cron.create' },
+    meta: { title: '提醒', icon: '', requiresAuth: true, permission: 'cron.create', capModule: 'schedule', capLevel: 'use' },
   },
   {
     path: '/ledger',
     name: 'Ledger',
     component: () => import('../views/LedgerView.vue'),
-    meta: { title: '账单', icon: '📄', requiresAuth: true, permission: 'ledger.view' },
+    meta: { title: '账单', icon: '📄', requiresAuth: true, permission: 'ledger.view', capModule: 'ledger', capLevel: 'read' },
   },
   {
     path: '/superagent',
     name: 'Superagent',
     component: () => import('../views/SuperagentView.vue'),
-    meta: { title: '超级代理', icon: '🤖', requiresAuth: true, permission: 'superagent.view' },
+    meta: { title: '超级代理', icon: '🤖', requiresAuth: true, permission: 'superagent.view', capModule: 'superagent', capLevel: 'read' },
   },
   {
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryView.vue'),
-    meta: { title: '记忆管理', icon: '', requiresAuth: true, permission: 'memory.edit' },
+    meta: { title: '记忆管理', icon: '', requiresAuth: true, permission: 'memory.edit', capModule: 'memory', capLevel: 'read' },
   },
   {
     path: '/trace',
     name: 'Trace',
     component: () => import('../views/UsageView.vue'),
-    meta: { title: '用量与排行', icon: '', requiresAuth: true, permission: 'trace.view' },
+    meta: { title: '用量与排行', icon: '', requiresAuth: true, permission: 'trace.view', capModule: 'trace', capLevel: 'read' },
   },
   {
     path: '/admin',
     name: 'Admin',
     component: () => import('../views/AdminView.vue'),
-    meta: { title: '系统管理', icon: '', requiresAuth: true, permission: 'system.manage' },
+    meta: { title: '系统管理', icon: '', requiresAuth: true, permission: 'system.manage', capModule: 'identity', capLevel: 'manage' },
   },
   {
     path: '/config',
     name: 'Config',
     component: () => import('../views/ConfigView.vue'),
-    meta: { title: '系统配置', icon: '', requiresAuth: true, permission: 'system.config' },
+    meta: { title: '系统配置', icon: '', requiresAuth: true, permission: 'system.config', capModule: 'config', capLevel: 'manage' },
   },
 ]
 
@@ -86,6 +86,12 @@ router.beforeEach(async (to, _from, next) => {
   const token = localStorage.getItem('authToken')
   const userRole = localStorage.getItem('userRole') || ''
   const permissions: string[] = JSON.parse(localStorage.getItem('userPermissions') || '[]')
+  let capabilities: { modules?: Record<string, { read: boolean; use: boolean; manage: boolean }> } | null = null
+  try {
+    capabilities = JSON.parse(localStorage.getItem('userCapabilities') || 'null')
+  } catch {
+    capabilities = null
+  }
 
   // 需要认证的页面
   if (to.meta.requiresAuth && !token) {
@@ -123,18 +129,24 @@ router.beforeEach(async (to, _from, next) => {
     }
   }
 
-  // 检查页面权限
+  // 检查页面权限（权限整改 P2：capabilities 模块档位优先，原子权限兜底；kb.eval 分支已随 RAG 退役移除）
   if (to.meta.permission && userRole !== 'super_admin') {
     const perm = to.meta.permission as string
     let hasPerm = false
-    if (perm === 'kb.eval') {
-      // RAG 测评：**只认 kb.eval**。此前「kb.eval 或 kb.manage」会让该勾选框
-      // 形同虚设（勾了「管理知识库」就能进）。数据范围仍由后端按 kb.manage 放宽。
-      hasPerm = permissions.includes('kb.eval')
+    if (to.meta.capModule) {
+      const mod = capabilities?.modules?.[to.meta.capModule as string]
+      if (mod) {
+        const level = to.meta.capLevel as 'read' | 'use' | 'manage'
+        hasPerm = level === 'read' ? mod.read : level === 'use' ? mod.use : mod.manage
+      } else {
+        hasPerm = permissions.includes(perm)
+      }
     } else if (perm === 'trace.view') {
-      // trace.ranking 已并入 trace.view；trace.manage 保留兜底，
-      // 否则只有「查看全部用户」的角色进不去自己的标签页。
       hasPerm = permissions.includes('trace.view') || permissions.includes('trace.manage')
+    } else if (perm === 'memory.edit') {
+      hasPerm = permissions.includes('memory.edit') || permissions.includes('memory.view')
+    } else if (perm === 'skill.create') {
+      hasPerm = permissions.includes('skill.create') || permissions.includes('skill.manage')
     } else {
       hasPerm = permissions.includes(perm)
     }

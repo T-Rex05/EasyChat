@@ -1,5 +1,5 @@
 <template>
-  <aside class="sidebar" :class="{ collapsed }">
+  <aside class="sidebar" :class="{ collapsed }" :style="{ width: collapsed ? '64px' : `${panelWidth}px` }">
     <!-- Logo -->
     <div class="sidebar-logo" @click="$router.push('/chat')">
       <div class="logo-icon">
@@ -62,6 +62,8 @@
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
     </div>
+    <PanelResizeHandle v-if="!collapsed" label="调整导航栏宽度" :width="panelWidth"
+      :min="180" :max="360" :initial="240" @resize="panelWidth = $event" />
   </aside>
 </template>
 
@@ -69,11 +71,13 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const collapsed = ref(false)
+const panelWidth = ref(240)
 const isDark = ref(false)
 
 const userRoleText = computed(() => {
@@ -92,42 +96,64 @@ const userRole = computed(() => authStore.userRole)
 
 // 根据权限过滤菜单项
 // 图标使用内联 SVG（stroke=currentColor），随激活/hover 自动变色，视觉更统一专业
+const ITEM_PERM_BY_MODULE: Record<string, string> = {
+  chat: 'chat.use', memory: 'memory.view', skills: 'skill.create', schedule: 'cron.create',
+  superagent: 'superagent.view', trace: 'trace.view', identity: 'system.manage', config: 'system.config',
+}
+
+function itemPermOf(module: string): string {
+  return ITEM_PERM_BY_MODULE[module] || ''
+}
+
 const menuItems = computed(() => {
-  const allItems = [
+  const allItems: { path: string; title: string; perm: string; cap?: string; icon: string }[] = [
     {
-      path: '/chat', title: '智能对话', perm: 'chat.use',
+      path: '/chat',
+      cap: 'chat', title: '智能对话', perm: 'chat.use',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
     },
     {
-      path: '/skills', title: '技能管理', perm: 'skill.create',
+      path: '/skills',
+      cap: 'skills', title: '技能管理', perm: 'skill.create',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`,
     },
     {
-      path: '/wechat', title: '微信偏好', perm: 'chat.use',
+      path: '/wechat',
+      cap: 'chat', title: '微信偏好', perm: 'chat.use',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
     },
     {
-      path: '/memory', title: '记忆管理', perm: 'memory.edit',
+      path: '/memory',
+      cap: 'memory', title: '记忆管理', perm: 'memory.edit',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`,
     },
     {
-      path: '/schedules', title: '提醒', perm: 'cron.create',
+      path: '/ledger', title: '账单', perm: 'ledger.view',
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>`,
+    },
+    {
+      path: '/schedules',
+      cap: 'schedule', title: '提醒', perm: 'cron.create',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg>`,
     },
     {
-      path: '/superagent', title: '超级代理', perm: 'superagent.view',
+      path: '/superagent',
+      cap: 'superagent', title: '超级代理', perm: 'superagent.view',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 4v4"/><circle cx="12" cy="2.5" r="1.5"/><circle cx="8.5" cy="13" r="1"/><circle cx="15.5" cy="13" r="1"/><path d="M8 17h8"/></svg>`,
     },
     {
-      path: '/trace', title: '用量与排行', perm: 'trace.view',
+      path: '/trace',
+      cap: 'trace', title: '用量与排行', perm: 'trace.view',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
     },
     {
-      path: '/admin', title: '系统管理', perm: 'system.manage',
+      path: '/admin',
+      cap: 'identity', title: '系统管理', perm: 'system.manage',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
     },
     {
-      path: '/config', title: '系统配置', perm: 'system.config',
+      path: '/config',
+      cap: 'config', title: '系统配置', perm: 'system.config',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
     },
   ]
@@ -137,16 +163,31 @@ const menuItems = computed(() => {
     return allItems
   }
 
+  // 权限整改 P2：菜单统一消费 capabilities（auth.capabilities 为唯一来源）；
+  // capabilities 未加载时退回原子权限判断（首帧渲染）。
+  const caps = authStore.capabilities?.modules
+  const hasCap = (module: string, level: 'read' | 'use' | 'manage') => {
+    const m = caps?.[module]
+    if (!m) return permissions.value.includes(itemPermOf(module))
+    return level === 'read' ? m.read : level === 'use' ? m.use : m.manage
+  }
   return allItems.filter(item => {
-    // trace 菜单：trace.ranking 已并入 trace.view；trace.manage 保留兜底，
-    // 否则只有「查看全部用户」的角色进不去自己的那个标签页。
-    if (item.perm === 'trace.view') {
-      return permissions.value.includes('trace.view')
-        || permissions.value.includes('trace.manage')
+    switch (item.cap) {
+      case 'memory': return hasCap('memory', 'read')       // 只读角色也有入口
+      case 'skills': return hasCap('skills', 'use') || hasCap('skills', 'manage')
+      case 'trace': return hasCap('trace', 'read')          // trace.manage 同样可见
+      case 'superagent': return hasCap('superagent', 'read')
+      case 'schedule': return hasCap('schedule', 'use')
+      case 'identity': return hasCap('identity', 'manage')
+      case 'config': return hasCap('config', 'manage')
+      default: break
     }
-    // 记忆管理菜单：有个人记忆管理权限即可
+    // 兜底（capabilities 未就绪）
+    if (item.perm === 'trace.view') {
+      return permissions.value.includes('trace.view') || permissions.value.includes('trace.manage')
+    }
     if (item.perm === 'memory.edit') {
-      return permissions.value.includes('memory.edit')
+      return permissions.value.includes('memory.edit') || permissions.value.includes('memory.view')
     }
     return permissions.value.includes(item.perm)
   })
@@ -188,12 +229,12 @@ function handleLogout() {
 
 <style scoped>
 .sidebar {
+  position: relative;
   width: 240px;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
-  transition: width 0.25s ease;
   flex-shrink: 0;
   overflow: hidden;
 }

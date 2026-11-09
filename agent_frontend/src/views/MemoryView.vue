@@ -126,7 +126,7 @@ async function remember() {
       kind: draft.kind,
       content: draft.content,
       source_refs: [{ kind: 'manual', ref: draft.source, quote: draft.quote }],
-      source_type: 'user_explicit',
+      source_type: 'user_confirmed',
       pinned: draft.pinned,
     })
     draft.content = ''

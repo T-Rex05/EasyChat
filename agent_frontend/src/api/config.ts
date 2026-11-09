@@ -211,15 +211,43 @@ export interface FallbackChainItem extends ModelConfig {
   circuit_state?: number
 }
 
+interface FallbackProfile {
+  config_id: number
+  name: string
+  provider: string
+  model: string
+  base_url: string
+  api_key_masked: string
+  is_active: boolean
+  is_multimodal: boolean
+  reasoning_effort: string
+}
+
 /** 获取降级链配置 */
 export async function getFallbackChain(): Promise<{ ok: boolean; fallback_chain: FallbackChainItem[] }> {
-  const res = await request.get('/api/model-routes/fallback-chain')
-  return res.data
+  const res = await request.get<{ chain: FallbackProfile[] }>('/api/model-routes/fallback-chain')
+  return {
+    ok: true,
+    fallback_chain: res.data.chain.map(profile => ({
+      id: profile.config_id,
+      config_name: profile.name,
+      config_type: profile.provider,
+      api_url: profile.base_url,
+      api_key: profile.api_key_masked,
+      model_name: profile.model,
+      provider: profile.provider,
+      category: 'chat',
+      is_current: profile.is_active,
+      is_multimodal: profile.is_multimodal,
+      enabled: true,
+      reasoning_effort: profile.reasoning_effort,
+    })),
+  }
 }
 
 /** 更新降级链 */
 export async function saveFallbackChain(modelIds: number[]): Promise<{ ok: boolean }> {
-  const res = await request.put('/api/model-routes/fallback-chain', { model_ids: modelIds })
+  const res = await request.put('/api/model-routes/fallback-chain', { config_ids: modelIds })
   return res.data
 }
 

@@ -10,7 +10,10 @@
     <AdminLayout v-model="activeTab" :tabs="visibleTabs" />
 
     <UserListPanel v-if="activeTab === 'users'" />
-    <RoleListPanel v-else-if="activeTab === 'roles'" ref="roleListRef" @edit="openRoleEdit" />
+    <div v-else-if="activeTab === 'roles'">
+      <RoleListPanel ref="roleListRef" @edit="openRoleEdit" />
+      <UpgradePreviewPanel />
+    </div>
 
     <RoleEditDialog
       v-if="showRoleEdit"
@@ -28,6 +31,7 @@ import AdminLayout from './admin/AdminLayout.vue'
 import UserListPanel from './admin/UserListPanel.vue'
 import RoleListPanel from './admin/RoleListPanel.vue'
 import RoleEditDialog from './admin/RoleEditDialog.vue'
+import UpgradePreviewPanel from './admin/UpgradePreviewPanel.vue'
 import type { Role } from '@/api/admin'
 
 const auth = useAuthStore()

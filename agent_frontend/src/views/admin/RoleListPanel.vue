@@ -16,6 +16,10 @@
         v-for="role in roles"
         :key="role.id"
         class="role-card"
+        role="button"
+        tabindex="0"
+        @keydown.enter.self="$emit('edit', role)"
+        @keydown.space.self.prevent="$emit('edit', role)"
         @click="$emit('edit', role)"
       >
         <div class="role-header">
@@ -28,7 +32,7 @@
         <div class="role-stats">
           <span class="stat-item">
             <ShieldCheck :size="13" />
-            {{ role.permissions?.length || 0 }} 个权限
+            {{ role.name === 'super_admin' ? '全部权限' : `${role.permissions?.length || 0} 个权限` }}
           </span>
           <span class="stat-item">
             <Wrench :size="13" />

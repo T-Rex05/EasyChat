@@ -2,7 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { User } from '@/types/auth'
+import type { User, UserCapabilities } from '@/types/auth'
 import { login as apiLogin, register as apiRegister, verifyToken, refreshToken } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
 
@@ -27,6 +27,7 @@ export const useAuthStore = defineStore(
     const userRole = ref<string>(localStorage.getItem('userRole') || '')
     const username = ref<string>(localStorage.getItem('username') || '')
     const permissions = ref<string[]>(readStoredPermissions())
+    const capabilities = ref<UserCapabilities | null>(null)
     // 身份初始化状态：/me 对齐完成前，依赖身份的调用应等待（ready=false）
     const ready = ref(false)
 
@@ -49,6 +50,8 @@ export const useAuthStore = defineStore(
         userRole.value = response.role || ''
         username.value = response.username || ''
         permissions.value = response.permissions || []
+        capabilities.value = (response as any).capabilities || null
+        persistCapabilities(capabilities.value)
 
         // 持久化到 localStorage
         localStorage.setItem('authToken', response.token)
@@ -75,6 +78,8 @@ export const useAuthStore = defineStore(
         userRole.value = response.role || ''
         username.value = response.username || ''
         permissions.value = response.permissions || []
+        capabilities.value = (response as any).capabilities || null
+        persistCapabilities(capabilities.value)
 
         localStorage.setItem('authToken', response.token)
         localStorage.setItem('userRole', response.role || '')
@@ -91,6 +96,11 @@ export const useAuthStore = defineStore(
       }
     }
 
+    function persistCapabilities(caps: UserCapabilities | null) {
+      if (caps) localStorage.setItem('userCapabilities', JSON.stringify(caps))
+      else localStorage.removeItem('userCapabilities')
+    }
+
     function markReady() {
       ready.value = true
     }
@@ -104,6 +114,8 @@ export const useAuthStore = defineStore(
         userRole.value = userData.role
         username.value = userData.username
         permissions.value = userData.permissions || []
+        capabilities.value = (userData as any).capabilities || null
+        persistCapabilities(capabilities.value)
 
         // ★ 同步到 localStorage（路由守卫读的是 localStorage）
         localStorage.setItem('userRole', userData.role || '')
@@ -143,6 +155,8 @@ export const useAuthStore = defineStore(
           userRole.value = response.role || ''
           username.value = response.username || ''
           permissions.value = response.permissions || []
+        capabilities.value = (response as any).capabilities || null
+        persistCapabilities(capabilities.value)
 
           localStorage.setItem('authToken', response.token)
           localStorage.setItem('userRole', response.role || '')
@@ -168,6 +182,8 @@ export const useAuthStore = defineStore(
       userRole.value = ''
       username.value = ''
       permissions.value = []
+      capabilities.value = null
+      localStorage.removeItem('userCapabilities')
 
       localStorage.removeItem('authToken')
       localStorage.removeItem('userRole')
@@ -202,6 +218,7 @@ export const useAuthStore = defineStore(
       hasPerm,
       ready,
       markReady,
+      capabilities,
     }
   },
   {

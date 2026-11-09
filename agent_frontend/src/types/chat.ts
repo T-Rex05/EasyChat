@@ -38,6 +38,8 @@ export interface SubagentTask {
 
 /** 聊天图片 */
 export interface ChatImage {
+  attachment_id?: string
+  file_id?: string
   data_url: string
   mime: string
   filename?: string

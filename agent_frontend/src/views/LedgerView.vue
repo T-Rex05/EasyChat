@@ -37,7 +37,9 @@
             <td class="actions">
               <button class="btn btn-secondary" @click="parse(item.import_id)">解析</button>
               <button class="btn btn-secondary" @click="preview(item.import_id)">预览</button>
-              <button class="btn btn-primary" @click="commit(item.import_id)">提交</button>
+              <button class="btn btn-primary" :disabled="committing === item.import_id" @click="commit(item.import_id)">
+                {{ committing === item.import_id ? '提交中…' : '提交' }}
+              </button>
               <button class="btn btn-danger" @click="remove(item.import_id)">删除</button>
             </td>
           </tr>
@@ -150,13 +152,14 @@
       </div>
       <div v-if="refunds.length === 0" class="empty">暂无待核对的退款。</div>
       <table v-else class="table">
-        <thead><tr><th>退款交易</th><th>原支付</th><th>金额</th><th>置信度</th><th>操作</th></tr></thead>
+        <thead><tr><th>退款交易</th><th>原支付</th><th>金额</th><th>匹配方式</th><th>原因</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="item in refunds" :key="item.refund_transaction_id + item.original_transaction_id">
             <td class="mono">{{ item.refund_transaction_id }}</td>
             <td class="mono">{{ item.original_transaction_id }}</td>
             <td class="mono">{{ money(item.amount_minor) }}</td>
-            <td>{{ (item.confidence * 100).toFixed(0) }}%</td>
+            <td>{{ item.match_method }}</td>
+            <td>{{ item.reason }}</td>
             <td><button class="btn btn-primary" @click="linkRefund(item)">确认关联</button></td>
           </tr>
         </tbody>
@@ -177,8 +180,8 @@
         <table class="table">
           <thead><tr><th>字段</th><th>值</th><th>置信度</th><th>需要确认</th></tr></thead>
           <tbody>
-            <tr v-for="field in candidate.fields" :key="field.name">
-              <td>{{ field.name }}</td>
+            <tr v-for="(field, name) in candidate.fields" :key="name">
+              <td>{{ name }}</td>
               <td><input v-model="field.value" class="input" /></td>
               <td>{{ field.confidence }}</td>
               <td>{{ field.needs_review ? '是' : '否' }}</td>
@@ -200,7 +203,6 @@ import {
   createCategory,
   createReport,
   deleteImport,
-  downloadUrl,
   importSummary,
   listCategories,
   listImports,
@@ -218,9 +220,9 @@ import {
   type TransactionView,
 } from '../api/ledger'
 import request from '../api/request'
+import { downloadFile } from '@/utils/downloadFile'
 
 interface CandidateField {
-  name: string
   value: string
   confidence: number
   needs_review: boolean
@@ -228,13 +230,16 @@ interface CandidateField {
 
 interface ImageCandidate {
   candidate_id: string
+  extraction_id: string
   confidence: number
-  fields: CandidateField[]
+  fields: Record<string, CandidateField>
+  missing_fields: string[]
 }
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const imageInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
+const committing = ref('')
 const recognizing = ref(false)
 const analyzing = ref(false)
 const error = ref('')
@@ -340,6 +345,8 @@ async function preview(importId: string) {
 }
 
 async function commit(importId: string) {
+  if (committing.value) return
+  committing.value = importId
   try {
     const result = await commitImport(importId)
     notice.value = `已提交：新增 ${result.inserted}，更新 ${result.updated}，未变 ${result.unchanged}`
@@ -348,6 +355,8 @@ async function commit(importId: string) {
     summary.value = null
   } catch (err) {
     fail(err)
+  } finally {
+    committing.value = ''
   }
 }
 
@@ -392,7 +401,7 @@ async function report(format: string) {
   try {
     const result = await createReport(plan(), format)
     notice.value = `报告已生成：${result.original_name}`
-    window.open(downloadUrl(result.file_id), '_blank')
+    await downloadFile(result.file_id, result.original_name)
   } catch (err) {
     fail(err)
   }
@@ -459,6 +468,11 @@ async function recognize() {
     const record = await uploadFile(file)
     const res = await request.post<ImageCandidate>(`/api/ledger/images/${record.file_id}/candidates`)
     candidate.value = res.data
+    for (const name of res.data.missing_fields) {
+      if (!candidate.value.fields[name]) {
+        candidate.value.fields[name] = { value: '', confidence: 0, needs_review: true }
+      }
+    }
   } catch (err) {
     fail(err)
   } finally {
@@ -469,11 +483,11 @@ async function recognize() {
 async function confirmCandidate() {
   if (!candidate.value) return
   const corrections: Record<string, string> = {}
-  for (const field of candidate.value.fields) {
-    corrections[field.name] = field.value
+  for (const [name, field] of Object.entries(candidate.value.fields)) {
+    corrections[name] = field.value
   }
   try {
-    await request.post(`/api/ledger/candidates/${candidate.value.candidate_id}/confirm`, {
+    await request.post(`/api/ledger/candidates/${candidate.value.extraction_id}/confirm`, {
       corrections,
     })
     notice.value = '截图候选已写入，可在交易列表继续修正'

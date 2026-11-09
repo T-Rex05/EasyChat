@@ -77,7 +77,8 @@
         <div class="card-header collapsible-header" @click="showSceneRouting = !showSceneRouting">
           <span>{{ showSceneRouting ? '▼' : '▶' }} 🎯 场景路由 <span class="form-optional">（高级）</span></span>
         </div>
-        <div v-if="showSceneRouting" class="card-body">
+        <p v-if="showSceneRouting && sceneRoutingError" class="card-body" role="status">{{ sceneRoutingError }}</p>
+        <div v-else-if="showSceneRouting" class="card-body">
           <p class="section-tip">
             为不同 LLM 使用场景指定专属模型。内置场景覆盖记忆提取、RAG 检索、上下文压缩等内部操作，可配置便宜模型降低成本。
             <b>前端聊天不触发场景路由</b>，需后端入口传入 scene 参数（如微信/定时任务自动携带）。
@@ -410,7 +411,11 @@
           <div v-if="qrSessionId" class="qr-scan-area">
             <div class="qr-container">
               <img v-if="qrImage" :src="qrImage" class="qr-image" alt="微信扫码" />
-              <div v-else class="qr-loading">⏳ 生成二维码中...</div>
+              <div v-else class="qr-loading">
+                <p>二维码图片生成失败</p>
+                <a v-if="qrScanData" :href="qrScanData" target="_blank" rel="noopener">打开扫码链接</a>
+                <p class="qr-hint">可复制链接到微信打开，或检查后端 qrcode 依赖。</p>
+              </div>
             </div>
             <div class="qr-status-text">
               <template v-if="qrStatus === 'wait' || qrStatus === 'wait_refreshed'">📱 请使用微信扫描上方二维码</template>
@@ -762,8 +767,8 @@ async function remove(cfg: ModelConfig) {
   catch (e: any) { alert(e?.response?.data?.detail || '删除失败'); }
 }
 async function loadStats() {
-  try { const res = await fetch('/health'); if (res.ok) stats.status = '运行中'; } catch { stats.status = '离线'; }
-  try { const res = await fetch('/api/skills'); if (res.ok) { const skills = await res.json(); stats.skills = skills.length; } } catch { stats.skills = '?'; }
+  try { const res = await fetch('/healthz'); stats.status = res.ok ? '运行中' : '离线'; } catch { stats.status = '离线'; }
+  try { const token = localStorage.getItem('authToken') || ''; const res = await fetch('/api/skills', { headers: { Authorization: `Bearer ${token}` } }); if (res.ok) { const data = await res.json(); stats.skills = data.skills.length; } else { stats.skills = '?'; } } catch { stats.skills = '?'; }
   try { const token = localStorage.getItem('authToken') || ''; const res = await fetch('/api/history', { headers: { 'Authorization': `Bearer ${token}` } }); if (res.ok) { const data = await res.json(); stats.sessions = (Array.isArray(data?.sessions) ? data.sessions.length : 0) || 0; } } catch { stats.sessions = '?'; }
 }
 
@@ -809,6 +814,7 @@ async function submitManualBind() {
     const wxid = manualBindForm.wxid.trim() || manualBindForm.account_id.trim();
     await createUserBinding({
       platform: 'wechat',
+      account_id: manualBindForm.account_id.trim(),
       open_id: wxid,
       nickname: manualBindForm.nickname.trim() || `微信Bot_${manualBindForm.account_id.trim().slice(0, 8)}`,
     });
@@ -827,6 +833,7 @@ async function submitManualBind() {
 // ── 微信扫码绑定（QR） ──
 const qrSessionId = ref('');
 const qrImage = ref('');
+const qrScanData = ref('');
 const qrStatus = ref('');
 const qrLoading = ref(false);
 let qrPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -837,6 +844,7 @@ async function startQrBind() {
     const result = await startWechatQr();
     qrSessionId.value = result.session_id;
     qrImage.value = result.qr_image;
+    qrScanData.value = result.qr_scan_data || '';
     qrStatus.value = 'wait';
     qrPollTimer = setInterval(pollQrStatus, 2000);
   } catch (e: any) {
@@ -850,6 +858,7 @@ async function pollQrStatus() {
   try {
     const result = await checkWechatQrStatus(qrSessionId.value);
     qrStatus.value = result.status;
+    if (result.qr_scan_data) qrScanData.value = result.qr_scan_data;
     if (result.status === 'wait_refreshed' && result.qr_image) {
       qrImage.value = result.qr_image;
       qrStatus.value = 'wait';
@@ -880,6 +889,7 @@ function cancelQr() {
   if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
   qrSessionId.value = '';
   qrImage.value = '';
+  qrScanData.value = '';
   qrStatus.value = '';
 }
 
@@ -1011,6 +1021,7 @@ const showFallbackChain = ref(false)
 const fallbackChainItems = ref<FallbackChainItem[]>([])
 const fallbackChainSaving = ref(false)
 const showSceneRouting = ref(false)
+const sceneRoutingError = ref('')
 const sceneRouting = ref<Record<string, SceneRoutingItem>>({})
 const sceneRoutingSaving = ref(false)
 const newSceneKey = ref('')
@@ -1138,7 +1149,10 @@ async function loadAvailableScenes() {
     const data = await getAvailableScenes()
     availableScenes.value = data.scenes || []
     sceneCategories.value = data.categories || {}
-  } catch (e) { console.error('加载场景列表失败:', e) }
+    await loadSceneRouting()
+  } catch (e: any) {
+    sceneRoutingError.value = e?.response?.data?.message || e?.response?.data?.detail || '场景路由暂不可用，请使用当前聊天模型与降级链。'
+  }
 }
 
 async function saveSceneRoute() {
@@ -1245,7 +1259,6 @@ onMounted(() => {
   loadStats();
   loadModelConfigs();
   loadFallbackChain();
-  loadSceneRouting();
   loadAvailableScenes();
   loadWechatConfig();
   loadWechatBinding();
@@ -1420,7 +1433,17 @@ onUnmounted(() => {
   overflow: hidden;
 }
 .qr-image { width: 100%; height: 100%; object-fit: contain; }
-.qr-loading { font-size: 14px; color: var(--text-tertiary); }
+.qr-loading {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qr-loading a { color: var(--accent-primary); word-break: break-all; }
+.qr-loading .qr-hint { font-size: 12px; color: var(--text-tertiary); }
 .qr-status-text { font-size: 14px; color: var(--text-secondary); text-align: center; }
 
 .binding-empty {

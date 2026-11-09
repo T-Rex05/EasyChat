@@ -40,6 +40,7 @@
             </td>
             <td>{{ formatTime(user.created_at) }}</td>
             <td>
+              <button @click="showEffectivePerms(user)" class="btn-link">有效权限</button>
               <button @click="toggleUserStatus(user)" class="btn-link">
                 {{ user.status === 1 ? '禁用' : '启用' }}
               </button>
@@ -47,6 +48,26 @@
           </tr>
         </tbody>
       </table>
+
+      <!-- 用户有效权限预览（来源可解释：角色授权 / 单独授予 / 单独撤销；撤销优先） -->
+      <div v-if="permUser" class="perm-preview">
+        <div class="perm-preview-head">
+          <strong>{{ permUser.username }} 的有效权限</strong>
+          <span v-if="permDetail?.super_admin" class="badge badge-info">系统拥有者：全部权限</span>
+          <button class="btn-link" @click="permUser = null">收起</button>
+        </div>
+        <div v-if="permLoading" class="loading-state">加载中…</div>
+        <div v-else-if="permDetail" class="perm-list">
+          <div v-for="item in permDetail.permissions" :key="item.permission" class="perm-item">
+            <span class="perm-key">{{ item.permission }}</span>
+            <span v-if="item.override === 'revoke'" class="badge badge-danger">已单独撤销</span>
+            <span v-else-if="item.override === 'grant'" class="badge badge-success">已单独授予</span>
+            <span v-else-if="item.from_role" class="badge badge-info">角色授权</span>
+            <span v-else class="muted-hint">未授予</span>
+            <span v-if="!item.effective" class="muted-hint">→ 不生效</span>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -57,9 +78,28 @@ import { ref, onMounted } from 'vue'
 import * as AdminAPI from '@/api/admin'
 import type { User, Role } from '@/api/admin'
 
+import { getUserEffectivePerms, type UserEffectiveDetail } from '@/api/permissions'
+
 const users = ref<User[]>([])
 const roles = ref<Role[]>([])
 const loading = ref(false)
+const permUser = ref<User | null>(null)
+const permDetail = ref<UserEffectiveDetail | null>(null)
+const permLoading = ref(false)
+
+async function showEffectivePerms(user: User) {
+  permUser.value = user
+  permDetail.value = null
+  permLoading.value = true
+  try {
+    permDetail.value = await getUserEffectivePerms(user.id)
+  } catch (e) {
+    console.error('加载有效权限失败:', e)
+    alert('加载有效权限失败：' + (e as Error).message)
+  } finally {
+    permLoading.value = false
+  }
+}
 
 async function loadUsers() {
   loading.value = true
@@ -334,5 +374,41 @@ onMounted(() => {
 
 .btn-primary:hover {
   background: var(--brand-hover);
+}
+.perm-preview {
+  margin-top: 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.perm-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.perm-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 4px;
+}
+
+.perm-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.perm-key {
+  min-width: 130px;
+}
+
+.muted-hint {
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 </style>

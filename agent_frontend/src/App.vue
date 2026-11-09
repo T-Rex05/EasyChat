@@ -63,6 +63,7 @@ onMounted(async () => {
 }
 
 .app-main {
+  min-width: 0;
   flex: 1;
   overflow-y: auto;
   background: var(--bg-secondary);

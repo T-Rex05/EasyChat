@@ -26,6 +26,7 @@
           <span>{{ d.stat_date }}</span>
           <span>输入 {{ d.input_tokens }}</span>
           <span>输出 {{ d.output_tokens }}</span>
+          <span>合计 {{ d.total_tokens }}</span>
           <span class="muted">调用 {{ d.call_count }}</span>
         </div>
       </div>
@@ -72,7 +73,7 @@
 import { onMounted, ref } from 'vue'
 import request from '@/api/request'
 
-interface Daily { stat_date: string; input_tokens: number; output_tokens: number; call_count: number }
+interface Daily { stat_date: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface RankRow { owner_id?: number; username?: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface Call { call_id: string; created_at: string; model?: string; input_tokens: number; output_tokens: number; status?: string }
 
@@ -114,7 +115,7 @@ onMounted(loadAll)
 .card { padding: 16px; margin-bottom: 16px; }
 .card h3 { margin: 0 0 12px; font-size: 15px; }
 .daily-list { display: grid; gap: 6px; }
-.daily-row { display: grid; grid-template-columns: 120px 1fr 1fr 1fr; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border-primary); }
+.daily-row { display: grid; grid-template-columns: 120px 1fr 1fr 1fr 1fr; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border-primary); }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table th, .table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border-primary); }
 .table th { color: var(--text-tertiary); font-weight: 500; }

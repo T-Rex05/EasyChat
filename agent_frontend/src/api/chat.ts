@@ -7,6 +7,8 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 /** 已上传文件信息 */
 export interface UploadedFile {
+  attachment_id: string
+  file_id: string
   filename: string
   size: number
   content_type: string
@@ -67,14 +69,14 @@ export async function uploadChatFiles(files: File[]): Promise<UploadedFile[]> {
 /**
  * 发送消息并建立 SSE 流式连接（GET 方式，纯文本）
  */
-export function sendMessageStream(
+export async function sendMessageStream(
   message: string,
   threadId: string,
   callbacks: ChatCallbacks,
   clientMsgId?: string,
   mode: string = 'normal',
   modelId?: number,
-): { eventSource: EventSource; close: () => void } {
+): Promise<{ eventSource: EventSource; close: () => void }> {
   // ── Token 预检 ──
   const token = getAuthToken()
   if (!token) {
@@ -84,6 +86,25 @@ export function sendMessageStream(
   }
   // 不做本地过期预检：后端有宽限期刷新机制，由后端决定 token 是否可用
   // 如果 token 彻底失效，后端会返回 401，由下游处理
+
+  // EventSource 无法携带 Header：先用长效 JWT（Authorization header）换取
+  // 秒级一次性 ticket，URL 上只出现短时效凭据——长效 token 不再进入
+  // 请求目标 / 访问日志（审计 #3）
+  let ticket = ''
+  try {
+    const resp = await fetch(`${API_BASE}/api/chat/sse-ticket`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      ticket = String(data.ticket || '')
+    }
+  } catch { /* 网络失败按未登录处理 */ }
+  if (!ticket) {
+    callbacks.onError?.('请先登录')
+    return { eventSource: new EventSource('data:text/plain,'), close: () => {} }
+  }
 
   const encodedMessage = encodeURIComponent(message)
   let url = `${API_BASE}/chat/stream?message=${encodedMessage}&thread_id=${threadId}`
@@ -100,8 +121,7 @@ export function sendMessageStream(
     url += `&model_id=${modelId}`
   }
 
-  // EventSource 无法携带 Header，登录态走 token 查询参数
-  url += `&token=${encodeURIComponent(token)}`
+  url += `&ticket=${encodeURIComponent(ticket)}`
 
   const eventSource = new EventSource(url)
   const state = { fullContent: '', isComplete: false }
@@ -172,7 +192,7 @@ export function sendMessageStreamPost(
   clientMsgId?: string,
   mode: string = 'normal',
   images?: ChatImage[],
-  files?: { filename: string; url: string; content?: string | null }[],
+  files?: { filename: string; url: string; content?: string | null; attachment_id?: string }[],
   modelId?: number,
 ): { close: () => void } {
   const token = getAuthToken()
@@ -197,12 +217,12 @@ export function sendMessageStreamPost(
   if (modelId) {
     body.model_id = modelId
   }
-  if (images && images.length > 0) {
-    body.images = images.map(img => ({ data_url: img.data_url, mime: img.mime }))
+  const attachments = [...(images || []), ...(files || [])]
+  if (attachments.some(item => !item.attachment_id)) {
+    callbacks.onError?.('附件尚未上传，请重新添加')
+    return { close: () => {} }
   }
-  if (files && files.length > 0) {
-    body.files = files.map(f => ({ filename: f.filename, url: f.url, content: f.content }))
-  }
+  body.attachment_ids = attachments.map(item => item.attachment_id)
 
   const state = { fullContent: '', isComplete: false }
   let manuallyClosed = false

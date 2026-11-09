@@ -86,12 +86,10 @@ export function useChat(chatMode: string = 'normal') {
   }
 
   // 添加图片（从 data URL — 粘贴/拖拽）
-  function addImageFromDataUrl(dataUrl: string, mime?: string) {
+  async function addImageFromDataUrl(dataUrl: string, mime?: string) {
     const mimeType = mime || dataUrl.split(';')[0]?.replace('data:', '') || 'image/png'
-    attachedImages.value.push({
-      data_url: dataUrl,
-      mime: mimeType,
-    })
+    const blob = await (await fetch(dataUrl)).blob()
+    await addImagesFromFiles([new File([blob], 'pasted-image', { type: mimeType })])
   }
 
   // 移除图片
@@ -169,6 +167,7 @@ export function useChat(chatMode: string = 'normal') {
     // 传给 API 的文件列表（含内容用于后端注入 LLM）
     const filesForApi = currentFiles.map(f => ({
       filename: f.filename, url: (f as any).url || '', content: f.content || '',
+      attachment_id: f.attachment_id,
     }))
     // 存入消息的文件列表（仅元数据，不含内容）
     const messageFiles = currentFiles.length > 0 ? currentFiles.map(f => ({

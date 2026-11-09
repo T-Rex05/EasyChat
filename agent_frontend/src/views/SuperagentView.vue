@@ -547,6 +547,24 @@ onUnmounted(() => {
 .header-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.superagent-page > .card,
+.superagent-page .list > .card {
+  padding: 20px 24px;
+  min-width: 0;
+}
+
+.superagent-page .form-group {
+  margin-bottom: 0;
+}
+
+.superagent-page .input,
+.superagent-page .textarea {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .ops-card {
@@ -600,6 +618,11 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.actions .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .list {
@@ -734,6 +757,10 @@ onUnmounted(() => {
 }
 
 @media (max-width: 480px) {
+  .superagent-page { padding: 16px; }
+  .superagent-page > .card, .superagent-page .list > .card { padding: 16px; }
+  .page-header, .form-row, .actions { flex-direction: column; align-items: stretch; }
+  .header-actions { flex-wrap: wrap; }
   .item-head strong {
     flex-basis: 100%;
   }

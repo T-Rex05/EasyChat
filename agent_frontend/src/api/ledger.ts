@@ -22,8 +22,23 @@ export interface ImportView {
   failed: number
   control_totals?: Record<string, number>
   coverage_kind?: string
-  quality?: string
+  quality?: { commit?: { inserted?: number; updated?: number; unchanged?: number } }
   created_at?: string
+}
+
+type ImportPayload = Omit<ImportView, 'rows' | 'inserted' | 'updated' | 'unchanged' | 'failed'> & {
+  row_counts?: { rows?: number; errors?: number }
+}
+
+function normalizeImport(view: ImportPayload): ImportView {
+  return {
+    ...view,
+    rows: view.row_counts?.rows ?? 0,
+    failed: view.row_counts?.errors ?? 0,
+    inserted: view.quality?.commit?.inserted ?? 0,
+    updated: view.quality?.commit?.updated ?? 0,
+    unchanged: view.quality?.commit?.unchanged ?? 0,
+  }
 }
 
 export interface ImportSummary {
@@ -57,7 +72,7 @@ export interface RefundSuggestion {
   refund_transaction_id: string
   original_transaction_id: string
   amount_minor: number
-  confidence: number
+  match_method: string
   reason: string
 }
 
@@ -76,26 +91,26 @@ export async function uploadFile(file: File): Promise<FileRecord> {
   const form = new FormData()
   form.append('file', file)
   form.append('request_id', `web-${file.name}-${file.size}-${file.lastModified}`)
-  const res = await request.post<FileRecord>('/api/files', form, {
+  const res = await request.post<{ file: FileRecord }>('/api/files', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
   })
-  return res.data
+  return res.data.file
 }
 
 export async function registerImport(fileId: string): Promise<ImportView> {
-  const res = await request.post<ImportView>('/api/ledger/imports', { file_id: fileId })
-  return res.data
+  const res = await request.post<{ import: ImportPayload }>('/api/ledger/imports', { file_id: fileId })
+  return normalizeImport(res.data.import)
 }
 
 export async function listImports(): Promise<ImportView[]> {
-  const res = await request.get<{ imports: ImportView[] }>('/api/ledger/imports')
-  return res.data.imports || []
+  const res = await request.get<{ imports: ImportPayload[] }>('/api/ledger/imports')
+  return (res.data.imports || []).map(normalizeImport)
 }
 
 export async function parseImport(importId: string): Promise<ImportView> {
-  const res = await request.post<ImportView>(`/api/ledger/imports/${importId}/parse`)
-  return res.data
+  const res = await request.post<{ import: ImportPayload }>(`/api/ledger/imports/${importId}/parse`)
+  return normalizeImport(res.data.import)
 }
 
 export async function importSummary(importId: string): Promise<ImportSummary> {
