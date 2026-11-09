@@ -121,3 +121,4 @@ rubric_result.json
 
 # Browser automation tool artifacts
 .playwright-mcp/
+.zcode/
