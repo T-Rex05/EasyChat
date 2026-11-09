@@ -9,7 +9,8 @@
 | `0d80b15` | P1 后端：0023 迁移（lifecycle + role_seed_state）、模板版本播种、目录、capabilities、委派边界、统一校验、升级预览/应用、usage 排行口径 |
 | `3f56dec` | P1 lint 修复 |
 | `1acd869` | P2 前端：RoleEditDialog 9 功能项重写、Sidebar/router capabilities、有效权限预览、UpgradePreviewPanel |
-| （本次） | P3：迁移兼容/回滚回归 + 迁移测试列表 + 本文档 |
+| `aad1256` | P3：迁移兼容/回滚回归 + 迁移测试列表 + 本文档 |
+| `c2577a5` | 评审修复：P0-1 拥有者边界回归、P1-1 原子 apply、P1-2 合并语义、P1-3/P2 项 |
 
 ## 一、权限映射（24 键 → 9 功能模块）
 
@@ -56,7 +57,20 @@
 - evolution.view 并入技能高级区展示；微信偏好页多口径混合暂按 chat.use 入场保持（页面内部能力展示待 P2 二期）。
 - 旧自定义角色进入编辑即展开高级区并显示「自定义（高级）」模式，不会被自动扩成完整功能授权。
 
-## 五、尚未验证的外部路径
+## 五、独立评审结论与修复（2026-11-09）
+
+独立评审（代理，通读 diff 并实际运行 AccessService 验证行为）结论「需修后合入」，全部 P0/P1 已修复：
+
+- **P0-1（已修）**：`_require_owner_management` 原实现无条件拒绝非 super_admin 的任何用户管理——admin 对普通用户的改角色/禁用全部被误封（功能性回归）。改为按「结果是否涉及拥有者身份」判定；补正向用例 `test_admin_can_manage_normal_users`。
+- **P1-1（已修）**：apply 快照/替换/登记原为 4 个独立事务，崩溃或并发下可能「授权已改而版本未登记、快照丢失」。新增 `apply_role_template_atomic` 单事务完成，并发双击在 BEGIN IMMEDIATE 下串行。
+- **P1-2（已修）**：面板承诺「模板外自定义保留」但后端整表替换会删除自定义授权。apply 改为合并语义（模板 ∪ 现有自定义、工具组并集），确认弹窗写明合并语义；补 `test_apply_preserves_custom_permissions_and_toolsets`。
+- **P1-3（已修）**：`getMyCapabilities` 解包契约错误（响应直接是对象）。
+- **P2 已修**：set_user_permission 补拥有者边界 + deprecated 拒绝（口径对齐角色 CRUD）；refresh 响应附 capabilities（静默刷新不再降级）；Sidebar /ledger 消费 capabilities；router userPermissions 解析加保护；去重复请求/死代码/局部导入收口。
+- **P2 记录未改**：最后拥有者计数的多 worker TOCTOU（当前单 SQLite 部署，async 路由内 check-then-write 无 await 点，单进程安全；多 worker 部署前应在事务内复核）；「个人技能只读」档位待新增原子键。
+
+评审确认无问题的关键机制：seed 版本状态机（系统角色不可改名/删除、seed_state 无 HTTP 写入路径）、deprecated 双来源过滤收口（policy 单点，含 super_admin 分支与 override 来源）、capabilities 不泄漏 internal 模块、新端点鉴权齐全（capabilities 本人 / effective-perms 本人或 system.manage / preview 需 system.manage / apply 需 super_admin）。
+
+## 六、尚未验证的外部路径
 
 - 真实容器（easychat:v2）尚未重建为新代码——当前容器仍是 superagent-reliability 版本；下次重建时迁移 0023 会自动应用，admin/user 角色在卷中已按旧逻辑初始化，会回填 legacy（不自动获得编码代理授权，需拥有者在面板显式升级——这是本方案的预期行为）。
 - 浏览器端到端（角色表单交互、升级面板点击流）未实测。
