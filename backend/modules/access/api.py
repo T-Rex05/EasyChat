@@ -21,15 +21,12 @@ from backend.modules.access.contracts import (
     PermissionOverride,
     RoleInfo,
     UserSnapshot,
-    ACTIVE_PERMISSION_KEYS,
     DEFAULT_ROLE_PERMISSIONS,
     DEFAULT_ROLE_TOOLSETS,
     DEPRECATED_PERMISSION_KEYS,
     DEFAULT_TEMPLATE_VERSION,
-    LEGACY_TEMPLATE_VERSION,
     MODULE_KEYS,
     MODULE_LABELS,
-    PERMISSION_DEFS,
     SUPER_ADMIN_ROLE,
 )
 from backend.modules.access.repository import (

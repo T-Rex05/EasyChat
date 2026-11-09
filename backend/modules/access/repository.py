@@ -23,8 +23,6 @@ from backend.modules.access.contracts import (
     RoleInfo,
     UserSnapshot,
     DEFAULT_TEMPLATE_VERSION,
-    LIFECYCLE_ACTIVE,
-    LIFECYCLE_DEPRECATED,
 )
 
 # ---- scrypt 密码哈希（沿用旧 auth_service 格式，存量 SHA256+salt 登录时升级） ----
