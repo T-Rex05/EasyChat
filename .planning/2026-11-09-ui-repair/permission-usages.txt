@@ -1,0 +1,127 @@
+backend/modules\access\api.py:307:    def effective_permissions(self, user_id: int) -> frozenset[str]:
+backend/modules\access\api.py:313:        perms = policy.effective_permissions(
+backend/modules\access\api.py:327:    def has_permission(self, principal: Principal, permission: str) -> bool:
+backend/modules\access\api.py:329:        return permission in self.effective_permissions(principal.user_id)
+backend/modules\access\api.py:331:    def require_permission(self, principal: Principal, permission: str) -> None:
+backend/modules\access\api.py:332:        if not self.has_permission(principal, permission):
+backend/modules\access\api.py:351:        return policy.can_manage_resource(
+backend/modules\access\api.py:355:            effective_permissions=self.effective_permissions(principal.user_id),
+backend/modules\access\api.py:359:    def authorize_resource(self, principal: Principal, item_owner_id: int, manage_perm: str) -> None:
+backend/modules\access\api.py:366:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:373:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:380:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:387:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:391:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:397:            self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:403:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:416:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:430:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:440:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:445:        self.require_permission(actor, "system.manage")
+backend/modules\access\api.py:449:        self.require_permission(actor, "system.manage")
+backend/modules\access\policy.py:14:def effective_permissions(
+backend/modules\access\policy.py:37:def can_manage_resource(
+backend/modules\access\policy.py:42:    effective_permissions: frozenset[str],
+backend/modules\access\policy.py:51:    if manage_perm in effective_permissions:
+backend/modules\access\routes.py:75:            "permissions": sorted(access.effective_permissions(principal.user_id)),
+backend/modules\access\routes.py:85:            "permissions": sorted(access.effective_permissions(principal.user_id)),
+backend/modules\access\routes.py:101:            "permissions": sorted(access.effective_permissions(user.user_id)),
+backend/modules\access\routes.py:119:            "permissions": sorted(access.effective_permissions(principal.user_id)),
+agent_frontend/src/router\index.ts:129:    let hasPerm = false
+agent_frontend/src/router\index.ts:133:      hasPerm = permissions.includes('kb.eval')
+agent_frontend/src/router\index.ts:137:      hasPerm = permissions.includes('trace.view') || permissions.includes('trace.manage')
+agent_frontend/src/router\index.ts:139:      hasPerm = permissions.includes(perm)
+agent_frontend/src/router\index.ts:141:    if (!hasPerm) {
+backend/modules\files\api.py:97:    def _require(self, principal: Principal, permission: str) -> Principal:
+backend/modules\files\api.py:99:        self.access.require_permission(principal, permission)
+backend/modules\files\api.py:212:        principal = self._require(principal, "file.upload")
+backend/modules\files\api.py:366:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:384:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:387:            if not self.access.has_permission(principal, "system.manage"):
+backend/modules\files\api.py:430:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:444:        principal = self._require(principal, "file.delete")
+backend/modules\files\api.py:452:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:461:        self._require(principal, "file.read")
+backend/modules\files\api.py:467:        principal = self._require(principal, "file.delete")
+backend/modules\files\api.py:497:        principal = self._require(principal, "file.delete")
+backend/modules\files\api.py:559:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:574:        principal = self._require(principal, "file.read")
+backend/modules\files\api.py:583:        principal = self._require(principal, "file.read")
+backend/modules\channels\api.py:247:        if self.access.has_permission(principal, "system.manage"):
+backend/modules\channels\api.py:264:        self.access.require_permission(principal, "system.manage")
+backend/modules\channels\api.py:289:            self.access.require_permission(principal, "system.manage")
+backend/modules\channels\api.py:562:            self.access.require_permission(principal, "chat.use")
+backend/modules\channels\api.py:896:        self.access.require_permission(principal, "system.manage")
+backend/modules\delivery\smtp.py:237:        self.access.require_permission(principal, "system.config")
+backend/modules\delivery\smtp.py:242:        self.access.require_permission(principal, "system.config")
+backend/modules\delivery\smtp.py:249:            self.access.require_permission(principal, "system.manage")
+backend/modules\delivery\smtp.py:315:            self.access.require_permission(principal, "system.manage")
+backend/modules\delivery\smtp.py:326:            self.access.require_permission(principal, "system.manage")
+agent_frontend/src/views\ChatView.vue:291:const canAccessHosts = computed(() => auth.hasPerm('system.manage'))
+agent_frontend/src/views\AdminView.vue:42:  return tabs.filter(t => auth.hasPerm(t.perm))
+agent_frontend/src/views\ConfigView.vue:660:// 与 :664 的 tab 过滤保持一致：走 hasPerm（super_admin 兜底），
+agent_frontend/src/views\ConfigView.vue:662:const hasSystemConfig = computed(() => authStore.hasPerm('system.config'));
+agent_frontend/src/views\ConfigView.vue:671:  return allTabs.filter(t => !t.perm || authStore.hasPerm(t.perm));
+backend/modules\usage\api.py:31:        effective_permissions: Callable[[Principal], frozenset[str]] | None = None,
+backend/modules\usage\api.py:33:        """effective_permissions 由 bootstrap 注入 access 公开接口，避免模块环。"""
+backend/modules\usage\api.py:36:        self._effective_permissions = effective_permissions or (lambda _p: frozenset())
+backend/modules\usage\api.py:104:        return self._effective_permissions(actor)
+backend/modules\memory\api.py:68:    def _require(self, principal: Principal, permission: str) -> None:
+backend/modules\memory\api.py:69:        self.access.require_permission(principal, permission)
+backend/modules\memory\api.py:75:        self._require(principal, "memory.edit")
+backend/modules\memory\api.py:115:        self._require(principal, "memory.edit")
+backend/modules\memory\api.py:118:            if not self.access.has_permission(principal, "system.manage"):
+backend/modules\memory\api.py:133:        self._require(principal, "memory.edit")
+backend/modules\memory\api.py:149:        self._require(principal, "memory.view")
+backend/modules\memory\api.py:165:        self._require(principal, "memory.view")
+backend/modules\memory\api.py:181:        self._require(principal, "memory.edit")
+backend/modules\memory\api.py:247:        self._require(principal, "memory.edit")
+backend/modules\assistant\dispatcher.py:273:        self.access.require_permission(principal, "chat.use")
+backend/modules\evolution\api.py:67:        self.access.require_permission(principal, "chat.use")
+backend/modules\evolution\api.py:116:        self.access.require_permission(principal, "system.manage")
+backend/modules\evolution\api.py:130:        if self.access.has_permission(principal, "evolution.view"):
+backend/modules\evolution\api.py:162:                self.access.require_permission(principal, "chat.use")
+backend/modules\assistant\compat.py:14:    def _require(authorization: str | None):
+backend/modules\assistant\compat.py:27:        assistant.access.require_permission(principal, "chat.use")
+backend/modules\assistant\compat.py:68:        return await _upload(_require(authorization), files, images=True)
+backend/modules\assistant\compat.py:73:        return await _upload(_require(authorization), files, images=False)
+backend/modules\assistant\compat.py:77:        _require(authorization)
+backend/modules\assistant\compat.py:83:        _require(authorization)
+backend/modules\assistant\compat.py:88:        _require(authorization)
+backend/modules\superagent\api.py:127:        self.access.require_permission(principal, "superagent.manage")
+backend/modules\superagent\api.py:142:        self.access.require_permission(principal, "superagent.manage")
+backend/modules\superagent\api.py:179:        self.access.require_permission(principal, "superagent.create")
+backend/modules\superagent\api.py:266:        self.access.require_permission(principal, "superagent.view")
+backend/modules\superagent\api.py:336:        self.access.require_permission(principal, "superagent.create")
+backend/modules\superagent\api.py:349:        self.access.require_permission(principal, "superagent.manage")
+backend/modules\superagent\api.py:437:        return permission in self.access.effective_permissions(principal.user_id)
+backend/modules\superagent\api.py:444:        self.access.require_permission(principal, "superagent.view")
+backend/modules\superagent\api.py:455:            self.access.require_permission(principal, "superagent.create")
+backend/modules\superagent\api.py:457:            self.access.require_permission(principal, "superagent.manage")
+backend/modules\ledger\api.py:229:        self.access.require_permission(principal, permission)
+backend/modules\ledger\api.py:333:        if not self.access.has_permission(principal, "ledger.import"):
+backend/modules\assistant\api.py:172:        self.access.require_permission(principal, "chat.use")
+backend/modules\scheduling\api.py:81:        self.access.require_permission(principal, "cron.create")
+backend/modules\scheduling\api.py:166:            self.access.require_permission(principal, "system.manage")
+backend/modules\scheduling\api.py:177:            self.access.require_permission(principal, "system.manage")
+backend/modules\scheduling\api.py:188:            self.access.require_permission(principal, "system.manage")
+backend/modules\scheduling\api.py:195:            self.access.require_permission(principal, "system.manage")
+backend/modules\inbox\api.py:54:        self.access.require_permission(principal, "chat.use")
+backend/modules\inbox\api.py:170:        self.access.require_permission(principal, "chat.use")
+backend/modules\inbox\api.py:175:        self.access.require_permission(principal, "chat.use")
+backend/modules\skills\api.py:94:        return self.access.has_permission(principal, permission)
+backend/modules\models\api.py:35:        self._require(actor, "system.config")
+backend/modules\models\api.py:50:        self._require(actor, "system.config")
+backend/modules\models\api.py:59:        self._require(actor, "system.config")
+backend/modules\models\api.py:63:        self._require(actor, "system.config")
+backend/modules\models\api.py:67:        self._require(actor, "system.config")
+backend/modules\models\api.py:71:        self._require(actor, "system.config")
+backend/modules\models\api.py:81:        self._require(actor, "system.config")
+backend/modules\models\api.py:121:    def _require(self, actor: Principal, permission: str) -> None:
+backend/modules\superagent\worker.py:669:            self.service.access.require_permission(principal, permission)
+backend/modules\profiles\api.py:103:        self.access.require_permission(principal, "memory.edit")
+backend/modules\profiles\api.py:175:        self.access.require_permission(principal, "memory.view")
+backend/modules\profiles\api.py:180:        self.access.require_permission(principal, "memory.view")
+backend/modules\profiles\api.py:198:        self.access.require_permission(principal, "memory.edit")
+backend/modules\profiles\api.py:439:        self.access.require_permission(principal, "memory.view")
+backend/modules\profiles\api.py:456:        self.access.require_permission(principal, "memory.edit")

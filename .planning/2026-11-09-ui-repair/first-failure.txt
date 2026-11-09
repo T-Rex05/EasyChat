@@ -1,0 +1,12 @@
+.......................F
+================================== FAILURES ===================================
+______________________ test_module_privacy_cross_imports ______________________
+tests\architecture\test_imports.py:152: in test_module_privacy_cross_imports
+    assert not violations, "ģ��˽�п�����:\n" + "\n".join(violations)
+E   AssertionError: ģ��˽�п�����:
+E     modules/assistant/compat.py:10 ���� modules/files/local_store��ֻ���� api/contracts��
+E   assert not ['modules/assistant/compat.py:10 ���� modules/files/local_store��ֻ���� api/contracts��']
+=========================== short test summary info ===========================
+FAILED tests/architecture/test_imports.py::test_module_privacy_cross_imports
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 23 passed, 2 skipped, 2 deselected in 17.66s

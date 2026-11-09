@@ -1,0 +1,29 @@
+........................................................................ [  6%]
+........................................................................ [ 12%]
+........................................................................ [ 19%]
+........................................................................ [ 25%]
+........................................................................ [ 32%]
+...............................................EE....................... [ 38%]
+........................................................................ [ 45%]
+........................................................................ [ 51%]
+........................................................................ [ 58%]
+........................................................................ [ 64%]
+........................................................................ [ 71%]
+........................................................................ [ 77%]
+........................................................................ [ 84%]
+........................................................................ [ 90%]
+........................................................................ [ 97%]
+...............................                                          [100%]
+=================================== ERRORS ====================================
+_ ERROR at setup of test_file_upload_is_registered_and_sent_as_owned_attachment _
+tests\contracts\test_chat_uploads.py:29: in uploads
+    rig.access.authenticate_token, rig.assistant, rig.files,
+E   TypeError: build_assistant_compat_router() takes 1 positional argument but 3 were given
+_ ERROR at setup of test_image_upload_validates_content_and_preserves_preview _
+tests\contracts\test_chat_uploads.py:29: in uploads
+    rig.access.authenticate_token, rig.assistant, rig.files,
+E   TypeError: build_assistant_compat_router() takes 1 positional argument but 3 were given
+=========================== short test summary info ===========================
+ERROR tests/contracts/test_chat_uploads.py::test_file_upload_is_registered_and_sent_as_owned_attachment
+ERROR tests/contracts/test_chat_uploads.py::test_image_upload_validates_content_and_preserves_preview
+1109 passed, 2 skipped, 2 deselected, 2 errors in 337.89s (0:05:37)

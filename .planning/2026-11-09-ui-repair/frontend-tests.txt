@@ -1,0 +1,29 @@
+
+> agentforge-frontend@1.0.0 test
+> node --test tests/*.test.mjs tests/*.test.cjs
+
+✔ fallback API converts model profiles and saves config_ids in order (124.5714ms)
+✔ ledger API unwraps uploaded files and import records (55.3044ms)
+✔ chat streams submit registered attachment IDs without copying media bytes (50.2409ms)
+✔ manual memory uses a supported, user-confirmed source type (91.4999ms)
+✔ successive skill activations submit the latest expected active version (21.9694ms)
+✔ stale skill activation keeps the conflict visible and preserves local version (14.6178ms)
+✔ platform configuration preserves the custom service URL (23.3394ms)
+✔ user binding sends the bot account separately from the external user (14.9536ms)
+✔ manual WeChat binding passes the entered account through to the binding API (35.4878ms)
+✔ mood opt-in keeps boolean API values consistent with the visible switch (16.8012ms)
+✔ image recognition exposes missing fields for manual correction (19.1185ms)
+✔ image confirmation submits keyed field corrections using the extraction ID (14.1806ms)
+✔ refund suggestions display the supplied match method and reason (1.0185ms)
+✔ flat permissions become renderable groups without losing registered keys (65.8369ms)
+✔ grouped legacy permissions remain compatible (8.5459ms)
+✔ saved panel widths handle invalid storage and stay within limits (4.5477ms)
+✔ report downloads use the authenticated request client and release the blob URL (8.6546ms)
+ℹ tests 17
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 836.561
