@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from backend.modules.access.contracts import (
+    ALL_PERMISSION_KEYS,
     DEPRECATED_PERMISSION_KEYS,
     DEPRECATED_TOOLSETS,
     SUPER_ADMIN_ROLE,
@@ -18,7 +19,7 @@ def effective_permissions(
     role_permissions: frozenset[str],
     grants: frozenset[str],
     revokes: frozenset[str],
-    all_registered_permissions: frozenset[str] = frozenset(),
+    all_registered_permissions: frozenset[str] = ALL_PERMISSION_KEYS,
 ) -> frozenset[str]:
     """有效权限 = (角色权限 ∪ 用户grant) − 用户revoke − deprecated/retired；
 
@@ -29,6 +30,7 @@ def effective_permissions(
     if role_name == SUPER_ADMIN_ROLE:
         return frozenset(all_registered_permissions) - DEPRECATED_PERMISSION_KEYS
     effective = (set(role_permissions) | set(grants)) - DEPRECATED_PERMISSION_KEYS
+    effective.intersection_update(all_registered_permissions)
     effective -= set(revokes)
     return frozenset(effective)
 

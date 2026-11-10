@@ -12,9 +12,10 @@ import secrets
 from typing import Any
 
 from backend.platform.sqlite import Database, utc_now_iso
-from backend.shared.errors import ConflictError, NotFoundError
+from backend.shared.errors import ConflictError, ForbiddenError, NotFoundError
 from backend.modules.access.contracts import (
     BUILTIN_ROLES,
+    SUPER_ADMIN_ROLE,
     DEFAULT_ROLE_PERMISSIONS,
     DEFAULT_ROLE_TOOLSETS,
     PERMISSION_DEFS,
@@ -121,14 +122,30 @@ class AccessRepository:
         with self.db.transaction() as conn:
             conn.execute("UPDATE users SET password=?, updated_at=? WHERE id=?", (password_hash, utc_now_iso(), user_id))
 
+    def _require_other_active_owner(self, conn: Any, user_id: int) -> None:
+        """Check the last-owner invariant inside the caller's write transaction."""
+        target = conn.execute("SELECT role, status FROM users WHERE id=?", (user_id,)).fetchone()
+        if target is None or target["role"] != SUPER_ADMIN_ROLE or target["status"] != 1:
+            return
+        other = conn.execute(
+            "SELECT 1 FROM users WHERE role=? AND status=1 AND id<>? LIMIT 1",
+            (SUPER_ADMIN_ROLE, user_id),
+        ).fetchone()
+        if other is None:
+            raise ForbiddenError("系统拥有者保护：不能降级或禁用最后一个超级管理员")
+
     def set_user_role(self, user_id: int, role: str) -> None:
         with self.db.transaction() as conn:
+            if role != SUPER_ADMIN_ROLE:
+                self._require_other_active_owner(conn, user_id)
             cur = conn.execute("UPDATE users SET role=?, updated_at=? WHERE id=?", (role, utc_now_iso(), user_id))
             if cur.rowcount != 1:
                 raise NotFoundError(f"用户不存在: {user_id}")
 
     def set_user_status(self, user_id: int, status: int) -> None:
         with self.db.transaction() as conn:
+            if status != 1:
+                self._require_other_active_owner(conn, user_id)
             cur = conn.execute("UPDATE users SET status=?, updated_at=? WHERE id=?", (status, utc_now_iso(), user_id))
             if cur.rowcount != 1:
                 raise NotFoundError(f"用户不存在: {user_id}")
@@ -287,6 +304,11 @@ class AccessRepository:
                 params.append(now)
                 params.append(role_id)
                 conn.execute(f"UPDATE roles SET {', '.join(updates)} WHERE id=?", params)
+            if name and name != row["name"]:
+                conn.execute(
+                    "UPDATE users SET role=?, updated_at=? WHERE role=?",
+                    (name, now, row["name"]),
+                )
             if permissions is not None:
                 conn.execute("DELETE FROM role_permissions WHERE role_id=?", (role_id,))
                 conn.executemany(

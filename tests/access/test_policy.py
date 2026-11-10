@@ -53,16 +53,14 @@ def test_super_admin_gets_all_registered_permissions():
 
 
 def test_normal_role_cannot_exceed_registered():
-    """未注册的权限键（如历史残留）不因 grant 而生效——旧规则允许 grant 任意键，
-    新规则在服务层入口拒绝未注册键；此处验证纯函数按输入集合运算。"""
+    """Historical unknown grants remain inert even when already persisted."""
     result = effective_permissions(
         role_name="user",
         role_permissions=frozenset(),
-        grants=frozenset({"kb.manage"}),  # 已删业务权限（R03）
+        grants=frozenset({"kb.manage"}),
         revokes=frozenset(),
     )
-    assert result == frozenset({"kb.manage"})  # 纯函数按输入运算
-    # 服务层 create/set 接口负责拒绝未注册键（见 test_cache_invalidation.py）
+    assert result == frozenset()
 
 
 def test_empty_everything_is_empty():

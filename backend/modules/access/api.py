@@ -374,17 +374,6 @@ class AccessService:
     def _is_super_admin(self, user_id: int) -> bool:
         return self._user(user_id).role == SUPER_ADMIN_ROLE
 
-    def _count_active_super_admins(self) -> int:
-        conn = self.repo.db.connect()
-        try:
-            row = conn.execute(
-                "SELECT count(*) AS c FROM users WHERE role=? AND status=1",
-                (SUPER_ADMIN_ROLE,),
-            ).fetchone()
-        finally:
-            conn.close()
-        return int(row["c"]) if row else 0
-
     def _require_owner_management(
         self, actor: Principal, target_user_id: int, *, granting_owner: bool = False
     ) -> None:
@@ -400,18 +389,6 @@ class AccessService:
             raise ForbiddenError("拥有者身份只能由超级管理员管理")
         if granting_owner:
             raise ForbiddenError("分配拥有者角色需要超级管理员确认")
-
-    def _require_not_last_owner(
-        self, user_id: int, *, new_role: str | None = None, new_status: int | None = None
-    ) -> None:
-        user = self._user(user_id)
-        if user.role != SUPER_ADMIN_ROLE:
-            return
-        losing = (new_role is not None and new_role != SUPER_ADMIN_ROLE) or (
-            new_status is not None and new_status != 1
-        )
-        if losing and self._count_active_super_admins() <= 1:
-            raise ForbiddenError("系统拥有者保护：不能降级或禁用最后一个超级管理员")
 
     def capabilities(self, principal: Principal) -> dict[str, Any]:
         """当前用户的功能能力（9 模块 + 工具 + 拥有者标志；前端菜单/路由/按钮唯一消费点）。
@@ -444,6 +421,8 @@ class AccessService:
                 module["manage"] = True
                 module["use"] = True
                 module["read"] = True
+        # Partial legacy grants must describe the actual memory read check.
+        modules["memory"]["read"] = "memory.view" in perms
         return {
             "modules": modules,
             "tools": list(self.hermes_toolsets(principal.user_id)),
@@ -456,7 +435,6 @@ class AccessService:
         if self.repo.get_role_id_by_name(role) is None:
             raise InvalidInputError(f"角色不存在: {role}")
         self._require_owner_management(actor, user_id, granting_owner=(role == SUPER_ADMIN_ROLE))
-        self._require_not_last_owner(user_id, new_role=role)
         self.repo.set_user_role(user_id, role)
         self.invalidate_all()
 
@@ -465,7 +443,6 @@ class AccessService:
         if status not in (0, 1):
             raise InvalidInputError("status 只能为 0 或 1")
         self._require_owner_management(actor, user_id)
-        self._require_not_last_owner(user_id, new_status=status)
         self.repo.set_user_status(user_id, status)
         self.invalidate_all()
 
