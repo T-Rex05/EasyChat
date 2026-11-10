@@ -486,3 +486,33 @@ async def test_worker_sanitizes_legacy_workspace_remotes(rig) -> None:
     url = sp.run(["git", "remote", "get-url", "origin"], cwd=str(legacy),
                  capture_output=True, text=True).stdout.strip()
     assert url == "https://github.com/foo/bar.git"
+
+
+async def test_concurrent_claim_single_owner_and_retry_session_monotonic(rig) -> None:
+    """P5 矩阵:双认领只有一个主人(queued→running 同事务 CAS);失败重认领换新 attempt
+    与新 session(旧 session 不复用),晚到结果无法与新运行互相覆盖。"""
+    from backend.modules.superagent.contracts import TASK_FAILED
+
+    service, admin, user, worker, _ = await _rig_with_worker(rig)
+    task = service.create_task(user, title="t", requirement="r")
+    first = service.repo.claim_next_task()
+    assert first is not None
+    claimed_task, attempt1 = first
+    # 第二次认领必须空转:任务已 running
+    assert service.repo.claim_next_task() is None
+    # 模拟执行失败回终态
+    ok = worker._transition_terminal(
+        claimed_task, attempt1, to_status=TASK_FAILED, task_fields={}, report_kind=None,
+    )
+    assert ok is True
+    # 重新受理后再次认领:attempt #2,session 换新
+    service.retry_task(user, task.task_id)
+    second = service.repo.claim_next_task()
+    assert second is not None
+    _t2, attempt2 = second
+    assert attempt2.attempt_no == 2
+    assert attempt2.session_id != attempt1.session_id
+    fresh = service.task(task.task_id)
+    attempts = service.repo.attempts_for_task(task.task_id)
+    assert [a.attempt_no for a in attempts] == [1, 2]
+    assert fresh.active_attempt_id == attempt2.attempt_id
