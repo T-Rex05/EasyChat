@@ -55,7 +55,7 @@
       <div v-if="hasMore" class="load-more-indicator">加载中...</div>
     </div>
     <PanelResizeHandle label="调整历史记录栏宽度" :width="panelWidth"
-      :min="180" :max="420" :initial="280" @resize="panelWidth = $event" />
+      :min="180" :max="420" :initial="280" @resize="onPanelResize" />
   </div>
 </template>
 
@@ -67,7 +67,19 @@ import { getUserSessions, deleteSession, renameSession } from '@/api/session'
 import { useAuthStore } from '@/stores/auth'
 import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
 
-const panelWidth = ref(280)
+// P8 实测缺陷③：拖动宽度此前不落存储，刷新回弹默认值。
+// 初值从 localStorage 读并钳制到当前 [min,max]（旧持久化宽度可能超界）。
+const HISTORY_WIDTH_KEY = 'chatHistoryPanelWidth'
+function persistedHistoryWidth(): number {
+  const raw = Number(localStorage.getItem(HISTORY_WIDTH_KEY))
+  return Number.isFinite(raw) && raw > 0 ? Math.min(420, Math.max(180, raw)) : 280
+}
+const panelWidth = ref(persistedHistoryWidth())
+
+function onPanelResize(width: number) {
+  panelWidth.value = width
+  localStorage.setItem(HISTORY_WIDTH_KEY, String(width))
+}
 
 const sidebarStore = useSidebarStore()
 const chatStore = useChatStore()

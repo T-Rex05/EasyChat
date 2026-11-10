@@ -63,7 +63,7 @@
       </button>
     </div>
     <PanelResizeHandle v-if="!collapsed" label="调整导航栏宽度" :width="panelWidth"
-      :min="180" :max="360" :initial="240" @resize="panelWidth = $event" />
+      :min="180" :max="360" :initial="240" @resize="onPanelResize" />
   </aside>
 </template>
 
@@ -77,7 +77,19 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const collapsed = ref(false)
-const panelWidth = ref(240)
+// P8 缺陷③同修：导航栏宽度持久化 + 读回钳制（旧值可能超出当前 min/max）。
+const NAV_WIDTH_KEY = 'chatNavPanelWidth'
+function persistedNavWidth(): number {
+  const raw = Number(localStorage.getItem(NAV_WIDTH_KEY))
+  return Number.isFinite(raw) && raw > 0 ? Math.min(360, Math.max(180, raw)) : 240
+}
+const panelWidth = ref(persistedNavWidth())
+
+function onPanelResize(width: number) {
+  panelWidth.value = width
+  localStorage.setItem(NAV_WIDTH_KEY, String(width))
+}
+
 const isDark = ref(false)
 
 const userRoleText = computed(() => {
@@ -99,6 +111,9 @@ const userRole = computed(() => authStore.userRole)
 const ITEM_PERM_BY_MODULE: Record<string, string> = {
   chat: 'chat.use', memory: 'memory.view', skills: 'skill.create', schedule: 'cron.create',
   superagent: 'superagent.view', trace: 'trace.view', identity: 'system.manage', config: 'system.config',
+  // P8 实测缺陷：登录响应不含 capabilities 时首帧走回退；缺 ledger 映射会把
+  // 账单入口过滤到刷新才出现（capabilities 就绪后自动以 caps 为准）。
+  ledger: 'ledger.view',
 }
 
 function itemPermOf(module: string): string {
