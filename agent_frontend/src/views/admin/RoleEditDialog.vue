@@ -243,7 +243,8 @@ function detectMode(row: ModuleRow): string {
   const governed = governedPerms(row)
   const current = governed.filter(k => form.permissions.includes(k))
   for (const m of row.modes) {
-    if (m.perms.length === current.length && m.perms.every(k => current.includes(k))) return m.mode
+    const expected = m.perms.filter(k => governed.includes(k))
+    if (expected.length === current.length && m.perms.every(k => form.permissions.includes(k))) return m.mode
   }
   return 'custom'
 }
@@ -275,13 +276,11 @@ function onModeChange(module: string) {
   for (const key of target.perms) {
     if (!form.permissions.includes(key)) form.permissions.push(key)
   }
-  // 依赖提示（账单使用 → 文件依赖自动包含；关闭 → 一并移除文件依赖如果无其他消费方）
+  // 文件依赖也可由高级区显式授予；账单降档保留已有共享授权。
   if (module === 'ledger') {
     if (mode === 'use') {
       modeChangeNote.value = '已自动包含文件上传/读取依赖（账单导入与报告下载需要）。'
     } else {
-      // 关闭/只读：只移除 upload（export 的 read 依赖由高级区手动管理）
-      form.permissions = form.permissions.filter(k => k !== 'file.upload')
       modeChangeNote.value = ''
     }
   } else {
