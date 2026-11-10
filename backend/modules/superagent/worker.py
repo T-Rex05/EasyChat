@@ -794,6 +794,8 @@ async def _run_git(
             cwd=str(cwd) if cwd is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # POSIX:独立进程组,超时回收对整组发信号,git 派生的孙进程随组终止。
+            start_new_session=sys.platform != "win32",
         )
     except OSError as exc:
         raise RuntimeError(f"无法启动 git：{exc}") from exc
@@ -820,7 +822,15 @@ async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
             )
             await asyncio.wait_for(kill.wait(), timeout=15)
         else:
-            process.terminate()
+            # _run_git 以 start_new_session 起进程:子进程即组长,组信号覆盖孙进程;
+            # 非组长(非本库启动)退回单进程 terminate,绝不波及外部进程组。
+            try:
+                if os.getpgid(process.pid) == process.pid:
+                    os.killpg(process.pid, 15)  # signal.SIGTERM
+                else:
+                    process.terminate()
+            except (ProcessLookupError, PermissionError):
+                process.terminate()
         try:
             await asyncio.wait_for(process.wait(), timeout=10)
         except asyncio.TimeoutError:
