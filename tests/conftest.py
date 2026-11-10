@@ -10,6 +10,14 @@ from pathlib import Path
 # 确保项目根目录在 sys.path 中（`from backend... import` 依赖它）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# hermes 内核的顶层 `tools` 包必须先于全局 Python 里其它项目的 editable 安装
+# （site-packages 的 *.pth 会把第三方仓库目录注入 sys.path，其同名 `tools`
+# 抢先绑定后 `from tools.registry import registry` 顺序相关地失败）。
+# conftest 阶段清除可能的抢绑并把内核目录置于最前，保证绑定确定性。
+_HERMES_DIR = Path(__file__).resolve().parent.parent / "backend" / "hermes"
+sys.path.insert(0, str(_HERMES_DIR))
+sys.modules.pop("tools", None)
+
 import pytest
 
 from tests.support.rig import TestRig, make_rig
