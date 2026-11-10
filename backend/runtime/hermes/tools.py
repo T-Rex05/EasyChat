@@ -18,33 +18,7 @@ from typing import Any, Iterable, Union, get_args, get_origin
 
 logger = logging.getLogger(__name__)
 
-# Hermes 内建 toolset（terminal/file/web 等）+ 项目安全 toolset
-BUILTIN_TOOLSETS = frozenset({"terminal", "file", "web"})
-PROJECT_TOOLSETS = frozenset({"schedule", "notification"})
-KNOWN_TOOLSETS = BUILTIN_TOOLSETS | PROJECT_TOOLSETS
-
-# 已废弃 toolset（沿用旧 checker 过滤清单并追加 R14 移除项）
-DEPRECATED_TOOLSETS = frozenset(
-    {"vision", "session_search", "memory", "utility", "data", "email", "paper_repro"}
-)
-
 _registered_tools: set[str] = set()
-
-
-def resolve_enabled_toolsets(role_toolsets: Iterable[str]) -> tuple[list[str], list[str]]:
-    """角色 toolsets → (enabled_toolsets, disabled_toolsets)。
-
-    无效/废弃 toolset 不授予（fail-closed）；terminal/file/web 等内建
-    toolset 直接透传给 AIAgent。
-    """
-    enabled: list[str] = []
-    for t in role_toolsets:
-        if t in DEPRECATED_TOOLSETS:
-            continue
-        if t in KNOWN_TOOLSETS and t not in enabled:
-            enabled.append(t)
-    # __always_available__（时间/待办等基础工具）由 Hermes 自动包含
-    return enabled, []
 
 
 def register_safe_project_tools(
@@ -59,8 +33,10 @@ def register_safe_project_tools(
     ensure()
     from tools.registry import registry  # noqa: PLC0415  (Hermes 顶层模块)
     from backend.tools.tools_decorator import get_project_tools
+    from backend.runtime.contracts import ALWAYS_AVAILABLE_TOOLSET
 
     registered = 0
+    used_toolsets: set[str] = set()
     tools = [*get_project_tools(), *extra_tools]
     for tool in tools:
         name = getattr(tool, "name", getattr(tool, "__name__", "unknown"))
@@ -78,7 +54,26 @@ def register_safe_project_tools(
             override=True,
         )
         _registered_tools.add(name)
+        used_toolsets.add(toolset)
         registered += 1
+    # P9 实测缺陷修复：内核没有自动包含机制。registry 成员要进模型 schema，
+    # toolset 名必须能在 toolsets 解析中被识别——经 create_custom_toolset 声明
+    # （成员并集由 get_toolset(include_registry) 自动完成）。
+    if used_toolsets:
+        from toolsets import create_custom_toolset  # noqa: PLC0415  (Hermes 顶层模块)
+
+        for toolset in used_toolsets:
+            create_custom_toolset(toolset, f"EasyChat project toolset: {toolset}")
+    # 常驻可见注入：tool_search 渐进披露会把非 core 工具折叠进桥接元工具，
+    # 弱模型不会主动发现（内核内 eyes-agent 对 todo_add 有同样的注释先例）。
+    # _HERMES_CORE_TOOLS 是模块级可变 list——运行时注入，不修改内核文件，
+    # 维持 P3 "内核零补丁"治理账。
+    if registered:
+        import toolsets as _ts  # noqa: PLC0415  (Hermes 顶层模块)
+
+        for name in _registered_tools:
+            if name not in _ts._HERMES_CORE_TOOLS:
+                _ts._HERMES_CORE_TOOLS.append(name)
     return registered
 
 

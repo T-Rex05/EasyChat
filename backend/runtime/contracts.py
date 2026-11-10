@@ -8,6 +8,11 @@ from typing import AsyncIterator, Mapping, Protocol
 
 from backend.shared.context import ExecutionContext
 
+# 项目工具（时间/待办/提醒/账本/收件箱/编码受理等 LangChain 工具）的 toolset 标记。
+# 内核没有自动包含机制——对话类 run 的 allowed_tools 需显式带上该组名，
+# 且 Adapter 注册时经 create_custom_toolset 声明，schema 才会暴露给模型（P9 实测缺陷）。
+ALWAYS_AVAILABLE_TOOLSET = "__always_available__"
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeRequest:

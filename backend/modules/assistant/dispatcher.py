@@ -263,7 +263,7 @@ class RunDispatcher:
             self.events.finish(run_id, "failed", {"error": "终态推进失败（状态竞争）"})
 
     def _build_request(self, run: dict[str, Any]) -> Any:
-        from backend.runtime.contracts import RuntimeRequest
+        from backend.runtime.contracts import ALWAYS_AVAILABLE_TOOLSET, RuntimeRequest
         from backend.shared.context import ExecutionContext
 
         owner_id = int(run["owner_id"])
@@ -305,7 +305,9 @@ class RunDispatcher:
             text=text,
             attachment_ids=attachment_ids,
             system_context="",
-            allowed_tools=frozenset(role_toolsets),
+            # 对话 run 显式启用项目工具组（内核无自动包含；权限由 service 层
+            # 逐操作校验，__always_available__ 只表示 schema 可见）。
+            allowed_tools=frozenset(role_toolsets) | {ALWAYS_AVAILABLE_TOOLSET},
             skill_versions=(),
             persona_context=persona_context,
             context_prefix=prefix,
