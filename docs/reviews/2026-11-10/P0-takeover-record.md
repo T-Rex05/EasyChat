@@ -51,7 +51,7 @@
 | P5 恢复/验证/发布 | **核查完成**:操作矩阵 7 操作×前置(源码实测);故障注入 6 场景全部已有回归;新增双认领 CAS+session 单调(21 passed);证据-SHA 时序一致性确认,tree-hash 戳登记为 P7 前置改进 | P5-publish-recovery-record.md |
 | P6 微信受理/追问/回执 | **核查完成**:事件唯一=(platform,account,external_event_id) 实测;操作键服务端哈希+重启幂等;uncertain 不盲发已有回归;新增语义护栏 2 项(tools 5 passed);bot/转发无误判证据保持现状;真实渠道=环境阻塞 | P6-wechat-intake-record.md |
 | P7 webhook 反馈+有限自动修复 | **完成**:验证层 7 项已有回归全绿;实施受控自动修复(0024 默认关,轮数预算,人工暂停不复活,legacy 不触发);修复 webhook 通知同秒 dedup 碰撞缺陷(key_hint+双行断言);迁移清单同步;设置 UI 归 P8,真实投递环境阻塞 | P7-feedback-autofix-record.md |
-| P8 前端验收 | 确认缺口为主(此前 UI 修复已有部分),真实浏览器操作未做 | 计划 §10 P8 |
+| P8 前端验收 | **完成**:真实浏览器矩阵(12 场景);发现并修复缺陷①②③(菜单回退/路由冻结/宽度持久化),双向切换+持久化+钳制端到端验证;前端三检查过 | P8-browser-acceptance.md |
 | P9 全量评审/实单/回滚 | 未开始(依赖 P1–P8) | 计划 §7 |
 | P10 Harness 对照试验 | 单独排期,本轮不动 | 接管指令 |
 
