@@ -2,11 +2,10 @@
   <div class="app-shell">
     <AppSidebar v-if="showSidebar" />
     <main class="app-main" :class="{ 'full-width': !showSidebar }">
-      <router-view v-slot="{ Component }">
-        <transition name="fade" mode="out-in">
-          <component :is="Component" />
-        </transition>
-      </router-view>
+      <!-- P8 实测缺陷②：transition mode="out-in" 要求单根组件；ChatView 三列布局为
+           多根模板，leave 永不完成 → 登录后所有 SPA 路由切换冻结（URL 变、视图不换）。
+           移除过渡保路由正确性；如需动画应先把 ChatView 收敛为单根再恢复。 -->
+      <router-view />
     </main>
   </div>
 </template>
