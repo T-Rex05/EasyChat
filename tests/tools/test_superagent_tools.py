@@ -96,3 +96,30 @@ async def test_tool_gate_error_is_stable_message(rig) -> None:
     )
     assert "error" in result
     assert "未启用" in result["error"]
+
+
+async def test_tool_paraphrase_boundary_and_restart_idempotency(rig) -> None:
+    """P6 语义护栏:①操作键=requirement 内容哈希,同会话换措辞按新任务受理(现状语义,
+    未复现确定性误判故不变更,此测试防静默漂移);②服务重启(新 service 实例同库)后
+    同会话同需求仍幂等——键持久化在库,不依赖内存。"""
+    service, admin, user = _service(rig)
+    (tool,) = build_superagent_tools(superagent=service)
+    context = _ctx(user)
+    first = await tool.ainvoke(
+        {"title": "t", "requirement": "修复登录页的 500"}, config=config_with(context),
+    )
+    rewritten = await tool.ainvoke(
+        {"title": "t", "requirement": "修复登录页 500 错误"}, config=config_with(context),
+    )
+    assert first["task_id"] != rewritten["task_id"]
+    assert len(service.list_tasks(user, limit=10)) == 2
+
+    # 模拟服务重启:同库新 service 实例
+    restarted = SuperagentService(rig.db, access=rig.access)
+    restarted.set_encryption_secret(TEST_ENCRYPTION_SECRET)
+    restarted.runner_ready = True
+    (tool2,) = build_superagent_tools(superagent=restarted)
+    again = await tool2.ainvoke(
+        {"title": "t", "requirement": "修复登录页的 500"}, config=config_with(context),
+    )
+    assert again["task_id"] == first["task_id"]

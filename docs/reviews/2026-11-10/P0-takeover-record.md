@@ -49,7 +49,7 @@
 | P3 Hermes 来源与升级治理 | **核查完成**：来源三层实锤(产品补丁 0、复制期差异恰 5 文件、上游未确认如实记录);集成点 9 项清单;遗留导入定位(skill_manager 死路径候选,待复现后删);架构约束测试已有且双向防漂移(P3-4);候选升级演练=设计阻塞 | P3-hermes-governance.md、hermes-provenance.json |
 | P4 隔离/取消/预算 | **核查完成**:已有行为全部验证通过(73+2 实测);越界实际范围如实报告(同 OS 用户全文件系统,CWD 锚定非隔离);POSIX 进程树缺口已修+新回归;OS 级隔离与 token 硬预算=设计待决 | P4-isolation-record.md |
 | P5 恢复/验证/发布 | **核查完成**:操作矩阵 7 操作×前置(源码实测);故障注入 6 场景全部已有回归;新增双认领 CAS+session 单调(21 passed);证据-SHA 时序一致性确认,tree-hash 戳登记为 P7 前置改进 | P5-publish-recovery-record.md |
-| P6 微信受理/追问/回执 | 已有待验证(/开发 /任务 /补充 /取消 /重试 命令族+持久 inbox 已实现),真实渠道=环境阻塞 | HANDOFF T5、计划 §5 阶段 D |
+| P6 微信受理/追问/回执 | **核查完成**:事件唯一=(platform,account,external_event_id) 实测;操作键服务端哈希+重启幂等;uncertain 不盲发已有回归;新增语义护栏 2 项(tools 5 passed);bot/转发无误判证据保持现状;真实渠道=环境阻塞 | P6-wechat-intake-record.md |
 | P7 webhook 反馈 | 已有待验证(T7 已实现),真实投递=环境阻塞 | HANDOFF T7 |
 | P8 前端验收 | 确认缺口为主(此前 UI 修复已有部分),真实浏览器操作未做 | 计划 §10 P8 |
 | P9 全量评审/实单/回滚 | 未开始(依赖 P1–P8) | 计划 §7 |
