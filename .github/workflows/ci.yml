@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        env:
+          DB_TYPE: sqlite
+        run: pytest tests/ -q -m "not integration and not resources" --tb=short
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      # 新代码路径严格 lint：阻断新增问题（无 || true）
+      - name: Ruff check (new modules, strict)
+        run: ruff check backend/modules/superagent backend/tools/business/superagent_tools.py tests/superagent tests/contracts/test_superagent_api.py --ignore E501
+      # 全仓 lint 降级为提示（历史代码问题不阻断，但可见）
+      - name: Ruff check (whole repo, advisory)
+        continue-on-error: true
+        run: ruff check backend/ tests/ --ignore E501,F401,F403,F405
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: agent_frontend/package-lock.json
+      - name: Install
+        working-directory: agent_frontend
+        run: npm ci
+      - name: Frontend tests
+        working-directory: agent_frontend
+        run: npm test
+      - name: Type check (vue-tsc)
+        working-directory: agent_frontend
+        run: npm run type-check
+      - name: Build
+        working-directory: agent_frontend
+        run: npm run build
