@@ -16,8 +16,10 @@ from backend.modules.superagent.contracts import (
     ATTEMPT_RUNNING,
     CHECKPOINT_ORDER,
     MAX_EVENTS_PER_TASK,
+    TASK_AWAITING_REVIEW,
     TASK_QUEUED,
     TASK_RUNNING,
+    TASK_SUCCEEDED,
     SuperagentSettings,
     SuperagentTask,
     TaskAttempt,
@@ -72,6 +74,7 @@ def _task(row: Any) -> SuperagentTask:
         cancel_requested_at=str(d.get("cancel_requested_at") or ""),
         pr_state=str(d.get("pr_state") or ""),
         outcome=str(d.get("outcome") or ""),
+        auto_fix_rounds=int(d.get("auto_fix_rounds") or 0),
     )
 
 
@@ -167,6 +170,8 @@ class SuperagentRepository:
             updated_at=str(d.get("updated_at") or ""),
             verify_profile=str(d.get("verify_profile") or "[]"),
             allow_unverified_draft=bool(d.get("allow_unverified_draft", 1)),
+            auto_fix_enabled=bool(d.get("auto_fix_enabled", 0)),
+            auto_fix_max_rounds=max(1, int(d.get("auto_fix_max_rounds") or 1)),
         )
 
     def get_token_encrypted(self) -> str:
@@ -189,6 +194,8 @@ class SuperagentRepository:
         max_concurrent: int | None = None,
         verify_profile: str | None = None,
         allow_unverified_draft: bool | None = None,
+        auto_fix_enabled: bool | None = None,
+        auto_fix_max_rounds: int | None = None,
     ) -> None:
         """只更新传入字段；github_token_enc 传空串表示清除凭证。"""
         assignments: list[str] = []
@@ -217,6 +224,12 @@ class SuperagentRepository:
         if allow_unverified_draft is not None:
             assignments.append("allow_unverified_draft=?")
             params.append(1 if allow_unverified_draft else 0)
+        if auto_fix_enabled is not None:
+            assignments.append("auto_fix_enabled=?")
+            params.append(1 if auto_fix_enabled else 0)
+        if auto_fix_max_rounds is not None:
+            assignments.append("auto_fix_max_rounds=?")
+            params.append(max(1, int(auto_fix_max_rounds)))
         assignments.append("updated_at=?")
         params.append(utc_now_iso())
         with self.db.transaction() as conn:
@@ -658,6 +671,28 @@ class SuperagentRepository:
             event_detail="手动重试，重新入队",
             error="", result_summary="", run_id="", finished_at="",
         )
+
+    def auto_fix_requeue(self, task_id: str, *, max_rounds: int, detail: str) -> bool:
+        """P7 有限自动修复入队：仅 succeeded/awaiting_review 且轮次未超预算。
+        人工暂停（cancel_requested/cancelled）与非终态天然被状态白名单排除。"""
+        now = utc_now_iso()
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE superagent_tasks SET status=?, phase='', version=version+1, "
+                "updated_at=?, error='', result_summary='', run_id='', finished_at='', "
+                "auto_fix_rounds=auto_fix_rounds+1 "
+                "WHERE id=? AND status IN (?,?) AND auto_fix_rounds<?",
+                (TASK_QUEUED, now, task_id, TASK_SUCCEEDED, TASK_AWAITING_REVIEW,
+                 max(1, int(max_rounds))),
+            )
+            if cur.rowcount != 1:
+                return False
+            conn.execute(
+                "INSERT INTO superagent_events(task_id, kind, detail, created_at) "
+                "VALUES(?,?,?,?)",
+                (task_id, "auto_fix_queued", detail[:2000], now),
+            )
+        return True
 
     def reset_running_to_interrupted(self) -> int:
         """启动恢复：遗留 running 任务/attempt 标 interrupted（与 assistant 一致，不自动重跑）。"""

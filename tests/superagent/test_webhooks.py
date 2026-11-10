@@ -238,3 +238,101 @@ def _drain_with(hooks: WebhookService, queue: JobQueue) -> list[str]:
         results.append(hooks.process_event(event_id))
         queue.complete(lease)
     return results
+
+
+async def test_auto_fix_requeues_terminal_task_when_enabled(rig) -> None:
+    """P7：开关开启，CI 失败把已发布成功任务重新入队（轮次+1、修复输入注入、原任务分支复用）。"""
+    from backend.modules.delivery.contracts import DeliveryTarget
+
+    ready, service, hooks, queue, admin, user, delivery = await _env(rig)
+    service.update_settings(admin, auto_fix_enabled=True, auto_fix_max_rounds=2)
+    task = service.create_task(
+        user, title="t", requirement="r", idempotency_key="af-1",
+        source="wechat",
+        source_target=DeliveryTarget(kind="wechat", ref="wx-af", channel_account_id="chn_1"),
+    )
+    claimed = service.repo.claim_next_task()
+    assert claimed is not None
+    _t, attempt = claimed
+    from backend.modules.superagent.contracts import CK_PUSHED
+
+    service.repo.update_attempt(attempt.attempt_id, head_sha="f" * 40, checkpoint=CK_PUSHED)
+    service.repo.transition_task(task.task_id, from_statuses={"running"}, to_status="succeeded")
+    _ingest(hooks, "check_run",
+            {"action": "completed", "repository": {"full_name": "foo/bar"},
+             "check_run": {"name": "pytest", "conclusion": "failure", "head_sha": "f" * 40},
+             "pull_request": {"number": 13,
+                              "body": f"EasyChat-Superagent-Task: {task.task_id}",
+                              "head": {"sha": "f" * 40}},
+             "sender": {"login": "maintainer", "type": "User"}},
+            delivery_id="d-af1")
+    results = _drain_with(hooks, queue)
+    assert "auto_fix_queued" in results
+    fresh = service.task(task.task_id)
+    assert fresh.status == "queued" and fresh.auto_fix_rounds == 1
+    inputs = service.repo.unconsumed_inputs(task.task_id)
+    assert any("[自动修复]" in str(i.text) for i in inputs)
+    # 同一事件内的两条通知（❌CI 失败 + 🔁自动入队）必须各自成行：
+    # 时间戳键同秒碰撞会被 enqueue 合并为既有行。
+    conn = ready.db.connect()
+    try:
+        notes = conn.execute(
+            "SELECT content_text FROM deliveries WHERE source='superagent'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(notes) == 2
+    assert any("🔁" in str(r["content_text"]) for r in notes)
+
+
+async def test_auto_fix_budget_exhausted_blocks(rig) -> None:
+    """P7：预算耗尽→blocked 等人工，不再入队；CAS 保证只迁移一次。"""
+    ready, service, hooks, queue, admin, user, _ = await _env(rig)
+    service.update_settings(admin, auto_fix_enabled=True, auto_fix_max_rounds=1)
+    service.create_task(user, title="t", requirement="r", idempotency_key="af-2")
+    claimed = service.repo.claim_next_task()
+    task, attempt = claimed  # type: ignore[misc]
+    from backend.modules.superagent.contracts import CK_PUSHED
+
+    service.repo.update_attempt(attempt.attempt_id, head_sha="g" * 40, checkpoint=CK_PUSHED)
+    service.repo.transition_task(task.task_id, from_statuses={"running"}, to_status="succeeded")
+    # 预支一轮：模拟预算已用完
+    service.repo.auto_fix_requeue(task.task_id, max_rounds=1, detail="第 1 轮")
+    service.repo.transition_task(task.task_id, from_statuses={"queued"}, to_status="succeeded")
+    _ingest(hooks, "check_run",
+            {"action": "completed", "repository": {"full_name": "foo/bar"},
+             "check_run": {"name": "pytest", "conclusion": "failure", "head_sha": "g" * 40},
+             "pull_request": {"number": 14,
+                              "body": f"EasyChat-Superagent-Task: {task.task_id}",
+                              "head": {"sha": "g" * 40}},
+             "sender": {"login": "maintainer", "type": "User"}},
+            delivery_id="d-af2")
+    results = _drain_with(hooks, queue)
+    assert "auto_fix_budget_exhausted" in results
+    fresh = service.task(task.task_id)
+    assert fresh.status == "blocked" and fresh.auto_fix_rounds == 1
+
+
+async def test_auto_fix_skips_human_paused(rig) -> None:
+    """P7：人工暂停态（cancel_requested）不被自动修复触活——只有人类指令能解除暂停。"""
+    ready, service, hooks, queue, admin, user, _ = await _env(rig)
+    service.update_settings(admin, auto_fix_enabled=True, auto_fix_max_rounds=2)
+    service.create_task(user, title="t", requirement="r", idempotency_key="af-3")
+    claimed = service.repo.claim_next_task()
+    task, attempt = claimed  # type: ignore[misc]
+    from backend.modules.superagent.contracts import CK_PUSHED
+
+    service.repo.update_attempt(attempt.attempt_id, head_sha="h" * 40, checkpoint=CK_PUSHED)
+    service.repo.transition_task(task.task_id, from_statuses={"running"},
+                                 to_status="cancel_requested")
+    _ingest(hooks, "check_run",
+            {"action": "completed", "repository": {"full_name": "foo/bar"},
+             "check_run": {"name": "pytest", "conclusion": "failure", "head_sha": "h" * 40},
+             "pull_request": {"number": 15,
+                              "body": f"EasyChat-Superagent-Task: {task.task_id}",
+                              "head": {"sha": "h" * 40}},
+             "sender": {"login": "maintainer", "type": "User"}},
+            delivery_id="d-af3")
+    results = _drain_with(hooks, queue)
+    assert "ci_failure_reported" in results and "auto_fix_queued" not in results
+    assert service.task(task.task_id).auto_fix_rounds == 0

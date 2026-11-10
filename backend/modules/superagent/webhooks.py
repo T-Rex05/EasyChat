@@ -32,6 +32,8 @@ from backend.modules.superagent.contracts import (
     REPORT_BLOCKED,
     REPORT_PROGRESS,
     TASK_AWAITING_REVIEW,
+    TASK_BLOCKED,
+    TASK_SUCCEEDED,
 )
 from backend.modules.superagent.credentials import parse_repo_url
 from backend.platform.jobs import JobQueue
@@ -228,7 +230,58 @@ class WebhookService:
             f"❌ {summary}\n详情见 GitHub Checks；需要修复可在 Web 面板重试，"
             f"或回复「/补充 {task.task_id[-6:]} 修复说明」。",
         )
-        return "ci_failure_reported"
+        auto = self._try_auto_fix(task, head_sha, str(fields.get("check_name") or "check"))
+        return auto or "ci_failure_reported"
+
+    def _try_auto_fix(self, task, head_sha: str, check_name: str) -> str:
+        """P7 有限自动修复：开关开启时把终态任务重新入队做最小修复。
+
+        约束：默认关闭（能力开关默认关闭）；轮数预算按任务累计，耗尽转 blocked 等人工；
+        人工暂停（cancel_requested/cancelled）与非终态被状态白名单天然排除；
+        旧任务无仓库快照不触发（与重试安全规则一致）；墙钟沿用 attempt run_timeout，
+        token 无内核级硬上限（口径见 P4 记录 §1）。
+        """
+        settings = self.superagent.repo.get_settings()
+        if not settings.auto_fix_enabled or task.legacy_config_unknown:
+            return ""
+        if task.auto_fix_rounds >= settings.auto_fix_max_rounds:
+            moved = self.superagent.repo.transition_task(
+                task.task_id,
+                from_statuses=frozenset({TASK_SUCCEEDED, TASK_AWAITING_REVIEW}),
+                to_status=TASK_BLOCKED,
+                event_kind="auto_fix_budget",
+                event_detail=f"自动修复预算耗尽（上限 {settings.auto_fix_max_rounds} 轮），等待人工处理",
+            )
+            if moved:
+                self._notify(
+                    task,
+                    f"⛔ 任务 {task.task_id[-6:]} 自动修复预算耗尽"
+                    f"（已 {task.auto_fix_rounds}/{settings.auto_fix_max_rounds} 轮），已置为受阻等待人工。",
+                    key_hint=f"af-b{task.auto_fix_rounds}-{head_sha[:12]}",
+                )
+            return "auto_fix_budget_exhausted" if moved else ""
+        queued = self.superagent.repo.auto_fix_requeue(
+            task.task_id,
+            max_rounds=settings.auto_fix_max_rounds,
+            detail=(
+                f"CI 失败自动修复第 {task.auto_fix_rounds + 1}/"
+                f"{settings.auto_fix_max_rounds} 轮（head {head_sha[:12]}）"
+            ),
+        )
+        if not queued:
+            return ""
+        self._append_input(
+            task,
+            f"[自动修复] CI 失败（head {head_sha[:12]}，check {check_name}）："
+            f"请在现有分支 `{task.branch}` 上做最小修复，使该检查通过；不要扩大改动范围。",
+        )
+        self._notify(
+            task,
+            f"🔁 任务 {task.task_id[-6:]} 已入队自动修复第 {task.auto_fix_rounds + 1}/"
+            f"{settings.auto_fix_max_rounds} 轮（CI 失败 head {head_sha[:12]}）。",
+            key_hint=f"af-q{task.auto_fix_rounds + 1}-{head_sha[:12]}",
+        )
+        return "auto_fix_queued"
 
     # ---- 工具 --------------------------------------------------------------------
 
@@ -323,7 +376,7 @@ class WebhookService:
                 (utc_now_iso(), task.task_id),
             )
 
-    def _notify(self, task, text: str) -> None:
+    def _notify(self, task, text: str, *, key_hint: str = "") -> None:
         delivery = getattr(self.superagent, "delivery", None)
         if delivery is None:
             return
@@ -331,9 +384,12 @@ class WebhookService:
         if target is None:
             return
         try:
+            # key_hint：同一事件内多条通知（如 CI 失败+自动入队）必须各自成行。
+            # 时间戳键在同一秒会碰撞（enqueue 对同键返回既有行、不新建）。
+            stamp = key_hint or utc_now_iso()
             delivery.enqueue_text(
                 owner_id=task.owner_id, target=target, text=text,
-                dedup_key=f"superagent:wh:{task.task_id}:{utc_now_iso()}",
+                dedup_key=f"superagent:wh:{task.task_id}:{stamp}",
                 source="superagent",
             )
         except Exception:  # noqa: BLE001

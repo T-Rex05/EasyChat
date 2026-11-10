@@ -41,6 +41,7 @@ from backend.modules.superagent.contracts import (
 )
 from backend.modules.superagent.credentials import RepoUrlError, parse_repo_url
 from backend.modules.superagent.repository import SuperagentRepository
+from backend.modules.superagent.contracts import MAX_AUTO_FIX_ROUNDS
 from backend.modules.superagent.verification import MAX_VERIFY_COMMANDS, load_verify_commands
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
@@ -137,9 +138,13 @@ class SuperagentService:
         max_concurrent: int | None = None,
         verify_profile: str | None = None,
         allow_unverified_draft: bool | None = None,
+        auto_fix_enabled: bool | None = None,
+        auto_fix_max_rounds: int | None = None,
     ) -> SuperagentSettings:
         self.access.validate_principal(principal)
         self.access.require_permission(principal, "superagent.manage")
+        if auto_fix_max_rounds is not None and int(auto_fix_max_rounds) > MAX_AUTO_FIX_ROUNDS:
+            raise InvalidInputError(f"自动修复轮数最多 {MAX_AUTO_FIX_ROUNDS}")
         encrypted_payload: str | None = None
         if repo_url is not None and repo_url.strip():
             try:
@@ -165,6 +170,8 @@ class SuperagentService:
             max_concurrent=max_concurrent,
             verify_profile=verify_profile,
             allow_unverified_draft=allow_unverified_draft,
+            auto_fix_enabled=auto_fix_enabled,
+            auto_fix_max_rounds=auto_fix_max_rounds,
         )
         return self.repo.get_settings()
 

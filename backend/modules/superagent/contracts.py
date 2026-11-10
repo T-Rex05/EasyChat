@@ -127,6 +127,7 @@ SOURCE_INPUT_CLARIFY = "clarify"
 MAX_EVENTS_PER_TASK = 200
 REQUIREMENT_MAX_CHARS = 8000
 SUMMARY_MAX_CHARS = 2000
+MAX_AUTO_FIX_ROUNDS = 5  # P7 有限自动修复：轮数预算的部署级上限
 
 # 追问协议：代理最终回复以该前缀行结尾表示需要用户补充（worker 解析后进入 waiting_input）
 QUESTION_PREFIX = "QUESTION:"
@@ -173,6 +174,7 @@ class SuperagentTask:
     cancel_requested_at: str = ""
     pr_state: str = ""
     outcome: str = ""
+    auto_fix_rounds: int = 0  # 已消耗的自动修复轮次（预算=auto_fix_max_rounds）
 
     @property
     def legacy_config_unknown(self) -> bool:
@@ -249,3 +251,5 @@ class SuperagentSettings:
     updated_at: str
     verify_profile: str = "[]"
     allow_unverified_draft: bool = True
+    auto_fix_enabled: bool = False  # P7 有限自动修复：默认关闭（能力开关默认关闭）
+    auto_fix_max_rounds: int = 1

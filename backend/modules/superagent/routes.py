@@ -18,6 +18,8 @@ class SettingsBody(BaseModel):
     max_concurrent: int | None = None
     verify_profile: str | None = None
     allow_unverified_draft: bool | None = None
+    auto_fix_enabled: bool | None = None
+    auto_fix_max_rounds: int | None = None
 
 
 class TaskCreateBody(BaseModel):
@@ -50,6 +52,7 @@ def _task_dict(task) -> dict[str, Any]:
         "result_summary": task.result_summary,
         "error": task.error,
         "attempts": task.attempts,
+        "auto_fix_rounds": task.auto_fix_rounds,
         "active_attempt_id": task.active_attempt_id,
         "cancel_requested": bool(task.cancel_requested_at),
         "legacy_config_unknown": task.legacy_config_unknown,
@@ -71,6 +74,8 @@ def _settings_dict(settings) -> dict[str, Any]:
         "max_concurrent": settings.max_concurrent,
         "verify_profile": settings.verify_profile,
         "allow_unverified_draft": settings.allow_unverified_draft,
+        "auto_fix_enabled": settings.auto_fix_enabled,
+        "auto_fix_max_rounds": settings.auto_fix_max_rounds,
         "updated_at": settings.updated_at,
     }
 
@@ -113,6 +118,8 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
             max_concurrent=body.max_concurrent,
             verify_profile=body.verify_profile,
             allow_unverified_draft=body.allow_unverified_draft,
+            auto_fix_enabled=body.auto_fix_enabled,
+            auto_fix_max_rounds=body.auto_fix_max_rounds,
         )
         return {"settings": _settings_dict(settings)}
 
