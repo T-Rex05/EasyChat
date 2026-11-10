@@ -1,0 +1,57 @@
+FFF.FF...F                                                               [100%]
+================================== FAILURES ===================================
+__________ test_concurrent_owner_losses_leave_one_active_owner[role] __________
+test_access_draft.py:63: in test_concurrent_owner_losses_leave_one_active_owner
+    assert sorted(outcomes) == ["changed", "denied"]
+E   AssertionError: assert ['changed', 'changed'] == ['changed', 'denied']
+E     
+E     At index 1 diff: 'changed' != 'denied'
+E     Use -v to get more diff
+_________ test_concurrent_owner_losses_leave_one_active_owner[status] _________
+test_access_draft.py:63: in test_concurrent_owner_losses_leave_one_active_owner
+    assert sorted(outcomes) == ["changed", "denied"]
+E   AssertionError: assert ['changed', 'changed'] == ['changed', 'denied']
+E     
+E     At index 1 diff: 'changed' != 'denied'
+E     Use -v to get more diff
+_________ test_role_rename_preserves_members_permissions_and_toolsets _________
+test_access_draft.py:82: in test_role_rename_preserves_members_permissions_and_toolsets
+    assert access.snapshot_principal(member.user_id).role == "after"
+E   AssertionError: assert 'before' == 'after'
+E     
+E     - after
+E     + before
+___________ test_unknown_keys_are_inert_from_role_and_user_override ___________
+test_access_draft.py:102: in test_unknown_keys_are_inert_from_role_and_user_override
+    assert access.effective_permissions(member.user_id) == frozenset({"chat.use"})
+E   AssertionError: assert frozenset({'c....permission'}) == frozenset({'chat.use'})
+E     
+E     Extra items in the left set:
+E     'removed.grant'
+E     'removed.permission'
+E     Use -v to get more diff
+_ test_memory_capabilities_match_actual_atomic_checks[permissions0-False-True] _
+test_access_draft.py:121: in test_memory_capabilities_match_actual_atomic_checks
+    assert capability["read"] is read
+E   assert True is False
+_________________ test_explicit_empty_registry_grants_nothing _________________
+test_access_draft.py:128: in test_explicit_empty_registry_grants_nothing
+    assert effective_permissions(role_name="user", role_permissions=ALL_PERMISSION_KEYS,
+E   AssertionError: assert frozenset({'c...upload', ...}) == frozenset()
+E     
+E     Extra items in the left set:
+E     'ledger.export'
+E     'skill.manage'
+E     'file.read'
+E     'system.manage'
+E     'memory.edit'...
+E     
+E     ...Full output truncated (18 lines hidden), use '-vv' to show
+=========================== short test summary info ===========================
+FAILED test_access_draft.py::test_concurrent_owner_losses_leave_one_active_owner[role]
+FAILED test_access_draft.py::test_concurrent_owner_losses_leave_one_active_owner[status]
+FAILED test_access_draft.py::test_role_rename_preserves_members_permissions_and_toolsets
+FAILED test_access_draft.py::test_unknown_keys_are_inert_from_role_and_user_override
+FAILED test_access_draft.py::test_memory_capabilities_match_actual_atomic_checks[permissions0-False-True]
+FAILED test_access_draft.py::test_explicit_empty_registry_grants_nothing - As...
+6 failed, 4 passed in 3.99s
