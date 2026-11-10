@@ -8,7 +8,7 @@
 2. 应用补丁：`git apply docs/reviews/2026-11-10/access-fixes.draft.patch` 成功，改动 4 文件（api.py −24、repository.py +23、policy.py +3、test_policy.py 修正一处允许已移除键 kb.manage 的旧断言）。
 3. 逐行评审结论：四项均为最小改动——①最后拥有者检查移入 repository 的 `db.transaction()`(BEGIN IMMEDIATE) 内，消除检查/更新间 TOCTOU，两条写入口（set_user_role/set_user_status）全覆盖；②改名同步 `users.role` 与 roles 更新同事务，冲突时靠事务回滚成员同步；③`effective_permissions` 默认注册集从空改为 `ALL_PERMISSION_KEYS` 并在撤销前先与注册表求交（撤销仍最后生效）；④capabilities 的 memory.read 改为按实际原子检查（仅 `memory.view`），不扩大授权。
 4. 悬空引用检查：`grep _require_not_last_owner|_count_active_super_admins` 无残留调用方；`routes.py` 的 effective_permissions 走 service 委托，继承新默认值（实测 grep）。
-5. 回归归位：草稿回归复制入 `tests/access/test_access_draft.py`（8 项），永久进入 CI。
+5. 回归归位：草稿回归复制入 `tests/access/test_access_draft.py`（6 个函数，实跑含展开；实测 `--collect-only` tests/access=53），永久进入 CI。
 6. 应用后验证（实测）：定向 `tests/access tests/security tests/contracts/test_tool_context.py` → **71 passed**；全量 `tests -m "not integration and not resources"` → **1140 passed, 2 skipped**（基线 1130+10 新增，无回归）。
 
 ## 回滚
