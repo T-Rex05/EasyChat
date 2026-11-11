@@ -70,6 +70,7 @@ static/charts/
 *.jpeg
 *.gif
 !backend/hermes/optional-skills/**/*.png
+!docs/superpowers/specs/assets/**/*.png
 !backend/hermes/optional-skills/**/*.jpg
 
 # ==================== 测试/覆盖率 ====================

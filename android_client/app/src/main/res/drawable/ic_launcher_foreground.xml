@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小暖 logo:圆角房子 + 心(概念图 logo 方向,矢量重绘) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.62"
+        android:scaleY="0.62"
+        android:pivotX="54"
+        android:pivotY="54">
+        <path
+            android:pathData="M22 52 L54 24 L86 52"
+            android:strokeColor="#A94E34"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M31 47 V79 A6 6 0 0 0 37 85 H71 A6 6 0 0 0 77 79 V47"
+            android:strokeColor="#A94E34"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M54 71.5 C46.5 65.5 43.5 61.5 43.5 57.8 C43.5 54.8 46 52.8 48.6 52.8 C50.6 52.8 52.6 54 54 55.9 C55.4 54 57.4 52.8 59.4 52.8 C62 52.8 64.5 54.8 64.5 57.8 C64.5 61.5 61.5 65.5 54 71.5 Z"
+            android:fillColor="#A94E34" />
+    </group>
+</vector>

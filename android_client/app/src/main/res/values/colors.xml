@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 仅用于启动窗口底色,避免冷启动白闪;完整主题在 Compose 内(设计 §3.2) -->
+    <color name="xn_window_background">#FFF8F0</color>
+    <color name="xn_launcher_background">#F3E2D3</color>
+</resources>
