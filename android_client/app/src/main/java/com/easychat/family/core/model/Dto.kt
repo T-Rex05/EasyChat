@@ -215,3 +215,16 @@ data class InboxItemDto(
     val created_at: String = "",
     val updated_at: String = "",
 )
+
+@Serializable
+data class OccurrenceListResponse(val occurrences: List<OccurrenceDto> = emptyList())
+
+@Serializable
+data class OccurrenceDto(
+    val occurrence_id: String = "",
+    val scheduled_at: String = "",
+    val state: String = "", // pending | queued | sent?(以服务端实际状态为准)
+    val delivery_id: String = "",
+    val job_id: String = "",
+    val missed: Int = 0,
+)

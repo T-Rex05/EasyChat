@@ -1,9 +1,7 @@
 package com.easychat.family.feature.life
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,9 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,43 +25,58 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.easychat.family.R
 import com.easychat.family.core.designsystem.XnCard
-import com.easychat.family.core.designsystem.XnEmptyState
 import com.easychat.family.core.designsystem.XnIcon
-import com.easychat.family.core.designsystem.XnMockBadge
 import com.easychat.family.core.designsystem.XnRow
 import com.easychat.family.core.designsystem.XnSectionHeader
 import com.easychat.family.core.designsystem.XnSourceChip
 import com.easychat.family.core.designsystem.XnSpacing
 import com.easychat.family.core.designsystem.XnUpdatedTag
+import com.easychat.family.core.model.InboxItemDto
+import com.easychat.family.core.model.MemoryDto
+import com.easychat.family.core.model.ScheduleDto
+import com.easychat.family.core.util.XnTime
+import java.time.LocalDateTime
 
 /**
- * 生活(设计 §4/§5.4-5.6):日程 / 记下的事 / 收藏 三个分区,厨房为后续规划
- * 入口(按真实发布能力显示,WP1 只展示预留说明)。
- * WP1 全部为示例数据;WP3/WP4 接入真实 schedules/memory/inbox。
+ * 生活(设计 §5.4-5.6 + §4):日程 / 记下的事 / 收藏 三分区真实数据;
+ * 日程支持 暂停/恢复/删除/详情(触发实例),新建用明确表单(WP4)。
+ * 厨房为预留入口,随真实能力发布。
  */
 @Composable
-fun LifeScreen() {
+fun LifeScreen(onNewReminder: () -> Unit = {}) {
+    val vm: LifeViewModel = viewModel()
+    val state by vm.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf("日程") }
+    var showNew by rememberSaveable { mutableStateOf(false) }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(XnSpacing.page),
         verticalArrangement = Arrangement.spacedBy(XnSpacing.lg),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("生活", Modifier.weight(1f), style = MaterialTheme.typography.displaySmall)
-            XnMockBadge()
+            XnIcon(R.drawable.ic_nav_life, contentDescription = "刷新", onClick = { vm.refresh() })
         }
         SegmentedTabs(selected = tab, onSelect = { tab = it })
-        when (tab) {
-            "日程" -> ScheduleSection()
-            "记下的事" -> MemorySection()
-            else -> BookmarkSection()
+        if (state.message.isNotBlank()) {
+            XnCard(Modifier.fillMaxWidth(), onClick = vm::clearMessage) {
+                Text(state.message, style = MaterialTheme.typography.bodyLarge)
+                Text("知道了", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+            }
         }
-        // 厨房预留入口(设计 §9):随真实能力发布,当前只显示说明
+        when (tab) {
+            "日程" -> ScheduleSection(state, vm, onNewReminder = { showNew = true })
+            "记下的事" -> MemorySection(state.memories)
+            else -> BookmarkSection(state.bookmarks)
+        }
+        // 厨房预留入口(设计 §9):随真实能力发布
         XnCard(Modifier.fillMaxWidth()) {
             XnRow(Modifier.fillMaxWidth()) {
-                XnIcon(R.drawable.ic_kitchen, contentDescription = null, tint = XnSageTint())
+                XnIcon(R.drawable.ic_kitchen, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                 Column(Modifier.padding(start = XnSpacing.md)) {
                     Text("厨房 · 后续规划", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -73,10 +89,180 @@ fun LifeScreen() {
         }
         Spacer(Modifier.padding(bottom = XnSpacing.sm))
     }
+
+    if (showNew) {
+        NewReminderDialog(
+            onDismiss = { showNew = false },
+            onCreate = { title, text, at ->
+                vm.createSchedule(title, text, at) { ok -> if (ok) showNew = false }
+            },
+        )
+    }
+
+    state.detail?.let { detail ->
+        ScheduleDetailDialog(
+            detail = detail,
+            onToggle = { vm.setEnabled(detail.schedule, it) },
+            onDelete = { vm.delete(detail.schedule) },
+            onDismiss = vm::closeDetail,
+        )
+    }
 }
 
 @Composable
-private fun XnSageTint() = MaterialTheme.colorScheme.secondary
+private fun ScheduleSection(state: LifeUiState, vm: LifeViewModel, onNewReminder: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
+        XnSectionHeader("提醒计划", iconRes = R.drawable.ic_calendar, actionText = "新建提醒", onAction = onNewReminder)
+        when (val s = state.schedules) {
+            is com.easychat.family.feature.today.BlockState.Ready -> {
+                if (s.data.isEmpty()) {
+                    XnCard(Modifier.fillMaxWidth()) {
+                        Text(
+                            "还没有提醒。点右上角「新建提醒」,或直接在微信里跟我说。",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
+                s.data.forEach { schedule -> ScheduleRow(schedule, vm) }
+            }
+            is com.easychat.family.feature.today.BlockState.Error -> XnCard(Modifier.fillMaxWidth(), onClick = vm::refresh) {
+                Text(s.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+                Text("点这里重试", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+            }
+            com.easychat.family.feature.today.BlockState.Loading -> XnCard(Modifier.fillMaxWidth()) {
+                Text("正在读取…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleRow(schedule: ScheduleDto, vm: LifeViewModel) {
+    XnCard(Modifier.fillMaxWidth(), onClick = { vm.openDetail(schedule) }) {
+        XnRow(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(end = XnSpacing.lg)) {
+                val timeText = if (schedule.next_run_at > 0.0) {
+                    XnTime.formatNextRun(
+                        schedule.next_run_at.toLong(),
+                        now = LocalDateTime.now(XnTime.DEFAULT_ZONE),
+                    )
+                } else schedule.at_time
+                Text(timeText, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                Text(repeatText(schedule), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(schedule.title.ifBlank { schedule.text.take(20).ifBlank { "提醒" } }, style = MaterialTheme.typography.titleMedium)
+                XnRow(verticalAlignment = Alignment.CenterVertically) {
+                    XnSourceChip(if (schedule.enabled) "已启用" else "已暂停")
+                    if (schedule.content_kind == "briefing") XnSourceChip("简报")
+                }
+            }
+        }
+    }
+}
+
+private fun repeatText(schedule: ScheduleDto): String = when (schedule.kind) {
+    "once" -> "一次"
+    "daily" -> "每天"
+    "weekly" -> "每周"
+    "interval" -> "每隔 ${schedule.interval_seconds / 60} 分钟"
+    else -> schedule.kind
+}
+
+@Composable
+private fun MemorySection(state: com.easychat.family.feature.today.BlockState<List<MemoryDto>>) {
+    Column(verticalArrangement = Arrangement
+.spacedBy(XnSpacing.md)) {
+        when (state) {
+            is com.easychat.family.feature.today.BlockState.Ready -> {
+                if (state.data.isEmpty()) {
+                    XnCard(Modifier.fillMaxWidth()) {
+                        Text("还没有记下的事。跟我说「记住…」,我就会帮你记住。", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                state.data.forEach { memory -> MemoryRow(memory) }
+            }
+            is com.easychat.family.feature.today.BlockState.Error -> XnCard(Modifier.fillMaxWidth()) {
+                Text(state.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+            }
+            com.easychat.family.feature.today.BlockState.Loading -> XnCard(Modifier.fillMaxWidth()) {
+                Text("正在读取…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryRow(memory: MemoryDto) {
+    XnCard(Modifier.fillMaxWidth()) {
+        XnRow(Modifier.fillMaxWidth()) {
+            XnIcon(R.drawable.ic_note, contentDescription = null)
+            Column(Modifier.weight(1f).padding(start = XnSpacing.md)) {
+                Text(memory.content, style = MaterialTheme.typography.bodyLarge)
+                XnRow(verticalAlignment = Alignment.CenterVertically) {
+                    XnSourceChip(kindText(memory.kind))
+                    XnUpdatedTag(XnTime.formatIso(memory.recorded_at))
+                }
+                Text(
+                    if (memory.source_type == "user_confirmed") "你确认过的记录" else "小暖整理的,点此确认或修改",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun kindText(kind: String): String = when (kind) {
+    "preference" -> "偏好"
+    "event" -> "重要的事"
+    "fact" -> "生活信息"
+    "experience" -> "经历"
+    else -> kind
+}
+
+@Composable
+private fun BookmarkSection(state: com.easychat.family.feature.today.BlockState<List<InboxItemDto>>) {
+    Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
+        when (state) {
+            is com.easychat.family.feature.today.BlockState.Ready -> {
+                if (state.data.isEmpty()) {
+                    XnCard(Modifier.fillMaxWidth()) {
+                        Text("收藏是空的。微信里发「/存 链接」,或在网页上收藏,都会出现在这里。", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                state.data.forEach { item ->
+                    XnCard(Modifier.fillMaxWidth()) {
+                        XnRow(Modifier.fillMaxWidth()) {
+                            XnIcon(R.drawable.ic_bookmark, contentDescription = null)
+                            Column(Modifier.weight(1f).padding(start = XnSpacing.md)) {
+                                Text(item.title.ifBlank { item.url.ifBlank { "收藏" } }, style = MaterialTheme.typography.titleMedium)
+                                if (item.summary.isNotBlank()) {
+                                    Text(item.summary, style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                XnUpdatedTag(domainOf(item.url) + " · " + XnTime.formatIso(item.created_at))
+                            }
+                        }
+                    }
+                }
+            }
+            is com.easychat.family.feature.today.BlockState.Error -> XnCard(Modifier.fillMaxWidth()) {
+                Text(state.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+            }
+            com.easychat.family.feature.today.BlockState.Loading -> XnCard(Modifier.fillMaxWidth()) {
+                Text("正在读取…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+private fun domainOf(url: String): String = try {
+    java.net.URI(url).host ?: ""
+} catch (_: Exception) {
+    ""
+}
 
 @Composable
 private fun SegmentedTabs(selected: String, onSelect: (String) -> Unit) {
@@ -103,124 +289,111 @@ private fun SegmentedTabs(selected: String, onSelect: (String) -> Unit) {
     }
 }
 
+/** 新建提醒(设计 §5.4 明确表单):确认区自然语言复述下一次提醒时间。 */
 @Composable
-private fun ScheduleSection() {
-    Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
-        // 周日历(WP1 静态;WP4 按时区/重复规则计算)
-        XnCard(Modifier.fillMaxWidth()) {
-            XnRow(Modifier.fillMaxWidth(), spacingDp = 4) {
-                listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { index, day ->
-                    val dayNum = 17 + index
-                    val isSel = index == 2
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(day, style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Box(
-                            Modifier.padding(top = XnSpacing.xs).background(
-                                if (isSel) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent,
-                                CircleShape,
-                            ).padding(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                "$dayNum",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (isSel) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurface,
-                            )
+private fun NewReminderDialog(onDismiss: () -> Unit, onCreate: (String, String, LocalDateTime) -> Unit) {
+    var title by rememberSaveable { mutableStateOf("") }
+    var text by rememberSaveable { mutableStateOf("") }
+    var date by rememberSaveable { mutableStateOf("") }
+    var time by rememberSaveable { mutableStateOf("") }
+    val parsed = runCatching {
+        LocalDateTime.of(
+            java.time.LocalDate.parse(date.trim()),
+            java.time.LocalTime.parse(time.trim()),
+        )
+    }.getOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建提醒", style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
+                OutlinedTextField(title, { title = it }, label = { Text("提醒什么(标题)") }, singleLine = true,
+                    shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(text, { text = it }, label = { Text("补充说明(可选)") },
+                    shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(date, { date = it }, label = { Text("日期(如 2026-11-12)") }, singleLine = true,
+                    shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(time, { time = it }, label = { Text("时间(如 15:00)") }, singleLine = true,
+                    shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth())
+                Text(
+                    parsed?.let {
+                        "记好后,会在 " + XnTime.formatNextRun(
+                            it.atZone(XnTime.DEFAULT_ZONE).toEpochSecond(),
+                            now = LocalDateTime.now(XnTime.DEFAULT_ZONE),
+                        ) + " 通过微信提醒你。"
+                    } ?: "请填写日期和时间,到时间会通过微信提醒你。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { parsed?.let { onCreate(title, text, it) } }, enabled = parsed != null) {
+                Text("记好")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("先不建") } },
+    )
+}
+
+/** 详情:下次提醒 + 最近触发(未来=预计提醒,真实实例=实际状态,设计 §5.4)。 */
+@Composable
+private fun ScheduleDetailDialog(
+    detail: ScheduleDetailState,
+    onToggle: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var confirmDelete by rememberSaveable { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(detail.schedule.title.ifBlank { "提醒" }, style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
+                if (detail.nextRunText.isNotBlank()) {
+                    Text(detail.nextRunText, style = MaterialTheme.typography.bodyLarge)
+                }
+                Text(
+                    "投递渠道:微信" + if (detail.schedule.enabled) "" else "(已暂停)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("最近触发", style = MaterialTheme.typography.titleMedium)
+                if (detail.occurrencesLoading) {
+                    Text("正在读取…", style = MaterialTheme.typography.bodyMedium)
+                } else if (detail.occurrences.isEmpty()) {
+                    Text("还没有触发过。", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    detail.occurrences.take(5).forEach { occ ->
+                        XnRow(Modifier.fillMaxWidth()) {
+                            Text(XnTime.formatIso(occ.scheduled_at), style = MaterialTheme.typography.bodyMedium)
+                            Spacer(Modifier.weight(1f))
+                            XnSourceChip(occurrenceStateText(occ.state, occ.missed))
                         }
                     }
                 }
             }
-        }
-        ScheduleRow("15:00", "取快递", "微信里记下的", "一次", enabled = true)
-        ScheduleRow("18:30", "准备晚饭", "微信里记下的", "每天", enabled = true)
-        ScheduleRow("08:00", "早间简报", "已设置", "每天", enabled = false, disabledHint = "已暂停")
-    }
-}
-
-@Composable
-private fun ScheduleRow(
-    time: String,
-    title: String,
-    source: String,
-    repeat: String,
-    enabled: Boolean,
-    disabledHint: String? = null,
-) {
-    XnCard(Modifier.fillMaxWidth()) {
-        XnRow(Modifier.fillMaxWidth()) {
-            Column(Modifier.width20()) {
-                Text(time, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-                Text(repeat, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        confirmButton = {
+            TextButton(onClick = { onToggle(!detail.schedule.enabled) }) {
+                Text(if (detail.schedule.enabled) "暂停" else "恢复")
             }
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                XnRow(verticalAlignment = Alignment.CenterVertically) {
-                    XnSourceChip(source)
-                    if (!enabled) XnSourceChip(disabledHint ?: "已暂停")
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { if (confirmDelete) onDelete() else confirmDelete = true }) {
+                    Text(if (confirmDelete) "再点一次确认删除" else "删除", color = MaterialTheme.colorScheme.error)
                 }
+                TextButton(onClick = onDismiss) { Text("关闭") }
             }
-            XnIcon(R.drawable.ic_chevron_right, contentDescription = null)
-        }
-    }
+        },
+    )
 }
 
-private fun Modifier.width20() = this.then(Modifier.padding(end = XnSpacing.lg))
-
-@Composable
-private fun MemorySection() {
-    Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
-        MemoryRow("偏好", "晚饭喜欢清淡一些", "你确认过的记录", "周二 18:40")
-        MemoryRow("重要的事", "周末想做番茄炒蛋", "小暖整理的,点此确认或修改", "昨天 20:12")
-        MemoryRow("生活信息", "降压药放在餐桌左边抽屉", "小暖整理的,点此确认或修改", "11月8日 21:05")
-    }
-}
-
-@Composable
-private fun MemoryRow(kind: String, content: String, confirmState: String, time: String) {
-    XnCard(Modifier.fillMaxWidth()) {
-        XnRow(Modifier.fillMaxWidth()) {
-            XnIcon(R.drawable.ic_note, contentDescription = null)
-            Column(Modifier.weight(1f).padding(start = XnSpacing.md)) {
-                Text(content, style = MaterialTheme.typography.bodyLarge)
-                XnRow(verticalAlignment = Alignment.CenterVertically) {
-                    XnSourceChip(kind)
-                    XnUpdatedTag(time)
-                }
-                Text(
-                    confirmState,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            XnIcon(R.drawable.ic_chevron_right, contentDescription = null)
-        }
-    }
-}
-
-@Composable
-private fun BookmarkSection() {
-    Column(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
-        BookmarkRow("腌笃鲜的做法(下厨房)", "xiachufang.com", "春笋和咸肉一起炖,汤白味鲜…", "11月9日")
-        BookmarkRow("适合老人的拉伸操", "bilibili.com", "十分钟低强度,跟着视频做…", "11月7日")
-    }
-}
-
-@Composable
-private fun BookmarkRow(title: String, domain: String, summary: String, time: String) {
-    XnCard(Modifier.fillMaxWidth()) {
-        XnRow(Modifier.fillMaxWidth()) {
-            XnIcon(R.drawable.ic_bookmark, contentDescription = null)
-            Column(Modifier.weight(1f).padding(start = XnSpacing.md)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    summary,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                XnUpdatedTag("$domain · $time")
-            }
-        }
-    }
+private fun occurrenceStateText(state: String, missed: Int): String = when {
+    missed > 0 -> "错过 " + missed + " 次"
+    state == "pending" -> "预计提醒"
+    state == "queued" -> "已投递"
+    state == "sent" -> "已投递"
+    else -> state
 }

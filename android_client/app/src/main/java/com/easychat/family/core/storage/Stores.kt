@@ -17,27 +17,38 @@ class TokenStore(private val context: Context) {
 
     private val key = stringPreferencesKey("auth_token_b64")
 
+    /** 内存缓存:请求路径零阻塞读取(Keystore 解密只在登录/启动时发生一次)。 */
+    @Volatile
+    private var cachedToken: String? = null
+
     suspend fun store(token: String) {
+        cachedToken = token
         val blob = XnKeystore.encrypt(token.toByteArray(Charsets.UTF_8))
         val b64 = Base64.getEncoder().encodeToString(blob)
         context.secureStore.edit { it[key] = b64 }
     }
 
-    suspend fun token(): String? {
+    /** 登录后/启动时调用一次:解密落缓存;之后请求走 tokenCached()。 */
+    suspend fun load(): String? {
         val b64 = context.secureStore.data.first()[key] ?: return null
-        return try {
+        val plain = try {
             String(XnKeystore.decrypt(Base64.getDecoder().decode(b64)), Charsets.UTF_8)
         } catch (_: Exception) {
             // 密钥被系统清除/换机恢复:按未登录处理(fail-closed,不使用不可信数据)
             clear()
             null
         }
+        cachedToken = plain
+        return plain
     }
 
-    /** 网络层在 IO 线程读取;提供同步视图避免回调链(仅限 IO 线程)。 */
-    fun tokenBlocking(): String? = runBlocking { token() }
+    suspend fun token(): String? = cachedToken ?: load()
+
+    /** 请求路径专用:只读内存缓存,绝不触发 DataStore/Keystore(零阻塞)。 */
+    fun tokenCached(): String? = cachedToken
 
     suspend fun clear() {
+        cachedToken = null
         context.secureStore.edit { it.remove(key) }
     }
 }
@@ -50,13 +61,28 @@ class ConnectionStore(private val context: Context) {
     private val userIdKey = stringPreferencesKey("user_id")
     private val sessionEpochKey = stringPreferencesKey("session_epoch")
 
+    @Volatile
+    private var cachedBaseUrl: String = ""
+
     suspend fun saveServer(url: String) {
-        context.prefStore.edit { it[baseUrlKey] = url.trim().trimEnd('/') }
+        val trimmed = url.trim().trimEnd('/')
+        cachedBaseUrl = trimmed
+        context.prefStore.edit { it[baseUrlKey] = trimmed }
+    }
+
+    /** 启动时调用一次,之后请求走 baseUrlCached()。 */
+    suspend fun load() {
+        cachedBaseUrl = context.prefStore.data.first()[baseUrlKey] ?: ""
     }
 
     fun baseUrl(): String = runBlocking {
-        context.prefStore.data.first()[baseUrlKey] ?: ""
+        cachedBaseUrl.ifBlank {
+            context.prefStore.data.first()[baseUrlKey] ?: ""
+        }
     }
+
+    /** 请求路径专用:零阻塞(冷启动由 XiaoNuanApp 预热)。 */
+    fun baseUrlCached(): String = cachedBaseUrl
 
     fun baseUrlBlocking(): String = baseUrl()
 

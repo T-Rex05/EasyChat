@@ -50,7 +50,10 @@ class ApiClient(
         method: String = "GET",
         bodyJson: String? = null,
         parse: (String) -> T,
-    ): T = withContext(Dispatchers.IO) {
+    ): T {
+        android.util.Log.d("XnHttp", "call start " + method + " " + path)
+        val started = android.os.SystemClock.elapsedRealtime()
+        return withContext(Dispatchers.IO) {
         var last: RequestFailure? = null
         repeat(2) { attempt ->
             val request = buildRequest(path, method, bodyJson)
@@ -70,6 +73,8 @@ class ApiClient(
             }
         }
         throw last ?: RequestFailure.Http(ApiError(401, "unauthenticated", "登录已过期,请重新登录"))
+        }
+        .also { android.util.Log.d("XnHttp", "call done " + method + " " + path + " " + (android.os.SystemClock.elapsedRealtime() - started) + "ms") }
     }
 
     suspend inline fun <reified T> get(path: String): T =
@@ -111,13 +116,13 @@ class ApiClient(
         val builder = Request.Builder()
             .url(conn.baseUrl().trimEnd('/') + path)
             .method(method, b)
-        tokens.tokenBlocking()?.let { builder.header("Authorization", "Bearer $it") }
+        tokens.tokenCached()?.let { builder.header("Authorization", "Bearer $it") }
         return builder.build()
     }
 
     /** 阻塞刷新(已在 IO 线程):成功存新 token 并返回 true。 */
     fun refreshSync(): Boolean {
-        val current = tokens.tokenBlocking() ?: return false
+        val current = tokens.tokenCached() ?: return false
         return try {
             val req = Request.Builder()
                 .url(conn.baseUrl().trimEnd('/') + "/api/auth/refresh")
@@ -143,9 +148,9 @@ class ApiClient(
     }
 
     /** SSE 专用(仅 IO 线程调用)。 */
-    fun baseUrlForStream(): String = conn.baseUrl()
+    fun baseUrlForStream(): String = conn.baseUrlCached()
 
-    fun tokenForStream(): String? = tokens.tokenBlocking()
+    fun tokenForStream(): String? = tokens.tokenCached()
 
     fun sseClient(): OkHttpClient = sseHttp
 }

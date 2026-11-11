@@ -72,7 +72,9 @@ fun XiaoNuanApp(navController: NavHostController = rememberNavController()) {
 
     var startRoute by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        val hasToken = container.tokens.token() != null
+        // 预热:DataStore + Keystore 解密一次,之后请求路径全部走内存缓存(零阻塞)
+        val hasToken = container.tokens.load() != null
+        container.conn.load()
         val hasUser = container.conn.username().isNotBlank()
         startRoute = if (hasToken && hasUser) Routes.TODAY else Routes.WELCOME
     }
@@ -171,7 +173,9 @@ fun XiaoNuanApp(navController: NavHostController = rememberNavController()) {
                     TodayScreen(
                         onOpenChat = { navController.navigate(Routes.CHAT) },
                         onOpenLife = { navController.navigate(Routes.LIFE) },
-                        onOpenWechatChat = { navController.navigate(Routes.CHAT) },
+                        onOpenWechatChat = { sessionId ->
+                            navController.navigate(Routes.chatDetail(sessionId, wechat = true))
+                        },
                     )
                 }
                 composable(Routes.CHAT) {

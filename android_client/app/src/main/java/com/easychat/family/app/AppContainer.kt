@@ -25,6 +25,8 @@ class AppContainer(app: Application) {
     val streams = ChatStreamClient(api)
     val auth = AuthRepository(api, tokens, conn)
     val chat = ChatRepository(api, streams)
+    val life = com.easychat.family.core.network.LifeRepository(api)
+    val schedules = com.easychat.family.core.network.SchedulesRepository(api)
 
     fun clearSessionExpiredFlag() {
         sessionExpired.value = false
