@@ -39,6 +39,7 @@ from backend.modules.superagent.contracts import (
     TASK_INTERRUPTED,
     TERMINAL_TASK_STATUSES,
 )
+from backend.modules.superagent.acceptance import AcceptanceRepository
 from backend.modules.superagent.credentials import RepoUrlError, parse_repo_url
 from backend.modules.superagent.repository import SuperagentRepository
 from backend.modules.superagent.contracts import MAX_AUTO_FIX_ROUNDS
@@ -67,6 +68,7 @@ class SuperagentService:
         timezone: str = "Asia/Shanghai",
     ) -> None:
         self.repo = SuperagentRepository(db)
+        self.acceptance = AcceptanceRepository(db)
         self.access = access
         self.delivery = delivery
         self.channels = channels
@@ -462,6 +464,87 @@ class SuperagentService:
             self.access.require_permission(principal, "superagent.create")
         else:
             self.access.require_permission(principal, "superagent.manage")
+
+    # ---- 逐项验收（工作包四） ------------------------------------------------------
+
+    def submit_acceptance_round(
+        self, principal: Principal, task_id: str, *, requirement: str,
+        checks: list[dict], provenance: dict | None = None, attempt_id: str = "",
+    ) -> dict:
+        task = self._task_for(principal, task_id)
+        self._require_cancel_like(principal, task)
+        round_id, round_no, verdict = self.acceptance.create_round(
+            task_id=task.task_id, attempt_id=attempt_id, requirement=requirement,
+            provenance=provenance or {}, checks=checks, created_by=principal.user_id,
+        )
+        self.repo.append_event(task_id, "acceptance_round",
+                               f"验收第 {round_no} 轮: {verdict}（{len(checks)} 项）")
+        return {"round_id": round_id, "round_no": round_no, "verdict": verdict}
+
+    def acceptance_for_task(self, principal: Principal, task_id: str) -> list[dict]:
+        self._task_for(principal, task_id)
+        return self.acceptance.list_rounds(task_id)
+
+    def decide_acceptance_check(
+        self, principal: Principal, check_id: int, *, decision: str, note: str = "",
+    ) -> dict:
+        row0 = self.acceptance.get_check(check_id)
+        if row0 is None:
+            raise NotFoundError("验收检查项不存在")
+        task = self._task_for(principal, row0["task_id"])
+        self._require_cancel_like(principal, task)
+        check, first_reject = self.acceptance.set_decision(
+            check_id=check_id, decision=decision, note=note, actor_id=principal.user_id,
+        )
+        requeued = False
+        if first_reject:
+            # 打回进入原任务：幂等输入(键=check_id)+终态 CAS 回队;旧轮证据保留。
+            self.repo.append_input(
+                task_id=task.task_id, source="acceptance",
+                external_event_id=f"acceptance-reject:{check_id}",
+                actor_id=principal.user_id,
+                text=f"[验收打回 {check['item_id']}] {check['title']}：{note or '（无说明）'}",
+            )
+            requeued = self.acceptance.requeue_after_reject(task.task_id)
+            self.repo.append_event(task.task_id, "acceptance_rejected",
+                                   f"{check['item_id']} 打回返工" + ("（任务已回队）" if requeued else "（任务当前状态无需回队）"))
+        elif decision == "accepted":
+            self.repo.append_event(task.task_id, "acceptance_accepted", f"{check['item_id']} 验收通过")
+        return {"check_id": check_id, "decision": decision, "first_reject": first_reject,
+                "requeued": requeued}
+
+    def acceptance_evidence_path(self, principal: Principal, task_id: str, round_id: str,
+                                 item_id: str, index: int):
+        """受控读取证据文件：owner 校验 + 相对 attempt.verification_ref 的 resolve 防逃逸。"""
+        self._task_for(principal, task_id)
+        import json as _json
+        from pathlib import Path
+
+        rounds = self.acceptance.list_rounds(task_id)
+        for r in rounds:
+            if r["id"] != round_id:
+                continue
+            for c in r["checks"]:
+                if c["item_id"] != item_id:
+                    continue
+                entries = _json.loads(c["evidence_json"] or "[]")
+                if not (0 <= index < len(entries)):
+                    raise NotFoundError("证据序号不存在")
+                rel = str(entries[index].get("path") or "")
+                # 证据根:该轮 attempt 最新报告的 verification_ref(验证工件目录)
+                root = None
+                for rep in reversed(self.repo.reports_for_task(task.task_id)):
+                    if (not r["attempt_id"] or rep.attempt_id == r["attempt_id"]) and rep.verification_ref:
+                        from pathlib import Path as _P
+                        root = _P(rep.verification_ref)
+                        break
+                if not rel or not rel.startswith("assets/") or root is None or not root.is_dir():
+                    raise ForbiddenError("证据路径不在受控工件目录内")
+                target = (root / rel).resolve()
+                if root.resolve() not in target.parents or not target.is_file():
+                    raise ForbiddenError("证据路径校验失败")
+                return target
+        raise NotFoundError("验收轮或检查项不存在")
 
 
 def _now() -> str:

@@ -348,6 +348,12 @@ class ChannelService:
             context_token=str(route.get("context_token") or ""),
         )
 
+    def report_stale_token(self, account_pk: str) -> None:
+        """公开入口：iLink -14 凭据失效 → 账号入站/出站暂停（session-guard 语义）。"""
+        from backend.modules.channels.wechat.account import pause_session  # noqa: PLC0415
+
+        pause_session(account_pk)
+
     def is_delivery_binding_active(self, account_pk: str, external_user_id: str) -> bool:
         account = self.repo.get_account(account_pk)
         if account is None or account.status != ACCOUNT_ACTIVE:

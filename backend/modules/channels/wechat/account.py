@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from backend.modules.channels.contracts import (
+    STALE_TOKEN_CODE as STALE_TOKEN_CODE_CONTRACT,
     ChannelTransportError,
     QR_CONFIRMED,
     QR_EXPIRED,
@@ -45,7 +46,8 @@ CHANNEL_VERSION = "2.2.0"
 
 # 官方参考 Tencent/openclaw-weixin@0ad1ae91347a：-14 = bot token 失效/过期
 # （非风控/频率限制），账号入站+出站暂停 1 小时后自动恢复（session-guard.ts）。
-STALE_TOKEN_CODE = -14
+# 码值经 channels 公开契约提供，跨模块分类（delivery）不得私引本实现文件。
+STALE_TOKEN_CODE = STALE_TOKEN_CODE_CONTRACT
 SESSION_PAUSE_SECONDS = 3600
 _session_paused_until: dict[str, float] = {}
 

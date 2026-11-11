@@ -46,6 +46,7 @@ _PREFIX_SUPERAGENT_WEBHOOK_EVENT = "swe"
 _PREFIX_SUPERAGENT_ATTEMPT = "sat"
 _PREFIX_SUPERAGENT_INPUT = "sai"
 _PREFIX_SUPERAGENT_REPORT = "sar"
+_PREFIX_ACCEPTANCE_ROUND = "arnd"
 
 
 def _new_id(prefix: str) -> str:
@@ -194,6 +195,10 @@ def new_superagent_report_id() -> str:
 
 def new_superagent_webhook_event_id() -> str:
     return _new_id(_PREFIX_SUPERAGENT_WEBHOOK_EVENT)
+
+
+def new_acceptance_round_id() -> str:
+    return _new_id(_PREFIX_ACCEPTANCE_ROUND)
 
 
 def new_channel_account_id() -> str:

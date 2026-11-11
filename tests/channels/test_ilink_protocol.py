@@ -106,6 +106,28 @@ class _FakeTransport:
         raise AssertionError("not used")
 
 
+def test_delivery_uses_public_surface_only(tmp_path):
+    """架构约束回归(测试时漏跑 architecture 套件的教训固化):
+    delivery 不得私引 channels 实现文件;凭据失效经 ChannelService.report_stale_token
+    公开方法,分类码来自 channels.contracts。"""
+    import ast
+    from pathlib import Path
+
+    src = Path("backend/modules/delivery/wechat.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        mods = []
+        if isinstance(node, ast.ImportFrom) and node.module:
+            mods = [node.module]
+        elif isinstance(node, ast.Import):
+            mods = [a.name for a in node.names]
+        for mod in mods:
+            parts = mod.split(".")
+            if parts[:2] == ["backend", "modules"] and parts[2] == "channels":
+                assert parts[3:4] and parts[3] in {"api", "contracts"}, f"私有跨引: {mod}"
+    assert "STALE_TOKEN_CODE" in src  # 分类仍感知 -14(经公开契约)
+
+
 def test_send_text_marks_stale_token_and_pauses_account():
     _reset_guard()
     transport = _FakeTransport([{"ret": -14, "errmsg": "token expired"}])

@@ -4,7 +4,30 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+
+class AcceptanceCheckBody(BaseModel):
+    item_id: str
+    title: str
+    category: str = ""
+    status: str
+    required_evidence: list[str] = []
+    observation: str = ""
+    evidence: list[dict] = []
+
+
+class AcceptanceRoundBody(BaseModel):
+    requirement: str = ""
+    attempt_id: str = ""
+    provenance: dict = {}
+    checks: list[AcceptanceCheckBody]
+
+
+class AcceptanceDecisionBody(BaseModel):
+    decision: str  # accepted | rejected
+    note: str = ""
 
 from backend.shared.errors import UnauthenticatedError
 
@@ -218,5 +241,43 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
     async def retry_task(task_id: str, authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)
         return {"task": _task_dict(service.retry_task(principal, task_id))}
+
+    # ---- 逐项验收（工作包四） ------------------------------------------------------
+
+    @router.post("/tasks/{task_id}/acceptance/rounds")
+    async def submit_acceptance_round(task_id: str, body: AcceptanceRoundBody,
+                                      authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        result = service.submit_acceptance_round(
+            principal, task_id, requirement=body.requirement, attempt_id=body.attempt_id,
+            provenance=body.provenance,
+            checks=[c.model_dump() for c in body.checks],
+        )
+        return {"round": result}
+
+    @router.get("/tasks/{task_id}/acceptance")
+    async def list_acceptance(task_id: str, authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        rounds = service.acceptance_for_task(principal, task_id)
+        for r in rounds:
+            for c in r["checks"]:
+                c.pop("evidence_json", None)  # 列表不内联证据正文,预览走受控端点
+        return {"rounds": rounds}
+
+    @router.post("/acceptance/checks/{check_id}/decision")
+    async def decide_acceptance_check(check_id: int, body: AcceptanceDecisionBody,
+                                      authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        result = service.decide_acceptance_check(
+            principal, check_id, decision=body.decision, note=body.note,
+        )
+        return {"decision": result}
+
+    @router.get("/tasks/{task_id}/acceptance/rounds/{round_id}/evidence/{item_id}/{index}")
+    async def read_acceptance_evidence(task_id: str, round_id: str, item_id: str, index: int,
+                                       authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        path = service.acceptance_evidence_path(principal, task_id, round_id, item_id, index)
+        return FileResponse(path, media_type="application/octet-stream", filename=path.name)
 
     return router

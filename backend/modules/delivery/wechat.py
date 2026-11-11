@@ -10,10 +10,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from backend.modules.channels.contracts import ChannelTransportError
-from backend.modules.channels.wechat.account import (
+from backend.modules.channels.contracts import (
     STALE_TOKEN_CODE,
-    pause_session,
+    ChannelTransportError,
 )
 from backend.modules.delivery.contracts import DeliveryTarget, SendResult
 from backend.shared.errors import InvalidInputError
@@ -118,7 +117,10 @@ class WeChatTextSender:
             if getattr(exc, "ret", None) == STALE_TOKEN_CODE and target.channel_account_id:
                 # 官方 session-guard 语义：凭据失效 → 账号入站/出站暂停 1 小时；
                 # 消息保留在 delivery 账本，恢复后按既有重试机制重投。
-                pause_session(str(target.channel_account_id))
+                # 暂停状态属 channels,经公开方法上报(架构:跨模块只走 api/contracts)。
+                report = getattr(self.channels, "report_stale_token", None)
+                if callable(report):
+                    report(str(target.channel_account_id))
             if classified.kind == "retry":
                 return SendResult.retry(f"微信发送失败: {classified.reason}")
             if classified.kind == "failed":

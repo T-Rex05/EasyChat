@@ -20,6 +20,10 @@ EVENT_RECEIVED = "received"
 EVENT_PROCESSED = "processed"
 EVENT_REJECTED = "rejected"
 
+# 腾讯 iLink 凭据失效码（openclaw-weixin@0ad1ae91347a session-guard.ts：
+# bot token 失效/过期，非风控）；公开契约供 delivery 等跨模块分类使用。
+STALE_TOKEN_CODE = -14
+
 # 持久 inbox 的处理状态（processing_state；与 state 的去重语义分离，方案 §5）
 PROCESSING_PENDING = "pending"    # 受理后等待/正在处理
 PROCESSING_FAILED = "failed"      # 内部失败，等 retry_at 本地重放
