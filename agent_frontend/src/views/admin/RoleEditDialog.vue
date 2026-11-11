@@ -1,5 +1,5 @@
 <template>
-  <div class="modal-overlay" @click.self="$emit('close')">
+  <div class="modal-overlay" @click.self="$emit('close')" @keydown.esc="onKeydown">
     <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="role-dialog-title">
       <div class="modal-header">
         <h2 id="role-dialog-title">{{ role ? '编辑角色' : '创建角色' }}</h2>
@@ -322,6 +322,12 @@ onMounted(async () => {
     if (detectAnyCustom()) showAdvanced.value = true
   }
 })
+
+// 标准模态键盘语义:Esc 关闭(模板 @keydown.esc 冒泡绑定,焦点在弹窗内任意元素均生效)。
+// 同时接受当前规范值 'Escape' 与旧值 'Esc',兼容不同 WebView 实现。
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' || e.key === 'Esc') emit('close')
+}
 
 function detectAnyCustom(): boolean {
   return MODULE_ROWS.some(r => detectMode(r) === 'custom')

@@ -14,20 +14,38 @@ async function openRole(permissions) {
   })
   let mounted
   let saved
+  let unmounted
+  const listeners = []
+  const emitted = []
   const bindings = {
     ref, reactive, computed,
     defineProps: () => ({ role: { id: 42, name: 'member', display_name: '成员', permissions } }),
-    defineEmits: () => () => {}, onMounted: callback => { mounted = callback }, alert() {},
+    defineEmits: () => (...a) => { emitted.push(a) }, onMounted: callback => { mounted = callback }, alert() {},
+    onUnmounted: callback => { unmounted = callback },
+    window: {
+      addEventListener: (name, fn) => listeners.push([name, fn]),
+      removeEventListener: (name, fn) => { const i = listeners.findIndex(l => l[0] === name && l[1] === fn); if (i >= 0) listeners.splice(i, 1) },
+    },
     AdminAPI: {
       async getPermissionDefinitions() { return [] },
       async getToolsetDefinitions() { return [] },
       async updateRole(id, payload) { saved = structuredClone({ id, ...payload, permissions: [...payload.permissions] }) },
     },
   }
-  const dialog = new Function(...Object.keys(bindings), `${outputText}\nreturn { form, moduleRows, detectMode, onModeChange, onAtomToggle, save }`)(...Object.values(bindings))
+  const dialog = new Function(...Object.keys(bindings), `${outputText}\nreturn { form, moduleRows, detectMode, onModeChange, onAtomToggle, save, onKeydown }`)(...Object.values(bindings))
   await mounted()
-  return { ...dialog, saved: () => saved }
+  return { ...dialog, saved: () => saved, emitted: () => emitted, listeners, runUnmount: () => unmounted && unmounted() }
 }
+
+test('escape keydown closes the dialog (modal a11y)', async () => {
+  const source = readFileSync(new URL('../src/views/admin/RoleEditDialog.vue', import.meta.url), 'utf8')
+  assert.ok(/@keydown\.esc="onKeydown"/.test(source), 'overlay must bind Esc via DOM bubbling (window listener misses trusted keys, browser-proven)')
+  const dialog = await openRole([...ledgerUse])
+  dialog.onKeydown({ key: 'Escape' })
+  assert.ok(dialog.emitted().some(([name]) => name === 'close'), 'Escape emits close')
+  dialog.onKeydown({ key: 'a' })
+  assert.equal(dialog.emitted().filter(([name]) => name === 'close').length, 1, 'other keys do not close')
+})
 
 test('ledger use with shared file dependencies survives loading and saving', async () => {
   const dialog = await openRole([...ledgerUse, 'file.delete'])

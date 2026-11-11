@@ -1,0 +1,55 @@
+接管 E:\PythonCode\EasyChat，执行增量改造并完成验证与代码评审。
+
+先读取 AGENTS.md、CLAUDE.md、EASYCHAT_HANDOFF.md，以及
+E:\PythonCode\EasyChat\docs\superpowers\plans\2026-11-11-wechat-task-acceptance-evolution.md。
+同时读取上一版总计划和 docs/reviews/2026-11-10/P0 至 P8 的实施记录。
+
+用户目标是通过微信明确下达开发任务后，自动编码、验证和创建 Draft PR，回复原会话，人工评审与合并。近期沿用 Hermes，增加可观察验收、任务协作和可验证升级能力，其他引擎根据试验复评。
+
+先记录 HEAD、分支、工作区差异、部署和活跃任务，保留已有修改。复核历史记录对应当前代码，已有且通过的能力只记录证据，确认缺口后实施最小修改。
+
+按新计划工作包依次推进。
+1. 接管与既有结果复核。
+2. 微信协议核查、请求头与版本兼容、扫码绑定、凭据生命周期和错误分类。
+3. Acceptance 固定版本的本地试验，覆盖聊天拖动、超级代理间距、角色卡与权限弹窗。
+4. 任务页接入逐项验收、证据、轮次、接受与打回，以及原任务返工。
+5. 主管依据持久化任务汇总，复杂需求再增加父子任务、依赖、负责人和预算。
+6. 规则与语义结合的事件策略，按需要接入远程 Runner 和其他执行器。
+7. 升级治理、全部差异评审、真实闭环和回滚演练。
+
+微信重点
+对照腾讯官方固定 commit 的协议参考与实现。
+https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol.md
+https://github.com/Tencent/openclaw-weixin/blob/main/src/api/session-guard.ts
+当前 X-WECHAT-UIN 使用时间戳字符串，需验证随机 uint32 十进制字符串的 Base64 编码要求。
+当前 -14 文案为风控/频率限制，应核查为 bot token 失效/过期，覆盖 ret 和 errcode，并统一入站/出站的账号暂停与恢复语义。
+版本变更绑定实际支持的协议代际，请求头、扫码流程和服务端返回码一起验证。
+凭据失效、真实限流、发送上下文失效、网络超时和投递 uncertain 分别分类。
+封号判断引用官方规则和实际证据，协议兼容性问题按其真实含义说明。
+
+验收重点
+Acceptance 先验证本地报告，固定依赖版本，实际操作产品并生成截图、录屏与日志。
+参考 https://github.com/lobehub/acceptance。
+证据绑定 task、attempt、验收项、轮次、commit/tree、构建、环境和时间。
+缺少规定证据标记待验证。代码或环境变化后核查原证据的有效范围。
+人工打回进入原任务，重复反馈幂等，跨用户证据访问拒绝。
+线上发布报告使用已授权目标与范围，核对敏感信息和访问控制。
+
+架构与执行约束
+复用 ExecutionRuntime、CodingRunner、SuperagentWorker、任务账本、文件授权和 delivery。
+身份来自 Principal/ToolContext 和服务端来源，服务端验证任务与附件归属。
+每包先复现具体缺口，再最小修复、回归和评审。普通可逆选择按现有授权推进。
+核对已有人工授权，已覆盖范围继续完成。protected paths 按 AGENTS.md 交付草稿与升级简报，继续可独立完成的安全区工作。
+SQLite WAL 守卫有效，迁移只追加，事务内无外呼，能力默认关闭，审批 fail-closed。
+取消、重试和恢复先对账在途运行与外部副作用，旧 attempt 结果不能覆盖新任务状态。
+主管统一汇总通知，子任务继承受限授权与总预算，人工暂停解除遵循仓库规则。
+保留当前产品功能与历史数据，所需新模块、依赖和接口先说明具体必要性。
+
+验证
+python -m pytest tests/channels tests/contracts/test_wechat.py tests/delivery -q
+python -m pytest tests/superagent tests/contracts -q
+python -m pytest tests -q -m "not integration and not resources"
+前端执行 npm test、npm run type-check、npm run build。
+新增具体回归纳入所属套件。UI 修改提供同场景 Before/After 和真实浏览器操作证据。
+
+最终给出修改文件、问题依据、验证命令与退出码、评审发现与修复、版本和回滚、实际外部验收结果、剩余项和续作条件。结论附证据或标注推断。

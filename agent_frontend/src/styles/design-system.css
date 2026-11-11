@@ -317,6 +317,9 @@ a:hover { color: var(--brand-hover); }
   padding: 20px 24px;
   overflow-y: auto;
   flex: 1;
+  /* flex 子项默认 min-height:auto 会撑破 80vh 的父容器,overflow 失效、
+     窄屏下保存按钮不可达;0 使滚动真正生效(Acceptance 试验场景 C 实测) */
+  min-height: 0;
 }
 
 .modal-footer {
