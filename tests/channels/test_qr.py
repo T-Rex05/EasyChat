@@ -11,7 +11,7 @@ from backend.modules.channels.wechat.account import (
 
 
 class FakeTransport:
-    async def get_json(self, url: str, *, timeout: float = 15.0):
+    async def get_json(self, url: str, *, timeout: float = 15.0, headers=None):
         return {
             "qrcode": "qr-value",
             "qrcode_img_content": "https://liteapp.weixin.qq.com/q/demo",
@@ -36,7 +36,7 @@ async def test_qr_start_returns_png_data_url() -> None:
 
 
 class PollTimeoutTransport(FakeTransport):
-    async def get_json(self, url: str, *, timeout: float = 15.0):
+    async def get_json(self, url: str, *, timeout: float = 15.0, headers=None):
         if "get_qrcode_status" in url:
             raise TransportError("timeout")
         return await super().get_json(url, timeout=timeout)

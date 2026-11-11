@@ -24,6 +24,10 @@ from backend.modules.channels.wechat.account import (
     EP_GET_UPDATES,
     IlinkTransport,
     TransportError,
+    classify_channel_error,
+    is_session_paused,
+    pause_session,
+    remaining_pause_seconds,
     send_text,
 )
 from backend.modules.channels.wechat.parser import parse_inbound
@@ -33,11 +37,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_TIMEOUT = 60.0
 DEFAULT_BACKOFF = (2.0, 5.0, 15.0, 30.0)
 DEFAULT_POLL_INTERVAL = 0.05
-THROTTLE_SLEEP_SECONDS = 600.0
+# 官方 session-guard：凭据失效（-14）暂停窗口 1 小时，与账号 guard 对齐。
+THROTTLE_SLEEP_SECONDS = 3600.0
 
 
 class ListenerThrottled(RuntimeError):
-    """iLink errcode=-14（风控/频率限制）：长时间退避，不是普通断线。"""
+    """iLink 凭据失效（-14）：bot token 失效/过期，账号暂停后自动恢复，非普通断线。"""
 
 
 class WeChatListener:
@@ -107,6 +112,17 @@ class WeChatListener:
         failures = 0
         try:
             while True:
+                # 凭据失效暂停粘滞：即使无新响应也保持停止，剩余窗口对齐官方
+                # session-guard 的 1 小时；过期后自然恢复轮询。
+                if is_session_paused(account_pk):
+                    remaining = max(remaining_pause_seconds(account_pk), 1)
+                    self._set_state(
+                        account_pk, LISTENER_BACKOFF,
+                        error=f"账号凭据失效暂停中（剩余 {remaining // 60} 分钟）",
+                        polls=self._polls(account_pk),
+                    )
+                    await asyncio.sleep(min(self.throttle_sleep, float(remaining)))
+                    continue
                 try:
                     await self.poll_once(account_pk)
                     failures = 0
@@ -167,8 +183,15 @@ class WeChatListener:
         )
         ret = data.get("ret", 0)
         errcode = data.get("errcode", 0)
-        if errcode == -14:
-            raise ListenerThrottled("iLink 风控/频率限制（errcode=-14），暂停轮询")
+        # 官方语义（openclaw-weixin@0ad1ae91347a session-guard.ts）：-14 =
+        # bot token 失效/过期（非风控/频率限制），账号入站+出站暂停 1 小时。
+        stale = classify_channel_error(data) == "stale_token"
+        if stale:
+            pause_session(account_pk)
+        if stale:
+            raise ListenerThrottled(
+                "iLink bot token 失效/过期（-14），账号暂停 1 小时后自动恢复"
+            )
         if ret not in (0, None) or errcode not in (0, None):
             raise TransportError(
                 f"getupdates 失败 ret={ret} errcode={errcode}",

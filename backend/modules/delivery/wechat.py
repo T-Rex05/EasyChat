@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.modules.channels.contracts import ChannelTransportError
+from backend.modules.channels.wechat.account import (
+    STALE_TOKEN_CODE,
+    pause_session,
+)
 from backend.modules.delivery.contracts import DeliveryTarget, SendResult
 from backend.shared.errors import InvalidInputError
 
@@ -38,6 +42,10 @@ def classify_wechat_error(exc: BaseException) -> WeChatErrorClass:
         return WeChatErrorClass("failed", str(exc))
     if isinstance(exc, ChannelTransportError):
         status = exc.status
+        if getattr(exc, "ret", None) == STALE_TOKEN_CODE:
+            # 官方语义：bot token 失效/过期 → 账号暂停 1 小时后自动恢复；
+            # 消息保留重投（retry），不是 uncertain（结果明确未送达）也不是永久失败。
+            return WeChatErrorClass("retry", "bot token 失效/过期（-14），账号暂停后自动恢复重试")
         if status in (400, 401, 403, 404):
             return WeChatErrorClass("failed", str(exc)[:300])
         if status in (408, 429):
@@ -107,6 +115,10 @@ class WeChatTextSender:
         except Exception as exc:  # noqa: BLE001  外部发送失败需按证据分类
             classified = classify_wechat_error(exc)
             logger.warning("微信投递失败 kind=%s: %s", classified.kind, exc)
+            if getattr(exc, "ret", None) == STALE_TOKEN_CODE and target.channel_account_id:
+                # 官方 session-guard 语义：凭据失效 → 账号入站/出站暂停 1 小时；
+                # 消息保留在 delivery 账本，恢复后按既有重试机制重投。
+                pause_session(str(target.channel_account_id))
             if classified.kind == "retry":
                 return SendResult.retry(f"微信发送失败: {classified.reason}")
             if classified.kind == "failed":

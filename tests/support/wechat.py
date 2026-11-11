@@ -22,6 +22,7 @@ class FakeTransport:
         self.qr_start: list[dict[str, Any]] = []
         self.qr_status: list[dict[str, Any]] = []
         self.posts: list[dict[str, Any]] = []
+        self.get_headers: list[dict[str, Any]] = []
         self.sent: list[str] = []
         self.downloads: dict[str, bytes] = {}
         self.download_calls: list[str] = []
@@ -34,7 +35,8 @@ class FakeTransport:
         self.qr_start.append(start)
         self.qr_status.extend(statuses)
 
-    async def get_json(self, url: str, *, timeout: float = 15.0) -> dict[str, Any]:
+    async def get_json(self, url: str, *, timeout: float = 15.0, headers: dict[str, str] | None = None) -> dict[str, Any]:
+        self.get_headers.append(headers or {})
         if "get_bot_qrcode" in url:
             if not self.qr_start:
                 raise TransportError("没有预置二维码响应")

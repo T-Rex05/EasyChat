@@ -43,19 +43,101 @@ DEFAULT_MAX_QR_SESSIONS = 32
 DEFAULT_TEXT_CHUNK = 1800
 CHANNEL_VERSION = "2.2.0"
 
+# 官方参考 Tencent/openclaw-weixin@0ad1ae91347a：-14 = bot token 失效/过期
+# （非风控/频率限制），账号入站+出站暂停 1 小时后自动恢复（session-guard.ts）。
+STALE_TOKEN_CODE = -14
+SESSION_PAUSE_SECONDS = 3600
+_session_paused_until: dict[str, float] = {}
+
+
+def _monotonic() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def pause_session(account_id: str) -> None:
+    """账号级凭据失效暂停：入站轮询与出站发送共享同一状态（官方 session-guard）。"""
+    _session_paused_until[account_id] = _monotonic() + SESSION_PAUSE_SECONDS
+
+
+def is_session_paused(account_id: str) -> bool:
+    until = _session_paused_until.get(account_id)
+    if until is None:
+        return False
+    if _monotonic() >= until:
+        _session_paused_until.pop(account_id, None)
+        return False
+    return True
+
+
+def remaining_pause_seconds(account_id: str) -> int:
+    until = _session_paused_until.get(account_id)
+    if until is None:
+        return 0
+    remaining = until - _monotonic()
+    if remaining <= 0:
+        _session_paused_until.pop(account_id, None)
+        return 0
+    import math
+
+    return math.ceil(remaining)
+
+
+def assert_session_active(account_id: str) -> None:
+    if account_id and is_session_paused(account_id):
+        raise ChannelTransportError(
+            f"账号凭据失效暂停中（-14），剩余 {remaining_pause_seconds(account_id) // 60} 分钟",
+            ret=STALE_TOKEN_CODE,
+            retryable=False,
+        )
+
+
+def _reset_session_guard_for_test() -> None:
+    _session_paused_until.clear()
+
+
+def classify_channel_error(payload: Mapping[str, Any]) -> str:
+    """按官方语义识别凭据失效：ret 与 errcode 任一为 -14 即 stale_token。
+
+    官方处理同时覆盖两个字段（session-guard 检查 errcode，协议示例两处出现）。
+    """
+    for field in ("ret", "errcode"):
+        value = payload.get(field)
+        if isinstance(value, bool):
+            continue
+        try:
+            if value is not None and int(value) == STALE_TOKEN_CODE:
+                return "stale_token"
+        except (TypeError, ValueError):
+            continue
+    return ""
+
 
 class TransportError(ChannelTransportError):
     """兼容旧名；实际异常类型由 channels.contracts 统一提供。"""
 
 
-def ilink_headers(token: str = "", body_len: int = 0) -> dict[str, str]:
-    headers = {
+def ilink_headers(token: str = "", body_len: int = 0, *, app_only: bool = False) -> dict[str, str]:
+    """iLink 请求头。
+
+    官方协议（openclaw-weixin@0ad1ae91347a docs/protocol.md L43/L48）：
+    - X-WECHAT-UIN = Base64(随机 uint32 的十进制字符串)，逐请求随机；
+    - 二维码状态轮询只带应用头（App-Id/ClientVersion），不带 UIN 与认证头；
+      JSON POST 带 AuthorizationType + UIN（携带 token 时再加 Authorization）。
+    """
+    import base64
+    import secrets
+
+    headers: dict[str, str] = {
         "Content-Type": "application/json",
         "iLink-App-Id": "bot",
         "iLink-App-ClientVersion": str((2 << 16) | (2 << 8) | 0),
-        "X-WECHAT-UIN": str(int(time.time()))[:10],
     }
-    if token:
+    if not app_only:
+        uin = secrets.randbelow(2**32)
+        headers["X-WECHAT-UIN"] = base64.b64encode(str(uin).encode("ascii")).decode("ascii")
+    if token and not app_only:
         headers["AuthorizationType"] = "ilink_bot_token"
         headers["Authorization"] = f"Bearer {token}"
     if body_len:
@@ -76,7 +158,7 @@ def _host_allowed(url: str, allowed_hosts: Sequence[str]) -> bool:
 class IlinkTransport(Protocol):
     """测试替身只需实现这三个方法；默认实现见 AiohttpTransport。"""
 
-    async def get_json(self, url: str, *, timeout: float = 15.0) -> dict[str, Any]: ...
+    async def get_json(self, url: str, *, timeout: float = 15.0, headers: dict[str, str] | None = None) -> dict[str, Any]: ...
 
     async def post_json(
         self, url: str, payload: Mapping[str, Any], *, token: str = "", timeout: float = 15.0
@@ -106,12 +188,12 @@ class AiohttpTransport:
             await self._session.close()
             self._session = None
 
-    async def get_json(self, url: str, *, timeout: float = 15.0) -> dict[str, Any]:
+    async def get_json(self, url: str, *, timeout: float = 15.0, headers: dict[str, str] | None = None) -> dict[str, Any]:
         import aiohttp
 
         session = await self._get_session()
         try:
-            async with session.get(url, headers=ilink_headers(), timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            async with session.get(url, headers=headers if headers is not None else ilink_headers(), timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 text = await resp.text()
                 if resp.status != 200:
                     raise TransportError(
@@ -304,7 +386,8 @@ class QrLoginManager:
 
         try:
             data = await self.transport.get_json(
-                f"{session.base_url}{EP_QRCODE_STATUS}?qrcode={session.qrcode_value}"
+                f"{session.base_url}{EP_QRCODE_STATUS}?qrcode={session.qrcode_value}",
+                headers=ilink_headers(app_only=True),  # 官方 L48：状态轮询仅应用头
             )
         except TransportError:
             # 扫码端每 1-2 秒轮询一次；iLink 偶发超时不应把整个绑定流程打成 500。
@@ -386,8 +469,14 @@ async def send_text(
     text: str,
     context_token: str = "",
     chunk_delay: float = 1.2,
+    account_id: str = "",
 ) -> int:
-    """发送文本；返回成功发出的块数。失败抛 TransportError，由调用方记录。"""
+    """发送文本；返回成功发出的块数。失败抛 TransportError，由调用方记录。
+
+    account_id 提供时接入账号级凭据暂停（-14 双向共享）：暂停期直接拒绝，
+    响应 -14 触发 1 小时暂停（官方 session-guard 语义）。
+    """
+    assert_session_active(account_id)
     sent = 0
     for index, chunk in enumerate(split_text(text)):
         if index and chunk_delay:
@@ -408,6 +497,14 @@ async def send_text(
             token=token,
             timeout=15.0,
         )
+        if classify_channel_error(data) == "stale_token":
+            pause_session(account_id)
+            raise TransportError(
+                f"微信发送失败：bot token 失效/过期（-14），账号暂停 "
+                f"{SESSION_PAUSE_SECONDS // 60} 分钟后自动恢复",
+                ret=STALE_TOKEN_CODE,
+                retryable=False,
+            )
         ret = data.get("ret", 0)
         if ret not in (0, None):
             raise TransportError(
