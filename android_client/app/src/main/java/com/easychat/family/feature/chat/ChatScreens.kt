@@ -1,5 +1,6 @@
 package com.easychat.family.feature.chat
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,81 +16,103 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.easychat.family.R
 import com.easychat.family.core.designsystem.XnAvatar
 import com.easychat.family.core.designsystem.XnCard
+import com.easychat.family.core.designsystem.XnEmptyState
 import com.easychat.family.core.designsystem.XnIcon
-import com.easychat.family.core.designsystem.XnMockBadge
 import com.easychat.family.core.designsystem.XnPrimaryButton
 import com.easychat.family.core.designsystem.XnRow
 import com.easychat.family.core.designsystem.XnSourceChip
 import com.easychat.family.core.designsystem.XnSpacing
 import com.easychat.family.core.designsystem.XnUpdatedTag
+import com.easychat.family.core.util.XnTime
 
-/** 会话示例(来源来自 /api/history 的 source 字段;WP2 接真实数据)。 */
-private data class SessionMock(
-    val id: String,
-    val title: String,
-    val source: String, // "wechat" | "web"
-    val time: String,
-)
-
-private val demoSessions = listOf(
-    SessionMock("wx_demo_01", "明天下午三点提醒我取快递", "wechat", "今天 20:31"),
-    SessionMock("wx_demo_02", "周末想做番茄炒蛋", "wechat", "昨天 20:12"),
-    SessionMock("web_demo_01", "和小暖随便聊聊", "web", "今天 09:15"),
-)
-
-/** 聊天列表(设计 §5.3):标题、来源、时间;筛选 全部/微信/App。 */
+/** 聊天列表(设计 §5.3):标题、来源、时间;筛选 全部/微信/App;数据来自 /api/history。 */
 @Composable
-fun ChatListScreen(onOpenChat: (String) -> Unit, onOpenWechatChat: (String) -> Unit) {
+fun ChatListScreen(
+    vm: ChatViewModel,
+    onOpenChat: (String) -> Unit,
+    onNewChat: () -> Unit,
+) {
     var filter by rememberSaveable { mutableStateOf("全部") }
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = XnSpacing.page),
-        verticalArrangement = Arrangement.spacedBy(XnSpacing.md),
-    ) {
+    val sessions by vm.sessions.collectAsStateWithLifecycle()
+    val loading by vm.sessionsLoading.collectAsStateWithLifecycle()
+    val error by vm.sessionsError.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) { vm.loadSessions() }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = XnSpacing.page)) {
         Row(Modifier.fillMaxWidth().padding(vertical = XnSpacing.md), verticalAlignment = Alignment.CenterVertically) {
             Text("聊天", Modifier.weight(1f), style = MaterialTheme.typography.displaySmall)
-            XnMockBadge()
+            XnIcon(R.drawable.ic_plus, contentDescription = "新对话", onClick = onNewChat)
         }
         FilterChips(selected = filter, onSelect = { filter = it })
+        if (error.isNotBlank()) {
+            Text(
+                error,
+                Modifier.padding(vertical = XnSpacing.sm),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        val filtered = sessions.filter {
+            when (filter) {
+                "微信" -> it.source == "wechat"
+                "App" -> it.source == "web"
+                else -> true
+            }
+        }
+        if (filtered.isEmpty() && !loading && error.isBlank()) {
+            XnEmptyState(
+                iconRes = R.drawable.ic_nav_chat,
+                title = "还没有对话",
+                hint = "点右上角 + 开启和小暖的第一次聊天;微信里聊过的也会出现在这里。",
+            )
+        }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(XnSpacing.md)) {
-            items(demoSessions.filter {
-                when (filter) {
-                    "微信" -> it.source == "wechat"
-                    "App" -> it.source == "web"
-                    else -> true
-                }
-            }) { session ->
-                XnCard(Modifier.fillMaxWidth(), onClick = {
-                    if (session.source == "wechat") onOpenWechatChat(session.id) else onOpenChat(session.id)
-                }) {
+            items(filtered, key = { it.session_id }) { session ->
+                XnCard(Modifier.fillMaxWidth(), onClick = { onOpenChat(session.session_id) }) {
                     XnRow(Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f)) {
-                            Text(session.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
+                            Text(
+                                session.title.ifBlank { "未命名对话" },
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 2,
+                            )
                             XnRow(verticalAlignment = Alignment.CenterVertically) {
                                 XnSourceChip(if (session.source == "wechat") "微信" else "App")
-                                XnUpdatedTag(session.time)
+                                XnUpdatedTag(XnTime.formatIso(session.updated_at))
                             }
                         }
                         XnIcon(R.drawable.ic_chevron_right, contentDescription = null)
+                    }
+                }
+            }
+            if (loading) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(XnSpacing.lg), horizontalArrangement = Arrangement.Center) {
+                        CircularProgressIndicator(Modifier.height(24.dp))
                     }
                 }
             }
@@ -99,14 +122,14 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onOpenWechatChat: (String) -> U
 
 @Composable
 private fun FilterChips(selected: String, onSelect: (String) -> Unit) {
-    XnRow {
+    XnRow(Modifier.padding(bottom = XnSpacing.sm)) {
         listOf("全部", "微信", "App").forEach { label ->
             val isSel = label == selected
             Surface(
                 shape = CircleShape,
                 color = if (isSel) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
                 contentColor = if (isSel) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 onClick = { onSelect(label) },
             ) {
                 Text(
@@ -120,68 +143,62 @@ private fun FilterChips(selected: String, onSelect: (String) -> Unit) {
     }
 }
 
-/** 对话消息示例(微信会话为只读查看;WP2 接真实历史与流式)。 */
-private data class BubbleMock(val fromUser: Boolean, val text: String, val time: String)
-
-private val wxDemoBubbles = listOf(
-    BubbleMock(true, "明天下午三点提醒我取快递", "20:31"),
-    BubbleMock(false, "好的,已记下:明天 15:00 取快递。到时候我会通过微信提醒你。", "20:31"),
-)
-
-private val appDemoBubbles = listOf(
-    BubbleMock(true, "今天天气怎么样?", "09:15"),
-    BubbleMock(false, "今天多云,15~22°C,适合出门走走。", "09:15"),
-)
-
 /**
- * 对话详情(设计 §5.3):暖杏用户气泡、奶白助手气泡、助手头像固定小尺寸;
- * 微信会话只读,底部「带着这段聊一聊」生成独立 App 会话草稿(发送前可编辑)。
+ * 对话详情(设计 §5.3/§8.3):流式状态机 UI——正在想一想/流式正文/恢复中/停止;
+ * 微信会话只读,底部「带着这段聊一聊」生成独立 App 会话可编辑草稿。
  */
 @Composable
 fun ChatDetailScreen(
-    sessionId: String,
+    vm: ChatViewModel,
     wechat: Boolean,
     onBack: () -> Unit,
     onContinueChat: () -> Unit,
 ) {
-    var draft by rememberSaveable { mutableStateOf("") }
-    val bubbles = if (wechat) wxDemoBubbles else appDemoBubbles
+    val state by vm.detail.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    var manualScroll by remember { mutableStateOf(false) }
+
+    // 新消息自动到底;用户上滑阅读时保持位置(设计 §5.3)
+    LaunchedEffect(state.messages.size, state.phase) {
+        if (!manualScroll) {
+            listState.animateScrollToItem((state.messages.size - 1).coerceAtLeast(0))
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
-        // 顶栏
         XnRow(
             Modifier.fillMaxWidth().padding(horizontal = XnSpacing.page, vertical = XnSpacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             XnIcon(R.drawable.ic_back, contentDescription = "返回", onClick = onBack)
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    if (wechat) "微信对话" else "小暖",
-                    style = MaterialTheme.typography.titleLarge,
-                )
+                Text(if (wechat) "微信对话" else "小暖", style = MaterialTheme.typography.titleLarge)
                 if (wechat) XnSourceChip("微信里的对话")
             }
             Spacer(Modifier.widthIn(min = 48.dp))
         }
 
-        // 消息区
         LazyColumn(
-            Modifier.weight(1f).padding(horizontal = XnSpacing.page),
+            state = listState,
+            modifier = Modifier.weight(1f).padding(horizontal = XnSpacing.page),
             verticalArrangement = Arrangement.spacedBy(XnSpacing.lg),
         ) {
-            item { XnMockBadge(Modifier.padding(vertical = XnSpacing.sm)) }
-            items(bubbles) { bubble ->
-                if (bubble.fromUser) {
-                    UserBubble(bubble)
-                } else {
-                    AssistantBubble(bubble)
+            if (state.loadingHistory) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(XnSpacing.lg), horizontalArrangement = Arrangement.Center) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
-            if (!wechat) {
+            items(state.messages, key = { it.id }) { message ->
+                if (message.role == "user") UserBubble(message) else AssistantBubble(message)
+            }
+            if (state.statusText.isNotBlank()) {
                 item {
                     XnRow(verticalAlignment = Alignment.CenterVertically) {
                         XnAvatarSmall()
                         Text(
-                            "正在想一想…",
+                            state.statusText,
                             Modifier.padding(start = XnSpacing.md),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -191,7 +208,20 @@ fun ChatDetailScreen(
             }
         }
 
-        // 底部:微信=只读 + 带着这段聊一聊;App=输入区(流式时变为停止,WP2)
+        if (state.errorText.isNotBlank() && !wechat) {
+            Surface(
+                Modifier.fillMaxWidth().padding(horizontal = XnSpacing.page, vertical = XnSpacing.sm),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ) {
+                XnRow(Modifier.padding(XnSpacing.md)) {
+                    Text(state.errorText, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButtonLabel("知道了", onClick = vm::clearError)
+                }
+            }
+        }
+
         if (wechat) {
             Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
                 XnPrimaryButton(
@@ -201,9 +231,20 @@ fun ChatDetailScreen(
                 )
             }
         } else {
-            InputBar(draft = draft, onDraftChange = { draft = it }, onSend = {})
+            InputBar(
+                draft = state.draft,
+                busy = state.busy,
+                onDraftChange = vm::onDraftChange,
+                onSend = vm::send,
+                onStop = vm::cancel,
+            )
         }
     }
+}
+
+@Composable
+private fun TextButtonLabel(label: String, onClick: () -> Unit) {
+    androidx.compose.material3.TextButton(onClick = onClick) { Text(label) }
 }
 
 @Composable
@@ -216,7 +257,7 @@ private fun XnAvatarSmall() {
 }
 
 @Composable
-private fun UserBubble(bubble: BubbleMock) {
+private fun UserBubble(message: UiMessage) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Surface(
             shape = MaterialTheme.shapes.medium,
@@ -224,18 +265,19 @@ private fun UserBubble(bubble: BubbleMock) {
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ) {
             Text(
-                bubble.text,
-                Modifier.padding(horizontal = XnSpacing.lg, vertical = XnSpacing.md)
-                    .widthIn(max = 280.dp),
+                message.content,
+                Modifier.padding(horizontal = XnSpacing.lg, vertical = XnSpacing.md).widthIn(max = 300.dp),
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
-        XnUpdatedTag(bubble.time, Modifier.padding(top = XnSpacing.xs, end = XnSpacing.xs))
+        if (message.createdAt.isNotBlank()) {
+            XnUpdatedTag(XnTime.formatIso(message.createdAt), Modifier.padding(top = XnSpacing.xs, end = XnSpacing.xs))
+        }
     }
 }
 
 @Composable
-private fun AssistantBubble(bubble: BubbleMock) {
+private fun AssistantBubble(message: UiMessage) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
         XnRow(verticalAlignment = Alignment.Top) {
             XnAvatarSmall()
@@ -243,29 +285,36 @@ private fun AssistantBubble(bubble: BubbleMock) {
                 shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier.padding(start = XnSpacing.md),
             ) {
                 Text(
-                    bubble.text,
-                    Modifier.padding(horizontal = XnSpacing.lg, vertical = XnSpacing.md)
-                        .widthIn(max = 280.dp),
+                    message.content.ifBlank { "…" },
+                    Modifier.padding(horizontal = XnSpacing.lg, vertical = XnSpacing.md).widthIn(max = 300.dp),
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
         }
-        XnUpdatedTag(bubble.time, Modifier.padding(top = XnSpacing.xs, start = 44.dp))
+        if (message.createdAt.isNotBlank()) {
+            XnUpdatedTag(XnTime.formatIso(message.createdAt), Modifier.padding(top = XnSpacing.xs, start = 44.dp))
+        }
     }
 }
 
 @Composable
-private fun InputBar(draft: String, onDraftChange: (String) -> Unit, onSend: () -> Unit) {
+private fun InputBar(
+    draft: String,
+    busy: Boolean,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         XnRow(
             Modifier.fillMaxWidth().padding(XnSpacing.page),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            XnIcon(R.drawable.ic_plus, contentDescription = "添加附件", onClick = {})
+            XnIcon(R.drawable.ic_plus, contentDescription = "添加附件(即将可用)", onClick = {})
             OutlinedTextField(
                 value = draft,
                 onValueChange = onDraftChange,
@@ -277,11 +326,16 @@ private fun InputBar(draft: String, onDraftChange: (String) -> Unit, onSend: () 
                 ),
                 modifier = Modifier.weight(1f).padding(horizontal = XnSpacing.md).heightIn(min = 52.dp),
             )
-            XnIcon(
-                R.drawable.ic_send,
-                contentDescription = "发送",
-                onClick = onSend,
-            )
+            if (busy) {
+                // 生成中显示停止按钮(设计 §5.3)
+                XnIcon(R.drawable.ic_stop, contentDescription = "停止", onClick = onStop)
+            } else {
+                XnIcon(
+                    R.drawable.ic_send,
+                    contentDescription = "发送",
+                    onClick = { if (draft.isNotBlank()) onSend() },
+                )
+            }
         }
     }
 }

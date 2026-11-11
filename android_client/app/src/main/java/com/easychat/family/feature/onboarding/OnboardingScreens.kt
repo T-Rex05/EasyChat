@@ -12,25 +12,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.easychat.family.R
 import com.easychat.family.core.designsystem.XnCard
 import com.easychat.family.core.designsystem.XnIcon
-import com.easychat.family.core.designsystem.XnMockBadge
 import com.easychat.family.core.designsystem.XnPrimaryButton
 import com.easychat.family.core.designsystem.XnRow
 import com.easychat.family.core.designsystem.XnSourceChip
@@ -57,10 +57,7 @@ fun WelcomeScreen(onStart: () -> Unit, onConfigureServer: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(XnSpacing.xxl))
-        Text(
-            "你好,我是小暖。想聊的时候,来这里坐坐。",
-            style = MaterialTheme.typography.bodyLarge,
-        )
+        Text("你好,我是小暖。想聊的时候,来这里坐坐。", style = MaterialTheme.typography.bodyLarge)
         Text(
             "微信里说过的事、定过的提醒,也都能在这里看到。",
             style = MaterialTheme.typography.bodyMedium,
@@ -75,12 +72,15 @@ fun WelcomeScreen(onStart: () -> Unit, onConfigureServer: () -> Unit) {
 }
 
 /**
- * 服务器配置(设计 §5.1):地址输入 + 连接检查。
- * 连接检查将依次验证 /healthz、/readyz(WP2 接真实请求);此处为 WP1 布局,状态为示例。
+ * 服务器配置(设计 §5.1):地址输入 + 依次验证 /healthz、/readyz。
+ * 状态文案:「连接成功 / 正在启动 / 地址暂时连不上」(真实请求,WP2)。
  */
 @Composable
-fun ServerConfigScreen(onConnected: () -> Unit, onBack: () -> Unit) {
-    var address by rememberSaveable { mutableStateOf("http://192.168.1.10:8001") }
+fun ServerConfigScreen(vm: OnboardingViewModel, onConnected: () -> Unit, onBack: () -> Unit) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.check) {
+        if (state.check?.connected == true) onConnected()
+    }
     Column(
         Modifier.fillMaxSize().padding(XnSpacing.page).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(XnSpacing.lg),
@@ -95,8 +95,8 @@ fun ServerConfigScreen(onConnected: () -> Unit, onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
-            value = address,
-            onValueChange = { address = it },
+            value = state.serverUrl,
+            onValueChange = vm::onServerUrlChange,
             label = { Text("服务器地址") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -105,36 +105,76 @@ fun ServerConfigScreen(onConnected: () -> Unit, onBack: () -> Unit) {
         )
         XnCard(Modifier.fillMaxWidth()) {
             XnRow(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                XnSourceChip("示例数据")
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = {}) { Text("扫码配置") }
+                if (state.check == null && !state.checking) {
+                    TextButton(onClick = {}) { Text("扫码配置(即将可用)") }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
             }
-            ConnectionRow("基础连通(/healthz)", "连接成功")
-            ConnectionRow("服务就绪(/readyz)", "连接成功")
-            ConnectionRow("连接类型", "HTTP · 家庭内网联调")
+            ConnectionRow("基础连通(/healthz)", state, waiting = state.check == null && !state.checking)
+            ConnectionRow("服务就绪(/readyz)", state, waiting = state.check == null && !state.checking)
+            if (state.check != null) {
+                ConnectionRow("连接类型", state, waiting = false)
+            }
+            if (state.check != null) {
+                Text(
+                    state.check!!.displayText(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (state.check!!.connected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error,
+                )
+            }
+            if (state.errorText.isNotBlank()) {
+                Text(
+                    state.errorText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
-        XnPrimaryButton("连接", onConnected, Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun ConnectionRow(label: String, status: String) {
-    XnRow(Modifier.fillMaxWidth().padding(vertical = XnSpacing.xs)) {
-        Text(label, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f))
-        Text(
-            status,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary,
+        XnPrimaryButton(
+            if (state.checking) "正在连接…" else "连接",
+            vm::checkConnection,
+            Modifier.fillMaxWidth(),
+            enabled = !state.checking,
         )
     }
 }
 
-/** 登录(设计 §5.1):沿用现有 username/password;WP2 接 /api/auth/login。 */
 @Composable
-fun LoginScreen(onLoggedIn: () -> Unit, onBack: () -> Unit) {
-    var username by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+private fun ConnectionRow(label: String, state: OnboardingUiState, waiting: Boolean, ok: Boolean? = null) {
+    val status = when (label) {
+        "基础连通(/healthz)" -> when {
+            waiting -> "还没连接"
+            state.check?.healthzOk == true -> "连接成功"
+            else -> "没连上"
+        }
+        "服务就绪(/readyz)" -> when {
+            waiting -> "还没连接"
+            state.check?.readyzOk == true -> "连接成功"
+            state.check?.readyzStarting == true -> "正在启动"
+            else -> "没连上"
+        }
+        else -> state.check?.scheme ?: ""
+    }
+    val color = when {
+        ok == true -> MaterialTheme.colorScheme.primary
+        status == "连接成功" -> MaterialTheme.colorScheme.primary
+        status == "正在启动" -> MaterialTheme.colorScheme.onSurfaceVariant
+        waiting -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.error
+    }
+    XnRow(Modifier.fillMaxWidth().padding(vertical = XnSpacing.xs)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.weight(1f))
+        Text(status, style = MaterialTheme.typography.bodyMedium, color = color)
+    }
+}
+
+/** 登录(设计 §5.1):现有 username/password;成功读 /api/auth/me 同步身份。 */
+@Composable
+fun LoginScreen(vm: OnboardingViewModel, onLoggedIn: () -> Unit, onBack: () -> Unit) {
+    val state by vm.state.collectAsStateWithLifecycle()
     Column(
         Modifier.fillMaxSize().padding(XnSpacing.page).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(XnSpacing.lg),
@@ -149,16 +189,16 @@ fun LoginScreen(onLoggedIn: () -> Unit, onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
+            value = state.username,
+            onValueChange = vm::onUsernameChange,
             label = { Text("用户名") },
             singleLine = true,
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
+            value = state.password,
+            onValueChange = vm::onPasswordChange,
             label = { Text("密码") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
@@ -166,7 +206,18 @@ fun LoginScreen(onLoggedIn: () -> Unit, onBack: () -> Unit) {
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
         )
-        XnPrimaryButton("登录", onLoggedIn, Modifier.fillMaxWidth())
-        XnMockBadge()
+        if (state.errorText.isNotBlank()) {
+            Text(
+                state.errorText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        XnRow(verticalAlignment = Alignment.CenterVertically) {
+            XnPrimaryButton(if (state.loggingIn) "正在登录…" else "登录", { vm.login(onLoggedIn) }, Modifier.weight(1f), enabled = !state.loggingIn)
+            if (state.loggingIn) {
+                CircularProgressIndicator(Modifier.padding(start = XnSpacing.md).size(24.dp))
+            }
+        }
     }
 }
