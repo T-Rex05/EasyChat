@@ -168,6 +168,44 @@
           <input v-model="supplementText" class="input grow" placeholder="回答代理的问题，或补充需求…" required />
           <button class="btn btn-sm btn-primary" type="submit" :disabled="supplementing">发送并重新入队</button>
         </form>
+        <!-- 逐项验收（工作包四）：轮次、检查项、证据与接受/打回 -->
+        <div v-if="expanded === t.task_id" class="acceptance">
+          <div class="acc-head">
+            <strong>逐项验收</strong>
+            <span v-if="latestRound(t.task_id)" class="muted">
+              第 {{ latestRound(t.task_id)!.round_no }} 轮 · 结论 {{ latestRound(t.task_id)!.verdict }}
+              · {{ latestRound(t.task_id)!.created_at?.slice(0, 16).replace('T', ' ') }}
+            </span>
+            <span v-else-if="!acceptanceLoading" class="muted">尚无验收轮次（由验收工具或人工提交）</span>
+            <span v-else class="muted">加载中…</span>
+          </div>
+          <template v-for="round in acceptanceRounds[t.task_id] || []" :key="round.id">
+            <div v-if="round.round_no === latestRound(t.task_id)?.round_no" class="acc-round">
+              <div v-for="c in round.checks" :key="c.id" class="acc-check">
+                <span class="acc-badge" :class="`s-${c.status}`">{{ c.status }}</span>
+                <span class="acc-title" :title="c.observation">{{ c.title }}</span>
+                <span v-if="c.decision === 'accepted'" class="acc-decision ok">已接受</span>
+                <span v-else-if="c.decision === 'rejected'" class="acc-decision bad">已打回</span>
+                <span class="acc-actions">
+                  <a v-for="(ev, i) in c.evidence" :key="i" class="link-btn"
+                     :title="ev.description"
+                     @click.prevent="previewEvidence(t, round.id, c.item_id, i)">证据{{ c.evidence.length > 1 ? i + 1 : '' }}</a>
+                  <button v-if="!c.decision" class="btn btn-sm btn-secondary"
+                          @click="decide(t, c.id, 'accepted')">接受</button>
+                  <button v-if="!c.decision" class="btn btn-sm btn-danger"
+                          @click="rejectingId = c.id">打回</button>
+                </span>
+                <div v-if="rejectingId === c.id" class="acc-reject-form">
+                  <input v-model="rejectNote[c.id]" class="input grow"
+                         placeholder="打回说明（将成为代理返工的处理输入）" />
+                  <button class="btn btn-sm btn-danger" @click="decide(t, c.id, 'rejected')">提交打回</button>
+                  <button class="btn btn-sm btn-secondary" @click="rejectingId = null">取消</button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="acc-history muted">历史轮次 #{{ round.round_no }}：{{ round.verdict }}（保留可追溯）</div>
+          </template>
+        </div>
       </article>
     </div>
 
@@ -185,11 +223,15 @@ import {
   createSuperagentTask,
   getSuperagentCapabilities,
   getSuperagentOpsMetrics,
+  decideAcceptanceCheck,
+  fetchAcceptanceEvidence,
   getSuperagentSettings,
+  listAcceptanceRounds,
   listSuperagentEvents,
   listSuperagentTasks,
   retrySuperagentTask,
   updateSuperagentSettings,
+  type AcceptanceRound,
   type SuperagentCapabilities,
   type SuperagentEvent,
   type SuperagentOpsMetrics,
@@ -223,6 +265,54 @@ const supplementing = ref(false)
 const loading = ref(false)
 const creating = ref(false)
 const error = ref('')
+
+// ---- 逐项验收（工作包四） ----
+const acceptanceRounds = ref<Record<string, AcceptanceRound[]>>({})
+const acceptanceLoading = ref(false)
+const rejectNote = ref<Record<number, string>>({}) // check.id -> 打回说明
+const rejectingId = ref<number | null>(null) // 正在填写打回说明的检查项
+
+function latestRound(taskId: string): AcceptanceRound | null {
+  const rounds = acceptanceRounds.value[taskId]
+  return rounds && rounds.length ? rounds[0] : null
+}
+
+async function loadAcceptance(taskId: string) {
+  acceptanceLoading.value = true
+  try {
+    acceptanceRounds.value[taskId] = await listAcceptanceRounds(taskId)
+  } catch {
+    // 验收数据加载失败不阻塞轨迹展示
+  } finally {
+    acceptanceLoading.value = false
+  }
+}
+
+async function decide(t: SuperagentTask, checkId: number, decision: 'accepted' | 'rejected') {
+  error.value = ''
+  const note = decision === 'rejected' ? (rejectNote.value[checkId] || '') : ''
+  try {
+    const result = await decideAcceptanceCheck(checkId, decision, note)
+    rejectingId.value = null
+    rejectNote.value[checkId] = ''
+    await loadAcceptance(t.task_id)
+    if (result.requeued) await load() // 打回返工已回队：列表状态刷新
+  } catch (e: any) {
+    error.value = errMsg(e)
+  }
+}
+
+async function previewEvidence(t: SuperagentTask, roundId: string, itemId: string, index: number) {
+  error.value = ''
+  try {
+    const blob = await fetchAcceptanceEvidence(t.task_id, roundId, itemId, index)
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch (e: any) {
+    error.value = errMsg(e)
+  }
+}
 let pollTimer: number | null = null
 let activeTimer: number | null = null
 let listInFlight = false
@@ -372,6 +462,7 @@ async function toggleDetail(t: SuperagentTask) {
   detailEvents.value = []
   detailAfterId.value = 0
   supplementText.value = ''
+  loadAcceptance(t.task_id) // 验收轮次与轨迹并行加载
   await refreshDetail(t.task_id)
 }
 
@@ -770,4 +861,35 @@ onUnmounted(() => {
     align-items: stretch;
   }
 }
+
+/* 逐项验收（工作包四） */
+.acceptance {
+  margin-top: 10px;
+  border-top: 1px dashed var(--border-primary, #d8dbe2);
+  padding-top: 8px;
+}
+.acc-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.acc-round { display: flex; flex-direction: column; gap: 4px; }
+.acc-check {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 3px 6px; border-radius: 6px;
+}
+.acc-check:hover { background: var(--bg-secondary, #f5f6f8); }
+.acc-badge {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600;
+}
+.acc-badge.s-pass { background: #e6f6ea; color: #1d7f3c; }
+.acc-badge.s-fail { background: #fdeaea; color: #b42318; }
+.acc-badge.s-blocked { background: #fff4e0; color: #a35a00; }
+.acc-badge.s-skipped { background: #eef0f3; color: #6b7280; }
+.acc-title { flex: 1; min-width: 160px; }
+.acc-decision { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+.acc-decision.ok { background: #e6f6ea; color: #1d7f3c; }
+.acc-decision.bad { background: #fdeaea; color: #b42318; }
+.acc-actions { display: flex; gap: 6px; align-items: center; }
+.acc-reject-form {
+  display: flex; gap: 6px; width: 100%; padding: 4px 6px;
+  background: var(--bg-secondary, #f5f6f8); border-radius: 6px;
+}
+.acc-history { font-size: 12px; padding: 2px 6px; }
 </style>
