@@ -255,6 +255,11 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
         )
         return {"round": result}
 
+    @router.get("/tasks/{task_id}/brief")
+    async def task_brief(task_id: str, authorization: Annotated[str | None, Header()] = None):
+        principal = _principal(authorization)
+        return {"brief": service.task_brief(principal, task_id)}
+
     @router.get("/tasks/{task_id}/acceptance")
     async def list_acceptance(task_id: str, authorization: Annotated[str | None, Header()] = None):
         import json as _json

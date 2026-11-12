@@ -465,6 +465,52 @@ class SuperagentService:
         else:
             self.access.require_permission(principal, "superagent.manage")
 
+    # ---- 主管汇总（工作包五：最小交付——依据持久化事实回答状态/卡点/下一步） ----
+
+    def task_brief(self, principal: Principal, task_id: str) -> dict:
+        """把任务账本的当前事实聚合成一段可回信的摘要。
+
+        只读既有账本（任务/attempts/inputs/reports/验收/回执），不改状态；
+        每个字段都可直接追溯到来源表（方案：摘要附依据，完整日志留在任务内）。
+        """
+        task = self._task_for(principal, task_id)
+        attempts = self.repo.attempts_for_task(task.task_id)
+        latest_attempt = attempts[-1] if attempts else None
+        inputs = self.repo.unconsumed_inputs(task.task_id)
+        reports = self.repo.reports_for_task(task.task_id, limit=1)
+        rounds = self.acceptance.list_rounds(task.task_id, limit=1)
+        next_step = {
+            "queued": "等待后台代理认领执行",
+            "running": "代理执行中（可随时取消或补充输入）",
+            "waiting_input": "代理已追问，请在原会话回复补充信息",
+            "blocked": "任务受阻，请查看阻塞原因后重试或补充",
+            "failed": "执行失败，可重试或重新描述需求",
+            "cancel_requested": "取消请求已受理，等待执行停止",
+            "cancelled": "任务已取消",
+            "interrupted": "服务中断过，重试前会先对账远端状态",
+            "succeeded": "交付完成，Draft PR 等待人工评审与合并",
+            "awaiting_review": "Draft PR 就绪，等待人工评审",
+        }.get(task.status, "状态异常，请刷新")
+        brief = {
+            "task_id": task.task_id,
+            "title": task.title,
+            "status": task.status,
+            "phase": task.phase,
+            "pr": {"url": task.pr_url, "number": task.pr_number, "state": task.pr_state}
+            if task.pr_url else None,
+            "attempts": len(attempts),
+            "latest_checkpoint": latest_attempt.checkpoint if latest_attempt else "",
+            "pending_inputs": len(inputs),
+            "acceptance": (
+                {"round_no": rounds[0]["round_no"], "verdict": rounds[0]["verdict"]}
+                if rounds else None
+            ),
+            "latest_report_kind": reports[-1].kind if reports else "",
+            "blocked_reason": task.error[:300] if task.error else "",
+            "next_step": next_step,
+        }
+        return brief
+
     # ---- 逐项验收（工作包四） ------------------------------------------------------
 
     def submit_acceptance_round(
