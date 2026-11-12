@@ -257,11 +257,16 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
 
     @router.get("/tasks/{task_id}/acceptance")
     async def list_acceptance(task_id: str, authorization: Annotated[str | None, Header()] = None):
+        import json as _json
+
         principal = _principal(authorization)
         rounds = service.acceptance_for_task(principal, task_id)
         for r in rounds:
+            r["summary"] = _json.loads(r.pop("summary_json") or "{}")
+            r["provenance"] = _json.loads(r.pop("provenance_json") or "{}")
             for c in r["checks"]:
-                c.pop("evidence_json", None)  # 列表不内联证据正文,预览走受控端点
+                c["evidence"] = _json.loads(c.pop("evidence_json") or "[]")
+                c["required_evidence"] = _json.loads(c.pop("required_evidence") or "[]")
         return {"rounds": rounds}
 
     @router.post("/acceptance/checks/{check_id}/decision")
