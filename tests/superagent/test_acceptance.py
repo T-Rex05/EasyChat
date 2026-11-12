@@ -128,3 +128,25 @@ async def test_accept_access_control(rig) -> None:
     with pytest.raises(InvalidInputError):
         service.submit_acceptance_round(owner, task.task_id, requirement="x", checks=[
             {"item_id": "z", "title": "t", "status": "banana", "evidence": []}])
+
+
+@pytest.mark.asyncio
+async def test_task_brief_aggregates_ledger_facts(rig) -> None:
+    """WP5 最小交付:主管汇总只读账本聚合,状态→下一步映射,跨用户拒绝。"""
+    service, admin, owner, other = await _env(rig)
+    task, attempt = await _succeeded_task(service, owner)
+    service.submit_acceptance_round(owner, task.task_id, attempt_id=attempt.attempt_id, **ROUND1)
+    rounds = service.acceptance_for_task(owner, task.task_id)
+    c1 = [c for c in rounds[0]["checks"] if c["item_id"] == "c1"][0]
+    service.decide_acceptance_check(owner, c1["id"], decision="rejected", note="间距仍偏大")
+
+    brief = service.task_brief(owner, task.task_id)
+    assert brief["task_id"] == task.task_id
+    assert brief["status"] == "queued"          # 打回后回队
+    assert brief["attempts"] == 1
+    assert brief["pending_inputs"] == 1         # 打回输入未消费
+    assert brief["acceptance"] == {"round_no": 1, "verdict": "partial"}
+    assert "等待" in brief["next_step"]
+
+    with pytest.raises(ForbiddenError):
+        service.task_brief(other, task.task_id)

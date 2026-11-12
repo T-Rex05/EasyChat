@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 构建允许明文 HTTP(设计 §5.1:家庭内网联调使用明确的开发构建配置);
+     release 构建不包含本覆盖,默认仅 HTTPS。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

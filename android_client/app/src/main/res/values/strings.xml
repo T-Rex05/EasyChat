@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">小暖</string>
+    <string name="nav_today">今天</string>
+    <string name="nav_chat">聊天</string>
+    <string name="nav_life">生活</string>
+    <string name="nav_profile">我的</string>
+    <string name="mock_badge">示例数据</string>
+</resources>
