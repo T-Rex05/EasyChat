@@ -163,3 +163,60 @@ export async function getSuperagentOpsMetrics(): Promise<SuperagentOpsMetrics> {
   const res = await request.get<{ metrics: SuperagentOpsMetrics }>('/api/superagent/ops/metrics')
   return res.data.metrics
 }
+
+// ---- 逐项验收（工作包四） ----------------------------------------------------
+
+export interface AcceptanceCheck {
+  id: number
+  item_id: string
+  title: string
+  category: string
+  status: string // pass | fail | blocked | skipped
+  required_evidence: string
+  observation: string
+  evidence: { path: string; description: string; type?: string }[]
+  decision: string // '' | accepted | rejected
+  decided_by: number | null
+  decided_at: string | null
+  decision_note: string
+}
+
+export interface AcceptanceRound {
+  id: string
+  task_id: string
+  attempt_id: string
+  round_no: number
+  requirement: string
+  verdict: string // pass | fail | partial
+  summary: { total?: number; passed?: number; failed?: number; blocked?: number; skipped?: number }
+  provenance: Record<string, unknown>
+  created_by: number
+  created_at: string
+  checks: AcceptanceCheck[]
+}
+
+export async function listAcceptanceRounds(taskId: string): Promise<AcceptanceRound[]> {
+  const res = await request.get<{ rounds: AcceptanceRound[] }>(
+    `/api/superagent/tasks/${taskId}/acceptance`,
+  )
+  return res.data.rounds || []
+}
+
+export async function decideAcceptanceCheck(
+  checkId: number, decision: 'accepted' | 'rejected', note = '',
+): Promise<{ check_id: number; decision: string; first_reject: boolean; requeued: boolean }> {
+  const res = await request.post<{ decision: { check_id: number; decision: string; first_reject: boolean; requeued: boolean } }>(
+    `/api/superagent/acceptance/checks/${checkId}/decision`, { decision, note },
+  )
+  return res.data.decision
+}
+
+export async function fetchAcceptanceEvidence(
+  taskId: string, roundId: string, itemId: string, index: number,
+): Promise<Blob> {
+  const res = await request.get(
+    `/api/superagent/tasks/${taskId}/acceptance/rounds/${roundId}/evidence/${itemId}/${index}`,
+    { responseType: 'blob' },
+  )
+  return res.data as Blob
+}
