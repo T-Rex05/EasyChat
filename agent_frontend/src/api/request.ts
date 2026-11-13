@@ -2,6 +2,7 @@
 
 import axios, { type AxiosInstance, type InternalAxiosRequestConfig, type AxiosResponse } from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import { extractErrorMessage } from '@/utils/errorMessage'
 
 // API 基础路径（从环境变量或默认值）
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -58,30 +59,18 @@ request.interceptors.response.use(
         localStorage.setItem('authToken', newToken)
       }
 
-      // 提取后端返回的中文 detail 信息。
-      // detail 可能是字符串（HTTPException）、对象或数组（FastAPI 422 校验错误），
-      // 统一压成可读字符串，并写回 data.detail，避免视图 alert 出 "[object Object]"。
-      if (data && data.detail) {
-        let msg = ''
-        if (typeof data.detail === 'string') {
-          msg = data.detail
-        } else if (Array.isArray(data.detail)) {
-          msg = data.detail.map((d: any) => {
-            if (typeof d === 'string') return d
-            if (d && typeof d === 'object') {
-              const loc = Array.isArray(d.loc) ? d.loc.filter((x: any) => typeof x === 'string').join('.') : ''
-              const text = d.msg || JSON.stringify(d)
-              return loc ? loc + ': ' + text : text
-            }
-            return String(d)
-          }).filter(Boolean).join('；')
-        } else if (typeof data.detail === 'object') {
-          try { msg = JSON.stringify(data.detail) } catch { /* ignore */ }
+      // 统一提取业务可读中文原因（P5）：兼容 detail（字符串/数组/对象）与
+      // AppError 的顶层 message；提取结果写回 error.message 与 data.detail，
+      // 老页面按 detail 读取同样拿到规范化文本，不再出现
+      // "Request failed with status code 422" 或 "[object Object]"。
+      const readable = extractErrorMessage(error)
+      if (readable && data) {
+        if (!(typeof data.detail === 'string' && data.detail.trim())) {
+          data.detail = readable
         }
-        if (msg) {
-          error.message = msg
-          data.detail = msg
-        }
+      }
+      if (readable) {
+        error.message = readable
       }
 
       // 401 未授权：清除 token 并跳转登录（去重，防止并发请求重复触发）

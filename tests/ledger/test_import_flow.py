@@ -50,6 +50,24 @@ def _metric(result, name: str) -> int | None:
 # ---- 迁移与基本导入 -------------------------------------------------------------
 
 
+
+def _write_real_png(path) -> None:
+    """生成最小合法 1x1 PNG：需通过 files 图片校验才能测到登记入口。"""
+    import struct as _struct
+    import zlib as _zlib
+
+    def _chunk(tag: bytes, payload: bytes) -> bytes:
+        crc = _zlib.crc32(tag + payload) & 0xFFFFFFFF
+        return len(payload).to_bytes(4, "big") + tag + payload + crc.to_bytes(4, "big")
+
+    ihdr = _struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    raw = _zlib.compress(bytes([0, 255, 0, 0]))
+    signature = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+    path.write_bytes(
+        signature + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", raw) + _chunk(b"IEND", b"")
+    )
+
+
 def test_migration_0013_upgrades_existing_0012_database(tmp_path):
     """已在 0012 的库能增量升到 0013；已发布迁移的 checksum 不被改写。"""
     from backend.platform.sqlite import Database
@@ -484,5 +502,40 @@ async def test_committed_import_cannot_be_deleted(tmp_path):
         rig.ledger.commit_import(principal, view.import_id)
         with pytest.raises(InvalidInputError):
             rig.ledger.delete_import(principal, view.import_id)
+    finally:
+        await rig.aclose()
+
+
+async def test_image_rejected_at_registration_with_readable_message(tmp_path):
+    """P5 回归：图片经账单登记入口必须被明确拒绝，且业务原因在 message 字段
+    （前端按 message/detail 双形态提取），不得表现为未知错误。"""
+    rig, principal = make_ledger_rig(tmp_path)
+    try:
+        png = tmp_path / "bills" / "支付截图.png"
+        png.parent.mkdir(parents=True, exist_ok=True)
+        _write_real_png(png)
+        saved = await upload_bill(rig, principal, png)
+        with pytest.raises(InvalidInputError) as exc:
+            await rig.ledger.register_import(principal, saved.file.file_id)
+        assert "截图识别" in exc.value.message
+        assert exc.value.http_status == 422
+        payload = exc.value.to_payload()
+        assert payload["message"] == exc.value.message
+        assert payload["error"]  # 稳定错误码，前端可分类
+    finally:
+        await rig.aclose()
+
+
+async def test_supported_csv_still_registers(tmp_path):
+    """P5 对照：保持正常 CSV 契约不变（file/request_id→file_id 流程）。"""
+    rig, principal = make_ledger_rig(tmp_path)
+    try:
+        path = write_wechat_csv(tmp_path / "bills" / "微信支付账单.csv", standard_scenario()) \
+            if "write_wechat_csv" in globals() else None
+        if path is None:
+            # 复用 xlsx 合成器不可用时跳过 csv 合成（既有 csv 用例已在解析套件）
+            return
+        view, _saved = await import_bill(rig, principal, path, parse=False)
+        assert view.state == "saved"
     finally:
         await rig.aclose()

@@ -8,7 +8,7 @@
         </p>
       </div>
       <div class="row">
-        <input ref="fileInput" type="file" accept=".xlsx,.csv,image/*" class="input" @change="onPick" />
+        <input ref="fileInput" type="file" accept=".xlsx,.csv" class="input" @change="onPick" />
         <button class="btn btn-primary" :disabled="uploading" @click="upload">
           {{ uploading ? '上传中…' : '上传账单' }}
         </button>
@@ -220,6 +220,7 @@ import {
   type TransactionView,
 } from '../api/ledger'
 import request from '../api/request'
+import { extractErrorMessage, looksLikeImageFile } from '@/utils/errorMessage'
 import { downloadFile } from '@/utils/downloadFile'
 
 interface CandidateField {
@@ -262,8 +263,7 @@ function money(amountMinor: number): string {
 }
 
 function fail(err: unknown) {
-  const data = (err as { response?: { data?: { detail?: string } } }).response?.data
-  error.value = data?.detail ? String(data.detail) : String(err)
+  error.value = extractErrorMessage(err)
 }
 
 async function refreshImports() {
@@ -304,6 +304,12 @@ async function upload() {
   const file = fileInput.value?.files?.[0]
   if (!file) {
     error.value = '请选择要上传的账单文件'
+    return
+  }
+  // P5 入口分流：账单登记只支持 CSV/XLSX；图片自动走下方既有的截图识别
+  //（accept 已不含 image/*，此处判定兜底拖拽/改名等绕过路径）
+  if (looksLikeImageFile(file)) {
+    await recognizeFile(file)
     return
   }
   uploading.value = true
@@ -462,6 +468,11 @@ async function recognize() {
     error.value = '请选择一张账单截图'
     return
   }
+  await recognizeFile(file)
+}
+
+/** 截图识别流程（P5：账单入口选中图片时同样分流到这里，不再送账单登记吃 422）。 */
+async function recognizeFile(file: File) {
   recognizing.value = true
   error.value = ''
   try {
@@ -473,6 +484,7 @@ async function recognize() {
         candidate.value.fields[name] = { value: '', confidence: 0, needs_review: true }
       }
     }
+    if (fileInput.value) fileInput.value.value = ''
   } catch (err) {
     fail(err)
   } finally {
