@@ -143,7 +143,13 @@ async function loadAll() {
   ])
 }
 
-onMounted(loadAll)
+onMounted(async () => {
+  await loadAll()
+  // 旧链接重定向(#/trace/users→#/trace#global-detail)后滚动到全局区域
+  if (window.location.hash.includes("global-detail")) {
+    document.getElementById("global-detail")?.scrollIntoView({ behavior: "smooth" })
+  }
+})
 </script>
 
 <style scoped>
