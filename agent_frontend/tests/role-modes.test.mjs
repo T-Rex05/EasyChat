@@ -4,11 +4,20 @@ import { test } from 'node:test'
 import { computed, reactive, ref } from 'vue'
 import ts from 'typescript'
 
+async function loadPermissionGroupsUtil() {
+  const source = readFileSync(new URL('../src/utils/permissionGroups.ts', import.meta.url), 'utf8')
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  })
+  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+}
+
 const ledgerUse = ['ledger.view', 'ledger.import', 'ledger.edit', 'ledger.export', 'file.upload', 'file.read']
 
 async function openRole(permissions) {
+  const util = await loadPermissionGroupsUtil()
   const source = readFileSync(new URL('../src/views/admin/RoleEditDialog.vue', import.meta.url), 'utf8')
-  const script = source.match(/<script setup[^>]*>([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
+  const script = source.match(/<script setup[^>]*>([\s\S]*?)<\/script>/)[1].replace(/^import[\s\S]*?from ['"][^'"]+['"]/gm, '')
   const { outputText } = ts.transpileModule(script, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   })
@@ -19,6 +28,12 @@ async function openRole(permissions) {
   const emitted = []
   const bindings = {
     ref, reactive, computed,
+    groupPermissions: util.groupPermissions,
+    visiblePermissions: util.visiblePermissions,
+    internalPermissionDefs: util.internalPermissionDefs,
+    permsAfterCheck: util.permsAfterCheck,
+    permsAfterUncheck: util.permsAfterUncheck,
+    dependencyHint: util.dependencyHint,
     defineProps: () => ({ role: { id: 42, name: 'member', display_name: '成员', permissions } }),
     defineEmits: () => (...a) => { emitted.push(a) }, onMounted: callback => { mounted = callback }, alert() {},
     onUnmounted: callback => { unmounted = callback },
@@ -32,7 +47,7 @@ async function openRole(permissions) {
       async updateRole(id, payload) { saved = structuredClone({ id, ...payload, permissions: [...payload.permissions] }) },
     },
   }
-  const dialog = new Function(...Object.keys(bindings), `${outputText}\nreturn { form, moduleRows, detectMode, onModeChange, onAtomToggle, save, onKeydown }`)(...Object.values(bindings))
+  const dialog = new Function(...Object.keys(bindings), `${outputText}\nreturn { form, moduleRows, detectMode, onModeChange, onPermToggle, save, onKeydown }`)(...Object.values(bindings))
   await mounted()
   return { ...dialog, saved: () => saved, emitted: () => emitted, listeners, runUnmount: () => unmounted && unmounted() }
 }
@@ -82,8 +97,11 @@ test('selecting ledger use adds its existing dependencies without unrelated gran
   dialog.form.moduleModes.ledger = 'use'
   dialog.onModeChange('ledger')
   assert.deepEqual(dialog.form.permissions, ledgerUse)
-  dialog.onAtomToggle('file.read')
+  // 旧语义迁移：v-model 先行、change 回调重推导——已含项重复勾选幂等，
+  // 预设保持 use；真正移除依赖项则会如实降级为 custom（见 incomplete 用例）。
+  dialog.onPermToggle('file.read', { target: { checked: true } })
   assert.equal(dialog.form.moduleModes.ledger, 'use')
+  assert.equal(dialog.form.permissions.filter((k) => k === 'file.read').length, 1)
 })
 
 test('selecting ledger read does not add file or chat permissions', async () => {

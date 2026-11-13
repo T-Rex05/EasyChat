@@ -27,51 +27,92 @@
             系统拥有者（super_admin）拥有全部已启用权限，业务权限区只读。
           </div>
 
-          <!-- 9 个功能项 -->
+          <!-- P6：主编辑区 = 按分组的原子权限复选框（多选、逐项、历史保留） -->
           <h3 class="sub-title">功能权限</h3>
-          <p class="muted-hint">按功能配置；文件能力为账单/对话上传的内部依赖，已随功能自动包含。</p>
-          <div class="module-rows" :class="{ readonly: isOwnerRole }">
-            <div v-for="row in moduleRows" :key="row.module" class="module-row">
-              <div class="module-info">
-                <span class="module-label">{{ row.label }}</span>
-                <span class="module-desc">{{ row.desc }}</span>
-              </div>
-              <select
-                v-model="form.moduleModes[row.module]"
-                class="select mode-select"
-                :disabled="isOwnerRole"
-                @change="onModeChange(row.module)"
-              >
-                <option v-for="m in row.modes" :key="m.mode" :value="m.mode">{{ m.label }}</option>
-                <option v-if="isCustomMode(row.module)" value="custom">自定义（高级）</option>
-              </select>
-            </div>
-          </div>
-          <p v-if="modeChangeNote" class="muted-hint note">{{ modeChangeNote }}</p>
+          <p class="muted-hint">
+            逐项勾选原子授权；带文件依赖的动作（账单导入/导出）勾选时自动附带所需文件授权，
+            取消动作不会撤销共享的文件授权。当前角色已有的授权（含历史自定义项）原样回显。
+          </p>
+          <p v-if="defsLoadFailed" class="muted-hint note">
+            权限定义加载失败：以下按现有授权键回显并可编辑；直接保存不会丢失或扩大权限字段。
+          </p>
+          <div class="perm-groups" :class="{ readonly: isOwnerRole }">
+            <section v-for="group in permGroups" :key="group.group_name" class="perm-group">
+              <h4 class="tool-group-label">{{ group.group_label }}</h4>
+              <label v-for="perm in group.permissions" :key="perm.key" class="perm-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="form.permissions.includes(perm.key)"
+                  :disabled="isOwnerRole"
+                  @change="onPermToggle(perm.key, $event)"
+                />
+                <span>{{ perm.label }}</span>
+                <span class="tool-desc">— {{ perm.description }}</span>
+                <span v-if="perm.risk === 'high'" class="badge badge-danger">高风险</span>
+                <span v-else-if="perm.risk === 'medium'" class="badge badge-warning">中风险</span>
+                <span v-if="dependencyHint(perm.key, permDefs).length" class="tool-desc">
+                  （附带：{{ dependencyHint(perm.key, permDefs).join('、') }}）
+                </span>
+              </label>
+            </section>
 
-          <!-- 高级设置（默认收起） -->
+            <!-- 文件依赖内部项：随动作自动附带，也支持显式取消（历史独立配置可见） -->
+            <section v-if="internalGroups.length > 0" class="perm-group">
+              <h4 class="tool-group-label">文件依赖（内部授权）</h4>
+              <label v-for="perm in internalGroups" :key="perm.key" class="perm-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="form.permissions.includes(perm.key)"
+                  :disabled="isOwnerRole"
+                  @change="onPermToggle(perm.key, $event)"
+                />
+                <span>{{ perm.label }}</span>
+                <span class="tool-desc">— {{ perm.description }}</span>
+              </label>
+            </section>
+
+            <!-- 定义之外的历史权限：原样保留、可显式取消；退役键按后端口径处理 -->
+            <section v-if="orphanPerms.length > 0" class="perm-group">
+              <h4 class="tool-group-label">历史自定义授权（不在当前定义列表）</h4>
+              <label v-for="key in orphanPerms" :key="key" class="perm-checkbox">
+                <input
+                  type="checkbox"
+                  checked
+                  :disabled="isOwnerRole"
+                  @change="onPermToggle(key, $event)"
+                />
+                <span class="mono">{{ key }}</span>
+                <span class="tool-desc">— 保留历史配置；如后端已退役该键，保存时按后端口径处理</span>
+              </label>
+            </section>
+          </div>
+
+          <!-- 高级设置（默认收起）：功能预设 + 工具组 -->
           <div class="advanced">
             <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
               {{ showAdvanced ? '▾' : '▸' }} 高级设置
               <span v-if="customCount" class="muted-hint">（{{ customCount }} 项原子授权/工具）</span>
             </button>
             <div v-show="showAdvanced" class="advanced-body">
-              <h4 class="tool-group-label">原子授权（旧自定义角色兼容；新增权限须显式确认）</h4>
-              <div class="hermes-tools">
-                <label v-for="perm in advancedPerms" :key="perm.key" class="perm-checkbox">
-                  <input
-                    v-model="form.permissions"
-                    type="checkbox"
-                    :value="perm.key"
+              <h4 class="tool-group-label">功能预设（快捷批量，结果同步到上方复选框）</h4>
+              <div class="module-rows" :class="{ readonly: isOwnerRole }">
+                <div v-for="row in moduleRows" :key="row.module" class="module-row">
+                  <div class="module-info">
+                    <span class="module-label">{{ row.label }}</span>
+                    <span class="module-desc">{{ row.desc }}</span>
+                  </div>
+                  <select
+                    v-model="form.moduleModes[row.module]"
+                    class="select mode-select"
                     :disabled="isOwnerRole"
-                    @change="onAtomToggle(perm.key)"
-                  />
-                  <span>{{ perm.label }}</span>
-                  <span class="tool-desc">— {{ perm.description }}</span>
-                  <span v-if="perm.risk === 'high'" class="badge badge-danger">高风险</span>
-                  <span v-else-if="perm.risk === 'medium'" class="badge badge-warning">中风险</span>
-                </label>
+                    @change="onModeChange(row.module)"
+                  >
+                    <option v-for="m in row.modes" :key="m.mode" :value="m.mode">{{ m.label }}</option>
+                    <option v-if="isCustomMode(row.module)" value="custom">自定义</option>
+                  </select>
+                </div>
               </div>
+              <p v-if="modeChangeNote" class="muted-hint note">{{ modeChangeNote }}</p>
 
               <h4 class="tool-group-label">AI 对话工具组</h4>
               <template v-if="toolOptions.length > 0">
@@ -108,6 +149,15 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import * as AdminAPI from '@/api/admin'
+import {
+  groupPermissions,
+  visiblePermissions,
+  internalPermissionDefs,
+  permsAfterCheck,
+  permsAfterUncheck,
+  dependencyHint,
+  type PermissionDef,
+} from '@/utils/permissionGroups'
 
 const props = defineProps<{ role?: any }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
@@ -116,6 +166,7 @@ const saving = ref(false)
 const showAdvanced = ref(false)
 const toolOptions = ref<{ key: string; label: string; desc: string; risk?: string }[]>([])
 const modeChangeNote = ref('')
+const defsLoadFailed = ref(false)
 
 const form = reactive({
   name: '',
@@ -217,24 +268,27 @@ const MODULE_ROWS: ModuleRow[] = [
 // 高级原子授权 = active 且不被功能行管辖
 const moduleRows = MODULE_ROWS
 
-const ADVANCED_KEYS = [
-  'skill.manage', 'evolution.view', 'ledger.manage', 'superagent.manage',
-  'trace.manage', 'file.upload', 'file.read', 'file.delete',
-]
+// ---- P6 主区：后端权限定义（含 depends/internal/lifecycle）驱动分组复选框 ----
+const permDefs = ref<PermissionDef[]>([])
 
-// 从后端权限定义取 label/description/risk（无兜底：加载失败时高级区显示键名）
-const permMeta = ref<Record<string, any>>({})
+const permGroups = computed(() => groupPermissions(visiblePermissions(permDefs.value)))
+const internalGroups = computed(() => internalPermissionDefs(permDefs.value))
+// 当前持有但不在定义列表中的键（历史自定义/定义加载失败的兜底）——原样可编辑
+const orphanPerms = computed(() => {
+  const known = new Set(permDefs.value.map((d) => d.key))
+  return form.permissions.filter((k) => !known.has(k))
+})
 
-const advancedPerms = computed(() =>
-  ADVANCED_KEYS.map(key => ({
-    key,
-    label: permMeta.value[key]?.label || key,
-    description: permMeta.value[key]?.description || '',
-    risk: permMeta.value[key]?.risk || '',
-  })).filter(p => permMeta.value[p.key] ? permMeta.value[p.key].lifecycle === 'active' : true),
-)
+const customCount = computed(() => form.permissions.length + form.hermes_tools.length)
 
-const customCount = computed(() => advancedPerms.value.filter(p => form.permissions.includes(p.key)).length)
+function onPermToggle(key: string, event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  form.permissions = checked
+    ? permsAfterCheck(form.permissions, key, permDefs.value)
+    : permsAfterUncheck(form.permissions, key)
+  // 预设下拉与逐项真值保持同步（可能因此进入 custom）
+  syncModesFromPermissions()
+}
 
 function governedPerms(row: ModuleRow): string[] {
   return row.governed
@@ -289,18 +343,18 @@ function onModeChange(module: string) {
   }
 }
 
-function onAtomToggle(_key: string) {
-  // 原子变更后重新评估功能行模式（可能落入 custom）
-  syncModesFromPermissions()
-}
-
 onMounted(async () => {
-  // 权限定义（含 lifecycle/module/risk 元数据）——单一来源，无离线兜底
+  // 权限定义（含 lifecycle/module/depends/internal/risk 元数据）——单一来源。
+  // 加载失败时不清空、不改写现有授权：主区按历史键回显（orphan 组），
+  // 保存原样提交，绝不因定义故障丢权限字段。
   try {
     const defs = await AdminAPI.getPermissionDefinitions()
-    for (const d of defs || []) permMeta.value[d.key] = d
+    permDefs.value = Array.isArray(defs) ? defs as PermissionDef[] : []
+    defsLoadFailed.value = permDefs.value.length === 0
   } catch (e) {
-    console.warn('权限定义加载失败，高级区仅显示键名:', e)
+    console.warn('权限定义加载失败，按现有授权键回显:', e)
+    permDefs.value = []
+    defsLoadFailed.value = true
   }
   // 工具组：仅后端注册项；失败时禁用编辑（不再使用含废弃项的离线兜底）
   try {
@@ -320,7 +374,6 @@ onMounted(async () => {
     form.permissions = [...(props.role.permissions || [])]
     form.hermes_tools = [...(props.role.hermes_tools || [])]
     syncModesFromPermissions()
-    if (detectAnyCustom()) showAdvanced.value = true
   }
 })
 
@@ -328,10 +381,6 @@ onMounted(async () => {
 // 同时接受当前规范值 'Escape' 与旧值 'Esc',兼容不同 WebView 实现。
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' || e.key === 'Esc') emit('close')
-}
-
-function detectAnyCustom(): boolean {
-  return MODULE_ROWS.some(r => detectMode(r) === 'custom')
 }
 
 async function save() {
@@ -479,6 +528,31 @@ async function save() {
   gap: 6px;
   font-size: 13px;
   padding: 3px 0;
+}
+
+.perm-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.perm-groups.readonly {
+  opacity: 0.85;
+}
+
+.perm-group {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.perm-group .tool-group-label {
+  margin: 0 0 6px;
+}
+
+.mono {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .tool-desc {
