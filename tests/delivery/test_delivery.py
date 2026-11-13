@@ -256,3 +256,72 @@ async def test_delivery_requires_owner_for_status(env):
 
     with pytest.raises(NotFoundError):
         service.status(other.user_id, delivery_id)
+
+
+async def test_terminal_state_feedback_without_reply(env) -> None:
+    """WP-D:失败/取消/空回复 run 均有可读微信回执(此前静默丢弃=无回应缺陷)。
+
+    直接测 bootstrap 终态回调逻辑需要全量 registry,这里以等价最小装配验证
+    _make_run_finished 的文本映射与 run 级 dedup:模拟其分支产出+入队。
+    """
+    from backend.bootstrap import ModuleRegistry, _make_run_finished
+    from backend.platform.settings import default_settings
+
+    rig, service, sender, clock = env
+    reg = ModuleRegistry(settings=default_settings())
+    reg.delivery = service
+    reg.channels = None  # 非 wechat run 不投递的路径由 target 判定,下面用 wechat run 验证
+    # 需要 channels.target 解析:构造最小替身
+    class _Ch:
+        def delivery_target_for_run(self, run):
+            return __import__("backend.modules.channels.contracts", fromlist=["ChannelTarget"]).ChannelTarget(
+                kind="wechat", ref="wx-term-1", channel_account_id="acct-1")
+    reg.channels = _Ch()
+    on_finish = _make_run_finished(reg)
+
+    # failed run:无 assistant 消息 → 回执含"没有完成"
+    user = _user(rig)
+    session = await rig.assistant.create_session(user, source="wechat")
+    with rig.db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO runs(id, owner_id, session_id, client_message_id, source, status, error,"
+            " created_at, updated_at, finished_at)"
+            " VALUES('run-term-f', ?, ?, 'cm-f', 'wechat', 'failed', '模型超时',"
+            " '2026-11-13T00:00:00+00:00', '2026-11-13T00:00:05+00:00', '2026-11-13T00:00:05+00:00')",
+            (user.user_id, session),
+        )
+        run = conn.execute("SELECT * FROM runs WHERE id='run-term-f'").fetchone()
+        on_finish(conn, dict(run))
+    def _texts():
+        conn = rig.db.connect()
+        try:
+            return [str(r["content_text"]) for r in conn.execute(
+                "SELECT content_text FROM deliveries WHERE owner_id=? ORDER BY id",
+                (user.user_id,)).fetchall()]
+        finally:
+            conn.close()
+
+    rows = service.list_for_owner(user.user_id)
+    assert len(rows) == 1
+    assert "没有完成" in _texts()[0] and "模型超时" in _texts()[0]
+
+    # cancelled run:回执"已按你的要求停止"
+    with rig.db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO runs(id, owner_id, session_id, client_message_id, source, status,"
+            " created_at, updated_at)"
+            " VALUES('run-term-c', ?, ?, 'cm-c', 'wechat', 'cancelled',"
+            " '2026-11-13T00:01:00+00:00', '2026-11-13T00:01:01+00:00')",
+            (user.user_id, session),
+        )
+    with rig.db.transaction() as conn:
+        run = conn.execute("SELECT * FROM runs WHERE id='run-term-c'").fetchone()
+        on_finish(conn, dict(run))
+    assert len(service.list_for_owner(user.user_id)) == 2
+    assert any("停止本次回答" in x for x in _texts())
+
+    # 重复终态:run 级 dedup 不双发
+    with rig.db.transaction() as conn:
+        run = conn.execute("SELECT * FROM runs WHERE id='run-term-c'").fetchone()
+        on_finish(conn, dict(run))
+    assert len([x for x in _texts() if "停止" in x]) == 1  # run 级 dedup 不双发

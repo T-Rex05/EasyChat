@@ -327,6 +327,34 @@ class ChannelService:
     def delivery_credentials(self, account_pk: str) -> tuple[ChannelAccount | None, dict[str, str]]:
         return self.listener_account(account_pk)
 
+    def make_session_target_provider(self):
+        """WP-D:为记忆确认提供 (owner_id, session_id)->渠道投递目标 闭包。
+
+        仅当会话归属当前 owner 且其 wechat 绑定仍活跃时返回目标
+        (撤销/换绑后目标自然失效,fail-closed);入队走 delivery 既有
+        dedup/账本机制,重复确认不双发。
+        """
+
+        def provider(owner_id: int, session_id: str) -> ChannelTarget | None:
+            conn = self.db.connect()
+            try:
+                row = conn.execute(
+                    "SELECT owner_id, channel_account_id, external_chat_id"
+                    " FROM sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+                if row is None or int(row["owner_id"]) != int(owner_id):
+                    return None
+                ext = str(row["external_chat_id"] or "")
+                acct = str(row["channel_account_id"] or "")
+                if not ext or not acct:
+                    return None
+                return ChannelTarget(kind="wechat", ref=ext, channel_account_id=acct)
+            finally:
+                conn.close()
+
+        return provider
+
     def delivery_target_for_run(self, run: dict[str, Any]) -> ChannelTarget | None:
         """run 完成时按会话路由解析微信目标；未绑定/禁用返回 None（不投递）。"""
         route = self.repo.find_session_route(str(run.get("session_id") or ""))

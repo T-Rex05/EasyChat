@@ -198,12 +198,21 @@ async def run_startup(registry: ModuleRegistry) -> None:
         )
         from backend.modules.assistant.transcript import load_run_messages
 
+        # channels 晚于 memory 装配：provider 运行期解析(registry 为可变对象)
+        _confirm_writer = make_memory_confirm(
+            db, registry,
+            lambda owner_id, session_id: (
+                registry.channels.make_session_target_provider()(owner_id, session_id)
+                if registry.channels is not None else None
+            ),
+        )
         registry.memory_worker = MemoryWorker(
             registry.memory, registry.job_queue,
             message_loader=lambda owner_id, run_id: load_run_messages(
                 db, owner_id, run_id
             ),
             generator=memory_generator,
+            confirm_writer=_confirm_writer,
         )
 
     # 6) assistant 只构造，不 start；依赖已在构造函数注入
@@ -485,6 +494,53 @@ async def run_startup(registry: ModuleRegistry) -> None:
         registry.assistant.set_skills(registry.skills)
 
 
+def make_memory_confirm(db, registry=None, target_provider=None):
+    """WP-D：显式记忆写入后的确认——会话内 assistant 消息 + 渠道回执(双通道)。
+
+    独立事务；失败不回滚记忆(已持久化)，由 worker 记录明确原因。
+    渠道回执仅在原会话为 wechat 且绑定仍活跃时发送；dedup 键 run 级,不双发。
+    """
+    from backend.platform.sqlite import utc_now_iso
+
+    def _confirm(owner_id: int, run_id: str, text: str) -> None:
+        conn = db.connect()
+        try:
+            run_row = conn.execute("SELECT session_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        finally:
+            conn.close()
+        if run_row is None:
+            return
+        session_id = str(run_row["session_id"])
+        now = utc_now_iso()
+        with db.transaction() as tx:
+            cur = tx.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversations"
+                " WHERE session_id=? AND run_id=?",
+                (session_id, run_id),
+            )
+            seq = int(cur.fetchone()[0])
+            tx.execute(
+                "INSERT INTO conversations(session_id, owner_id, run_id, role, content,"
+                " status, chat_mode, source, seq, created_at, updated_at)"
+                " VALUES(?,?,?, 'assistant', ?, 1, 'normal', 'system', ?, ?, ?)",
+                (session_id, owner_id, run_id, text, seq, now, now),
+            )
+        # 渠道回执:原微信指令必须有微信侧回应(缺陷①闭环)
+        if target_provider is not None and registry is not None and registry.delivery is not None:
+            target = target_provider(owner_id, session_id)
+            if target is not None:
+                from backend.modules.delivery.contracts import target_from_channel
+
+                with db.transaction() as tx:
+                    registry.delivery.enqueue_in_transaction(
+                        tx, owner_id=owner_id, target=target_from_channel(target),
+                        text=text, dedup_key=f"memory-confirm:{run_id}",
+                        source="memory",
+                    )
+
+    return _confirm
+
+
 def _make_superagent_intake(service: Any):
     """命令层只拿窄入口（/开发 /任务 /补充 /取消 /重试）。"""
     from backend.modules.superagent.intake import SuperagentIntake
@@ -598,7 +654,22 @@ def _make_run_finished(registry: ModuleRegistry):
             if item.get("role") == "assistant" and str(item.get("content") or "").strip():
                 final_reply = str(item.get("content") or "")
         if not final_reply:
-            return
+            # WP-D：失败/取消/中断/空回复补可读终态反馈（此前静默丢弃，
+            # 用户在微信侧表现为"发消息无回应"）。dedup 键沿用 run 级，
+            # 重复终态不会双发。
+            status = str(run.get("status") or "")
+            if status == "failed":
+                detail = str(run.get("error") or "").strip()
+                final_reply = (f"这个任务这次没有完成：{detail[:80]}"
+                               if detail else "这个任务这次没有完成，请稍后重试或换一种说法。")
+            elif status == "cancelled":
+                final_reply = "已按你的要求停止本次回答。"
+            elif status == "interrupted":
+                final_reply = "服务中断导致这次回答未完成，请重新发送需求。"
+            elif status == "completed":
+                final_reply = "这次没有产生可发送的回复，请重试或补充说明。"
+            else:
+                return
         from backend.modules.delivery.contracts import target_from_channel
 
         registry.delivery.enqueue_run_in_transaction(

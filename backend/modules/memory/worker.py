@@ -46,12 +46,16 @@ class MemoryWorker:
         message_loader=None,
         generator: Any = None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        confirm_writer=None,
     ) -> None:
         self.service = service
         self.queue = queue
         self.message_loader = message_loader
         self.generator = generator
         self.poll_interval = poll_interval
+        # WP-D:写入后向会话注入确认消息的回调(bootstrap 绑定,避免 memory→assistant 反向依赖)
+        self.confirm_writer = confirm_writer
+        self._status_counts: dict[str, int] = {}
         self._task: asyncio.Task | None = None
         self._stopping = False
         if generator is None:
@@ -111,7 +115,9 @@ class MemoryWorker:
             payload = lease.payload_json()
             try:
                 if lease.kind in (EXTRACT_JOB_KIND, LEGACY_CAPTURE_JOB_KIND):
-                    await self._extract(payload)
+                    status = await self._extract(payload)
+                    if status:
+                        self._status_counts[status] = self._status_counts.get(status, 0) + 1
                 else:
                     signal_id = str(payload.get("signal_id") or "")
                     receipt = self.service.apply_signal(signal_id)
@@ -166,7 +172,10 @@ class MemoryWorker:
                 candidate = candidate_from_user_message(run_id=run_id, text=user_text)
                 if candidate is not None:
                     self.service.remember_explicit(principal, candidate)
-            return
+                    self._confirm(owner_id, run_id, candidate.content)
+                    return "captured_deterministic"
+                return "no_candidate"
+            return "no_explicit"
 
         try:
             raw = await self.generator.generate(
@@ -181,14 +190,18 @@ class MemoryWorker:
                 owner_id=owner_id,
                 max_chars=600,
             )
-        except Exception:  # noqa: BLE001  模型失败按确定性失败处理，不重试
+        except Exception:  # noqa: BLE001  模型失败按确定性失败处理，不重试(现口径保持,状态可诊断)
             logger.warning("记忆提取模型调用失败 run=%s", run_id)
-            return
+            return "model_unavailable"
 
         text = (raw or "").strip()
+        if not text:
+            # WP-D 复现缺陷:此前空文本静默 return→job 成功零记忆,不可区分
+            logger.warning("记忆提取模型返回空文本 run=%s(未写入)", run_id)
+            return "empty_output"
         if not text.startswith("{") or not text.endswith("}"):
             logger.warning("记忆提取输出不是严格 JSON run=%s", run_id)
-            return
+            return "invalid_output"
         try:
             parsed = json.loads(text)
             if not isinstance(parsed, dict):
@@ -198,9 +211,25 @@ class MemoryWorker:
             )
         except (json.JSONDecodeError, ExtractionError):
             logger.warning("记忆提取候选不合法 run=%s", run_id)
+            return "invalid_output"
+        if candidate is None:
+            return "no_candidate"
+        self.service.remember_explicit(principal, candidate)
+        self._confirm(owner_id, run_id, candidate.content)
+        return "captured_model"
+
+    def _confirm(self, owner_id: int, run_id: str, content: str) -> None:
+        """写入成功后的会话内确认。确认失败不回滚记忆(已持久化),
+        记录明确原因供运维(方案:业务确认在持久写入后产生)。"""
+        if self.confirm_writer is None or not content:
             return
-        if candidate is not None:
-            self.service.remember_explicit(principal, candidate)
+        try:
+            self.confirm_writer(owner_id, run_id, f"已记住：{content[:120]}")
+        except Exception:  # noqa: BLE001
+            logger.exception("记忆确认消息写入失败 run=%s", run_id)
+
+    def extraction_status_counts(self) -> dict[str, int]:
+        return dict(self._status_counts)
 
     async def _run(self) -> None:
         while not self._stopping:
