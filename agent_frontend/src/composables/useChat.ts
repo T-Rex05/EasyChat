@@ -50,8 +50,10 @@ export function useChat(chatMode: string = 'normal') {
   const chatStore = useChatStore()
 
   const inputMessage = ref('')
-  const currentEventSource = ref<EventSource | null>(null)
-  const currentCloseFn = ref<(() => void) | null>(null)
+  // 活动流连接按发起会话归属(11-13 缺陷修复:原实例级单例槽会被后发会话覆盖,
+  // 先完成的一方 cleanup 误关后发会话连接,并失去自身连接引用)。
+  // 句柄非响应式;界面状态可见性由 chatStore.streamingSessions 承担。
+  const activeStreams = new Map<string, { eventSource: EventSource | null; closeFn: (() => void) | null }>()
   // 图片附件
   const attachedImages = ref<ChatImage[]>([])
   // 正在上传图片
@@ -223,19 +225,18 @@ export function useChat(chatMode: string = 'normal') {
           filesForApi.length > 0 ? filesForApi : undefined,
           selectedModelId.value || undefined,
         )
-        currentCloseFn.value = close
+        activeStreams.set(chatId, { eventSource: null, closeFn: close })
       } else {
         // 使用 GET EventSource（纯文本短消息）
         const { eventSource, close } = await sendMessageStream(
           text, chatId, createCallbacks(streamState), clientMsgId, chatMode,
           selectedModelId.value || undefined,
         )
-        currentEventSource.value = eventSource
-        currentCloseFn.value = close
+        activeStreams.set(chatId, { eventSource, closeFn: close })
       }
     } catch (error) {
       console.error('SSE 连接失败:', error)
-      cleanup()
+      cleanupStream(chatId)
     }
   }
 
@@ -322,14 +323,14 @@ export function useChat(chatMode: string = 'normal') {
           }
           chatStore.updateLastAssistantMessage(finalContent, metadata, cid)
         }
-        cleanup()
+        cleanupStream(cid)
         window.dispatchEvent(new CustomEvent('chat:refreshHistory'))
       },
 
       onError: (error) => {
         console.error('错误:', error)
         chatStore.updateLastAssistantMessage(`错误：${error}`, undefined, cid)
-        cleanup()
+        cleanupStream(cid)
       },
 
       // ── P0: 子 Agent 委派事件 ──
@@ -382,39 +383,42 @@ export function useChat(chatMode: string = 'normal') {
     pendingApproval.value = null
   }
 
-  // 停止流式生成
+  // 停止流式生成（针对当前浏览会话；其他会话的后台流不受影响）
   async function stopStream() {
-    if (currentCloseFn.value) {
-      currentCloseFn.value()
+    const cid = currentChatId.value || ''
+    const slot = activeStreams.get(cid)
+    if (slot?.closeFn) {
+      slot.closeFn()
     }
 
-    if (currentChatId.value) {
-      const streamState = chatStore.getStreamingSession(currentChatId.value)
+    if (cid) {
+      const streamState = chatStore.getStreamingSession(cid)
       await cancelStream(
-        currentChatId.value,
+        cid,
         streamState?.clientMsgId,
         streamState?.conversationId
       )
     }
 
-    cleanup()
+    cleanupStream(cid)
     chatStore.updateLastAssistantMessage('⏹️ 已停止输出')
   }
 
-  // 清理流式状态
-  function cleanup() {
-    if (currentEventSource.value) {
-      currentEventSource.value.close()
-      currentEventSource.value = null
+  // 清理指定会话的活动连接与流式状态（按发起归属，只清自己）
+  function cleanupStream(chatId: string) {
+    if (!chatId) return
+    const slot = activeStreams.get(chatId)
+    if (slot) {
+      try {
+        slot.eventSource?.close()
+        slot.closeFn?.()
+      } catch {
+        // 连接已死时忽略清理异常
+      }
+      activeStreams.delete(chatId)
     }
-    if (currentCloseFn.value) {
-      currentCloseFn.value = null
-    }
-
-    if (currentChatId.value) {
-      chatStore.removeStreamingSession(currentChatId.value)
-      chatStore.clearPendingStreamFromStorage(currentChatId.value)
-    }
+    chatStore.removeStreamingSession(chatId)
+    chatStore.clearPendingStreamFromStorage(chatId)
   }
 
   // 加载聊天历史
@@ -439,9 +443,15 @@ export function useChat(chatMode: string = 'normal') {
     try {
       chatStore.setCurrentChatId(chatId)
       const historyMessages = await getChatMessages(chatId)
-      console.log('加载到消息:', historyMessages.length, '条')
-      chatStore.setMessages(historyMessages)
-      console.log('setMessages 后 messages 长度:', chatStore.messages.length, 'currentChatId:', chatStore.currentChatId)
+      // 晚到防护（11-13 缺陷修复）：请求期间目标会话产生了内存数据
+      // （新流/新输入/已恢复流），晚到历史不得覆盖——按请求 chatId 丢弃。
+      const st = chatStore.getStreamingSession(chatId)
+      const cur = chatStore.getMessages(chatId)
+      if ((st && st.status === 'streaming') || cur.length > 0) {
+        console.log('晚到历史丢弃：目标会话已有内存数据 chatId=', chatId)
+        return
+      }
+      chatStore.setMessages(historyMessages, chatId) // 显式归属请求会话
     } catch (error) {
       console.error('加载历史消息失败:', error)
     }
@@ -472,7 +482,7 @@ export function useChat(chatMode: string = 'normal') {
     // 先加载已有消息（含后端已持久化的部分回复）
     try {
       const historyMessages = await getChatMessages(chatId)
-      chatStore.setMessages(historyMessages)
+      chatStore.setMessages(historyMessages, chatId) // 显式归属恢复的会话
     } catch (e) {
       console.warn('[useChat] 恢复时加载历史消息失败:', e)
     }
@@ -509,18 +519,17 @@ export function useChat(chatMode: string = 'normal') {
         const { close } = sendMessageStreamPost(
           pendingStream.userMessage, chatId, callbacks, clientMsgId, 'normal',
         )
-        currentCloseFn.value = close
+        activeStreams.set(chatId, { eventSource: null, closeFn: close })
       } else {
         const { eventSource, close } = await sendMessageStream(
           pendingStream.userMessage, chatId, callbacks, clientMsgId,
         )
-        currentEventSource.value = eventSource
-        currentCloseFn.value = close
+        activeStreams.set(chatId, { eventSource, closeFn: close })
       }
       return true
     } catch (e) {
       console.warn('[useChat] 重连 SSE 失败:', e)
-      cleanup()
+      cleanupStream(chatId)
       return false
     }
   }
@@ -545,7 +554,6 @@ export function useChat(chatMode: string = 'normal') {
     reconnectStream,
     newChat,
     sendQuickPrompt,
-    cleanup,
     addImagesFromFiles,
     addImageFromDataUrl,
     removeImage,
