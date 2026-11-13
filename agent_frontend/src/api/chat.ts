@@ -67,7 +67,35 @@ export async function uploadChatFiles(files: File[]): Promise<UploadedFile[]> {
 }
 
 /**
+ * 真实认证失效（HTTP 401/403 明确可证）时走现有登录机制：
+ * 清本地凭据 + 跳登录页。与 request.ts 拦截器、POST 版行为一致。
+ */
+function handleAuthExpired(): void {
+  try {
+    const authStore = useAuthStore()
+    authStore.logout()
+  } catch { /* store 未初始化时退回直接清理 */ }
+  try {
+    localStorage.removeItem('authToken')
+    localStorage.removeItem('userPermissions')
+  } catch { /* ignore */ }
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login'
+  }
+}
+
+const SSE_MAX_RECONNECTS = 2
+
+/**
  * 发送消息并建立 SSE 流式连接（GET 方式，纯文本）
+ *
+ * 错误语义（11-14 整改）：
+ * - ticket 获取按 HTTP 状态分类（401/403→登录机制；409/429/5xx/网络→各自
+ *   可读原因），不得折叠为"请先登录"；
+ * - EventSource 的 error 帧不携带 HTTP 状态，不能据此推断 JWT 失效——
+ *   3 秒启发式已移除；需要认证判定时用有明确状态的 /api/auth/me 探测；
+ * - 断线重连使用新 ticket + 原 client_msg_id（后端按 client_message_id 幂等，
+ *   命中同一 run，不会二次执行模型）+ 已收事件游标 last_seq（服务端续传）。
  */
 export async function sendMessageStream(
   message: string,
@@ -85,99 +113,165 @@ export async function sendMessageStream(
     return { eventSource: new EventSource('data:text/plain,'), close: () => {} }
   }
   // 不做本地过期预检：后端有宽限期刷新机制，由后端决定 token 是否可用
-  // 如果 token 彻底失效，后端会返回 401，由下游处理
 
-  // EventSource 无法携带 Header：先用长效 JWT（Authorization header）换取
-  // 秒级一次性 ticket，URL 上只出现短时效凭据——长效 token 不再进入
-  // 请求目标 / 访问日志（审计 #3）
-  let ticket = ''
-  try {
-    const resp = await fetch(`${API_BASE}/api/chat/sse-ticket`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (resp.ok) {
-      const data = await resp.json()
-      ticket = String(data.ticket || '')
-    }
-  } catch { /* 网络失败按未登录处理 */ }
-  if (!ticket) {
-    callbacks.onError?.('请先登录')
-    return { eventSource: new EventSource('data:text/plain,'), close: () => {} }
-  }
+  const state = { fullContent: '', isComplete: false, lastSeq: '' }
+  const ctrl = { manuallyClosed: false, reconnects: 0, current: null as EventSource | null }
 
-  const encodedMessage = encodeURIComponent(message)
-  let url = `${API_BASE}/chat/stream?message=${encodedMessage}&thread_id=${threadId}`
-
-  if (mode === 'disposal') {
-    url += `&mode=disposal`
-  }
-
-  if (clientMsgId) {
-    url += `&client_msg_id=${encodeURIComponent(clientMsgId)}`
-  }
-
-  if (modelId) {
-    url += `&model_id=${modelId}`
-  }
-
-  url += `&ticket=${encodeURIComponent(ticket)}`
-
-  const eventSource = new EventSource(url)
-  const state = { fullContent: '', isComplete: false }
-  let manuallyClosed = false
-  let connectionStartTime = Date.now()
-  let receivedAnyMessage = false
-
-  eventSource.addEventListener('message', (event) => {
+  // 用长效 JWT（Header 认证）换取秒级一次性 ticket；错误按状态分类上报。
+  // 返回 null 表示失败且原因已回调（不再统一误报"请先登录"）。
+  async function acquireTicket(): Promise<string | null> {
+    let resp: Response
     try {
-      if (!event.data || event.data.trim() === '') {
-        return
-      }
-
-      const data = JSON.parse(event.data)
-
-      // ── 处理 token 续期事件 ──
-      if (data.type === 'token_refresh' && data.token) {
-        localStorage.setItem('authToken', data.token)
-        try {
-          const authStore = useAuthStore()
-          authStore.token = data.token
-        } catch { /* store 未初始化时忽略 */ }
-        return
-      }
-
-      receivedAnyMessage = true
-      dispatchStreamEvent(data, callbacks, state, () => eventSource.close())
-    } catch (e: any) {
-      if (callbacks.onError) {
-        callbacks.onError(`解析事件失败：${e.message}`)
-      }
-      eventSource.close()
+      resp = await fetch(`${API_BASE}/api/chat/sse-ticket`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      })
+    } catch {
+      callbacks.onError?.('无法连接服务，请检查网络后重试')
+      return null
     }
-  })
+    if (resp.status === 401 || resp.status === 403) {
+      handleAuthExpired()
+      callbacks.onError?.('登录已过期，请重新登录')
+      return null
+    }
+    if (resp.status === 409) {
+      callbacks.onError?.('服务繁忙（排队已满），请稍后重试')
+      return null
+    }
+    if (resp.status === 429) {
+      callbacks.onError?.('请求过于频繁，请稍后重试')
+      return null
+    }
+    if (!resp.ok) {
+      callbacks.onError?.(`服务暂时不可用（HTTP ${resp.status}），请稍后重试`)
+      return null
+    }
+    const data = await resp.json().catch(() => null)
+    const freshTicket = data && typeof data.ticket === 'string' ? data.ticket : ''
+    if (!freshTicket) {
+      callbacks.onError?.('登录凭据服务响应异常，请稍后重试')
+      return null
+    }
+    return freshTicket
+  }
 
-  eventSource.addEventListener('error', (_error) => {
-    if (manuallyClosed) {
+  function buildStreamUrl(freshTicket: string): string {
+    let url = `${API_BASE}/chat/stream?message=${encodeURIComponent(message)}&thread_id=${threadId}`
+    if (mode === 'disposal') {
+      url += `&mode=disposal`
+    }
+    if (clientMsgId) {
+      url += `&client_msg_id=${encodeURIComponent(clientMsgId)}`
+    }
+    if (modelId) {
+      url += `&model_id=${modelId}`
+    }
+    // 重连才带游标：服务端按 from_seq 续传，不回放已收到的帧
+    if (ctrl.reconnects > 0 && state.lastSeq) {
+      url += `&last_seq=${encodeURIComponent(state.lastSeq)}`
+    }
+    url += `&ticket=${encodeURIComponent(freshTicket)}`
+    return url
+  }
+
+  function attach(es: EventSource): void {
+    es.addEventListener('message', (event: MessageEvent) => {
+      try {
+        if (!event.data || event.data.trim() === '') {
+          return
+        }
+
+        const data = JSON.parse(event.data)
+
+        // ── 处理 token 续期事件 ──
+        if (data.type === 'token_refresh' && data.token) {
+          localStorage.setItem('authToken', data.token)
+          try {
+            const authStore = useAuthStore()
+            authStore.token = data.token
+          } catch { /* store 未初始化时忽略 */ }
+          return
+        }
+
+        const seq = (event as MessageEvent & { lastEventId?: string }).lastEventId
+        if (seq) {
+          state.lastSeq = String(seq)
+        }
+        dispatchStreamEvent(data, callbacks, state, () => es.close())
+      } catch (e: any) {
+        if (callbacks.onError) {
+          callbacks.onError(`解析事件失败：${e.message}`)
+        }
+        es.close()
+      }
+    })
+
+    es.addEventListener('error', () => {
+      // 完成事件后的正常关闭、用户主动停止都不算异常
+      if (ctrl.manuallyClosed || state.isComplete) {
+        return
+      }
+      void recoverFromDrop(es)
+    })
+  }
+
+  async function recoverFromDrop(dead: EventSource): Promise<void> {
+    // SSE error 帧没有 HTTP 状态：认证判定走显式状态接口，而不是时间启发式
+    let auth: 'ok' | 'expired' | 'unknown' = 'unknown'
+    try {
+      const probe = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      })
+      if (probe.status === 401 || probe.status === 403) {
+        auth = 'expired'
+      } else {
+        auth = probe.ok ? 'ok' : 'unknown'
+      }
+    } catch {
+      auth = 'unknown'
+    }
+    if (ctrl.manuallyClosed || state.isComplete) {
       return
     }
-    if (eventSource.readyState === 2 && !state.isComplete) {
-      // ── 区分认证失败和网络断开 ──
-      // 如果连接建立后立刻断开（<3 秒）且没收到任何消息，基本是认证失败（401）
-      const elapsed = Date.now() - connectionStartTime
-      if (elapsed < 3000 && !receivedAnyMessage) {
-        callbacks.onError?.('登录已过期，请重新登录')
-      } else {
-        callbacks.onError?.('SSE 连接意外断开，请重试')
-      }
+    if (auth === 'expired') {
+      handleAuthExpired()
+      callbacks.onError?.('登录已过期，请重新登录')
+      return
     }
-  })
+    if (ctrl.reconnects >= SSE_MAX_RECONNECTS) {
+      callbacks.onError?.('SSE 连接意外断开，可能为服务繁忙或网络波动，请重试')
+      return
+    }
+    ctrl.reconnects += 1
+    try { dead.close() } catch { /* 已断开 */ }
+    const freshTicket = await acquireTicket()
+    if (!freshTicket || ctrl.manuallyClosed || state.isComplete) {
+      return
+    }
+    // 同一 client_msg_id 重新 GET：后端 submit 按消息标识幂等命中原 run，
+    // 携带 last_seq 续传——不会产生第二次模型执行，也不重复回放。
+    const es = new EventSource(buildStreamUrl(freshTicket))
+    ctrl.current = es
+    attach(es)
+  }
+
+  const ticket = await acquireTicket()
+  if (!ticket) {
+    // 失败原因已按状态精确回调；保持返回接口形状一致
+    return { eventSource: new EventSource('data:text/plain,'), close: () => { ctrl.manuallyClosed = true } }
+  }
+
+  const eventSource = new EventSource(buildStreamUrl(ticket))
+  ctrl.current = eventSource
+  attach(eventSource)
 
   return {
     eventSource,
     close: () => {
-      manuallyClosed = true
-      eventSource.close()
+      ctrl.manuallyClosed = true
+      try { ctrl.current?.close() } catch { /* ignore */ }
+      try { eventSource.close() } catch { /* ignore */ }
     },
   }
 }
@@ -240,11 +334,10 @@ export function sendMessageStreamPost(
     body: JSON.stringify(body),
     signal: abortController.signal,
   }).then(async (response) => {
-    // ── 401 认证失败：精确识别 ──
+    // ── 401 认证失败：走现有登录机制（与 GET 版/拦截器一致） ──
     if (response.status === 401) {
+      handleAuthExpired()
       callbacks.onError?.('登录已过期，请重新登录')
-      localStorage.removeItem('authToken')
-      window.location.href = '/login'
       return
     }
 

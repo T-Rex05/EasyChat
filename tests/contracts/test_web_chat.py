@@ -183,3 +183,38 @@ async def test_stream_rejects_token_query_and_bad_ticket(rig):
             "message": "hi", "thread_id": f"{user.user_id}_2002", "ticket": "bogus",
         })
         assert status == 401
+
+
+async def test_stream_reconnect_resumes_last_seq_without_rerun(rig):
+    """11-14 P1 回归：受控重连=新 ticket+原 client_msg_id+last_seq 游标。
+
+    后端按 client_message_id 幂等命中原 run（不二次执行模型），
+    last_seq 表示最后已收 seq——续传从 N+1 开始，不重复回放旧帧。
+    """
+    user = rig.seed_user(role="user", grants=("chat.use",), username="reconnect_seq")
+    rig.runtime.script_events([
+        _e("token", {"text": "甲"}),
+        _e("token", {"text": "乙"}),
+        _e("completed", {"result": {"final_response": "甲乙", "completed": True}}),
+    ])
+    thread = f"{user.user_id}_2100"
+    async with _client(rig) as client:
+        t1 = rig.access.issue_sse_ticket(user.user_id)
+        status, body = await _read_sse(rig, client, {
+            "message": "hi", "thread_id": thread, "client_msg_id": "rcm-1", "ticket": t1,
+        })
+        assert status == 200
+        assert '"type": "chat_complete"' in body
+        assert rig.runtime.execute_count == 1
+
+        # 受控重连：新 ticket、同一逻辑请求标识、游标停在第一个 token 之后
+        t2 = rig.access.issue_sse_ticket(user.user_id)
+        status2, body2 = await _read_sse(rig, client, {
+            "message": "hi", "thread_id": thread, "client_msg_id": "rcm-1",
+            "ticket": t2, "last_seq": "1",
+        })
+        assert status2 == 200
+        assert rig.runtime.execute_count == 1, "重连不得触发第二次模型执行"
+        # 已收的 seq=1 帧（甲）不回放；仅续传其后内容。run 已 completed，
+        # 完成帧无 id，续传以持久终态呈现（幂等，不重复执行）。
+        assert ("\"content\": \"甲\"" not in body2)

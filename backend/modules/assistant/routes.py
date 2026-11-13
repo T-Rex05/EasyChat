@@ -173,6 +173,7 @@ def build_web_chat_router(
         authorization: Annotated[str | None, Header()] = None,
         mode: str = Query(default="normal"),
         scene: str = Query(default=""),
+        last_seq: int = Query(default=0, ge=0),
         last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     ):
         # URL 上只允许秒级一次性 ticket 或 Authorization header（审计 #3）
@@ -185,7 +186,13 @@ def build_web_chat_router(
             return JSONResponse(status_code=409, content={"error": str(busy)})
         except AppError as exc:
             return JSONResponse(status_code=exc.http_status, content=exc.to_payload())
-        from_seq = _resume_from(last_event_id)
+        # 浏览器自动重连会带 Last-Event-ID header；前端受控重连（新 ticket）
+        # 无法设置 header，以 last_seq 查询参数传"最后已收 seq"，语义相同：
+        # 从 N+1 续传，不重复回放。取两者较大值。
+        from_seq = max(
+            _resume_from(last_event_id),
+            _resume_from(str(last_seq) if last_seq else None),
+        )
         return StreamingResponse(
             _stream_events(principal, receipt.run_id, thread_id, from_seq),
             media_type="text/event-stream",
