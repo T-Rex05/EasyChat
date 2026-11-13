@@ -169,3 +169,143 @@ def test_reminder_e2e_create_due_delivers(rig) -> None:
     asyncio.run(_drain())
     assert len(sender.sent) == 1
     assert "喝水" in str(sender.sent[0]["text"])
+
+
+def _drain(delivery) -> int:
+    async def _pump() -> int:
+        n = 0
+        while await delivery.process_next():
+            n += 1
+        return n
+
+    return asyncio.run(_pump())
+
+
+def _delivery_rows(rig, owner_id: int):
+    conn = rig.db.connect()
+    try:
+        return [
+            dict(r) for r in conn.execute(
+                "SELECT status, error, content_text FROM deliveries"
+                " WHERE owner_id=? ORDER BY id", (owner_id,)
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def test_due_occurrence_single_delivery_across_repeat_tick_and_restart(rig) -> None:
+    """验收场景：服务重启与重复 tick——该 occurrence 仅形成一次逻辑投递。"""
+    rig, user, service, tools, context = _setup(rig)
+    _invoke(tools["reminder_create"],
+            {"text": "交周报", "at": "2026-11-05T14:30:00+08:00"}, context)
+    rig.clock.advance((14 * 3600 + 31 * 60) - (12 * 3600))
+    assert service.tick()
+    assert service.tick() == [], "一次性提醒到期后不应重复触发"
+
+    # 服务重启：全新 SchedulingService 接同一 db，对账后仍不重复
+    restarted = SchedulingService(
+        rig.db, delivery=service.delivery, access=rig.access,
+        clock=rig.clock, queue=None,
+    )
+    assert restarted.tick() == []
+    assert len(_delivery_rows(rig, user.user_id)) == 1
+
+
+def test_cancelled_schedule_delivers_nothing(rig) -> None:
+    """验收场景：暂停(取消)后的提醒到期不投递，历史可解释。"""
+    rig, user, service, tools, context = _setup(rig)
+    out = _invoke(tools["reminder_create"],
+                  {"text": "已被取消", "at": "2026-11-05T14:30:00+08:00"}, context)
+    import re
+
+    schedule_id = re.search(r"ID (\S+?)）", out).group(1)
+    assert "已取消" in _invoke(tools["reminder_cancel"],
+                               {"schedule_id": schedule_id}, context)
+    rig.clock.advance((14 * 3600 + 31 * 60) - (12 * 3600))
+    assert service.tick() == []
+    assert _delivery_rows(rig, user.user_id) == []
+
+
+def test_unbound_before_due_rejects_with_reason(rig) -> None:
+    """验收场景：创建后、到期前解绑——不静默外发，账本留可读拒投原因。"""
+    rig, user, service, tools, context = _setup(rig)
+    sender: FakeSender = service.delivery.sender
+    _invoke(tools["reminder_create"],
+            {"text": "解绑测试", "at": "2026-11-05T14:30:00+08:00"}, context)
+    rig.clock.advance((14 * 3600 + 31 * 60) - (12 * 3600))
+    assert service.tick()
+    sender.deliverable = False  # 到期投递时绑定已撤销
+    _drain(service.delivery)
+
+    rows = _delivery_rows(rig, user.user_id)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    assert "不可用" in str(rows[0]["error"])
+    assert sender.sent == [], "解绑后不得有真实外发"
+
+
+def test_stale_token_pauses_account_and_retry_is_bounded(rig) -> None:
+    """验收场景：凭据失效(errcode -14)——账号上报暂停、投递保留可重试、
+    恢复后重投成功；重试有界由 max_attempts 保证。走真实 WeChatTextSender。"""
+    from backend.modules.delivery.wechat import WeChatTextSender
+
+    clock = FakeClock(NOW)
+    rig = make_rig(rig.tmp_path, clock=clock, seed_access=True)
+    user = rig.seed_user(grants=("cron.create",))
+
+    class _WechatChannels:
+        def __init__(self) -> None:
+            self.reported: list[str] = []
+            self.fail = True
+
+        def is_delivery_binding_active(self, account_pk: str, ext: str) -> bool:
+            return True
+
+        async def send_wechat_text(self, *, account_pk, external_user_id, text,
+                                   context_token=""):
+            if self.fail:
+                from backend.modules.channels.wechat.account import TransportError
+
+                exc = TransportError("invalid bot token")
+                exc.ret = -14
+                raise exc
+            self.sent_text = text
+
+        def report_stale_token(self, account_pk: str) -> None:
+            self.reported.append(account_pk)
+
+    channels = _WechatChannels()
+    delivery = DeliveryService(
+        rig.db, sender=WeChatTextSender(channels), clock=clock,
+        retry_delays=(30.0,), max_attempts=3,
+    )
+    service = SchedulingService(
+        rig.db, delivery=delivery, access=rig.access, clock=clock, queue=None,
+    )
+    tools = {
+        item.name: item for item in build_reminder_tools(
+            scheduling=service,
+            channels=_Channels(), profiles=_Profiles(),
+        )
+    }
+    context = ToolContext(
+        principal=user, run_id="run_" + "c" * 32, session_id="sess_" + "d" * 32,
+        source="wechat", channel_account_id="chn_1",
+    )
+    _invoke(tools["reminder_create"],
+            {"text": "喝水", "at": "2026-11-05T14:30:00+08:00"}, context)
+    rig.clock.advance((14 * 3600 + 31 * 60) - (12 * 3600))
+    assert service.tick()
+
+    _drain(delivery)
+    assert channels.reported == ["chn_1"], "-14 必须上报账号暂停(session-guard)"
+    rows = _delivery_rows(rig, user.user_id)
+    assert rows[0]["status"] == "retry_wait", "凭据失效不得丢消息或误报成功"
+
+    # 暂停期(1h)后恢复：bot token 换新 → 重试成功且只发一次
+    channels.fail = False
+    rig.clock.advance(31)
+    _drain(delivery)
+    assert _delivery_rows(rig, user.user_id)[0]["status"] == "sent"
+    assert "喝水" in channels.sent_text
