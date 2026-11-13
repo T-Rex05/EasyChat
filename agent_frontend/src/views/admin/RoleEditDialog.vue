@@ -188,12 +188,13 @@ const MODULE_ROWS: ModuleRow[] = [
     governed: ['superagent.view', 'superagent.create'],
   },
   {
-    module: 'trace', label: '用量统计', desc: '查看本人用量与排行',
+    module: 'trace', label: '用量统计', desc: '查看本人用量与排行；管理范围可查看全部用户调用明细',
     modes: [
       { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'read', label: '查看', perms: ['trace.view'] },
+      { mode: 'read', label: '查看本人', perms: ['trace.view'] },
+      { mode: 'manage', label: '管理（含全部用户明细）', perms: ['trace.view', 'trace.manage'] },
     ],
-    governed: ['trace.view'],
+    governed: ['trace.view', 'trace.manage'],
   },
   {
     module: 'identity', label: '用户与角色管理', desc: '跨用户身份管理；不可管理拥有者身份',

@@ -57,7 +57,7 @@
         <thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>状态</th></tr></thead>
         <tbody>
           <tr v-for="c in calls" :key="c.call_id">
-            <td>{{ c.created_at }}</td>
+            <td>{{ formatDateTime(c.created_at) }}</td>
             <td>{{ c.model || '—' }}</td>
             <td>{{ c.input_tokens }}</td>
             <td>{{ c.output_tokens }}</td>
@@ -72,11 +72,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import request from '@/api/request'
+import { formatDateTime } from '@/utils/dateTime'
 
 interface Daily { stat_date: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface RankRow { owner_id?: number; username?: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface Call { call_id: string; created_at: string; model?: string; input_tokens: number; output_tokens: number; status?: string }
 
+const myUid = Number(localStorage.getItem('chatUserId') || 0)
 const days = ref(7)
 const daily = ref<Daily[]>([])
 const ranking = ref<RankRow[]>([])
@@ -98,7 +100,7 @@ async function loadAll() {
     loadRanking(),
     request.get<Daily[]>('/api/usage/me/daily', { params: { days: 30 } })
       .then(r => { daily.value = r.data }).catch(() => { daily.value = [] }),
-    request.get<Call[]>('/api/usage/calls', { params: { limit: 50 } })
+    request.get<Call[]>('/api/usage/calls', { params: { limit: 50, ...(myUid ? { owner_id: myUid } : {}) } })
       .then(r => { calls.value = r.data }).catch(() => { calls.value = [] }),
   ])
 }

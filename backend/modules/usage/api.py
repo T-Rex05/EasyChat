@@ -128,6 +128,13 @@ class UsageService:
         rows = self.repo.list_calls(owner_id=owner_id, limit=limit, offset=offset)
         return [self._call_view(row) for row in rows]
 
+    def user_options(self, actor: Principal, *, limit: int = 100, offset: int = 0) -> dict:
+        """全局用量页用户筛选选项:仅 trace.manage/super_admin,字段最小化。"""
+        if actor.role != "super_admin" and "trace.manage" not in self._permissions(actor):
+            raise ForbiddenError("无权查看全局用量")
+        items, total = self.repo.user_options(limit=limit, offset=offset)
+        return {"users": items, "total": total}
+
     def get_call(self, actor: Principal, call_id: str) -> dict[str, Any]:
         row = self.repo.get_call(call_id)
         if row is None:

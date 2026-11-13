@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '用量与排行', icon: '', requiresAuth: true, permission: 'trace.view', capModule: 'trace', capLevel: 'read' },
   },
   {
+    path: '/trace/users',
+    name: 'TraceUsers',
+    component: () => import('../views/UserUsageView.vue'),
+    meta: { title: '全局用量', icon: '', requiresAuth: true, permission: 'trace.manage', capModule: 'trace', capLevel: 'manage' },
+  },
+  {
     path: '/admin',
     name: 'Admin',
     component: () => import('../views/AdminView.vue'),

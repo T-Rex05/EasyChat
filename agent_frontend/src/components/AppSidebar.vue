@@ -163,6 +163,11 @@ const menuItems = computed(() => {
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
     },
     {
+      path: '/trace/users',
+      cap: 'traceUsers', title: '全局用量', perm: 'trace.manage',
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M17.5 13.5a3.5 3.5 0 0 1 3.5 3.5V21"/></svg>`,
+    },
+    {
       path: '/admin',
       cap: 'identity', title: '系统管理', perm: 'system.manage',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
@@ -192,6 +197,7 @@ const menuItems = computed(() => {
       case 'memory': return hasCap('memory', 'read')       // 只读角色也有入口
       case 'skills': return hasCap('skills', 'use') || hasCap('skills', 'manage')
       case 'trace': return hasCap('trace', 'read')          // trace.manage 同样可见
+      case 'traceUsers': return hasCap('trace', 'manage')
       case 'superagent': return hasCap('superagent', 'read')
       case 'schedule': return hasCap('schedule', 'use')
       case 'ledger': return hasCap('ledger', 'read')
@@ -212,7 +218,7 @@ const menuItems = computed(() => {
 
 // 分组：对话与观测 / 技能与记忆 / 系统
 const MENU_GROUP_RULES: { label: string; paths: string[] }[] = [
-  { label: '对话与观测', paths: ['/chat', '/trace'] },
+  { label: '对话与观测', paths: ['/chat', '/trace', '/trace/users'] },
   { label: '技能与记忆', paths: ['/skills', '/memory', '/schedules'] },
   { label: '超级代理', paths: ['/superagent'] },
   { label: '系统', paths: ['/admin', '/config'] },

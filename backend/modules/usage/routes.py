@@ -41,6 +41,15 @@ def build_usage_router(
         principal = _principal(authorization)
         return usage.list_calls(principal, owner_id=owner_id, limit=limit, offset=offset)
 
+    @router.get("/api/usage/users")
+    async def usage_users(
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        principal = _principal(authorization)
+        return usage.user_options(principal, limit=limit, offset=offset)
+
     @router.get("/api/usage/calls/{call_id}")
     async def get_call(
         call_id: str,

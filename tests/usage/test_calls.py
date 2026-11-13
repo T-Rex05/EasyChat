@@ -215,3 +215,39 @@ def test_ranking_requires_trace_view(usage):
     svc._effective_permissions = lambda p: frozenset()  # 无trace.view
     with pytest.raises(ForbiddenError):
         svc.ranking(no_view)
+
+
+def test_user_options_minimal_and_gated(usage):
+    """WP-B:全局用量用户选项——trace.manage 才可用、super_admin 可用、
+    普通用户 403;返回字段仅 user_id/username/last_call(最小授权)。
+    JOIN users 保证只返回真实存在用户(选项与账号表一致)。"""
+    svc, db, clock, now = usage
+    conn = db.connect()
+    for uid in (7, 9):
+        conn.execute(
+            "INSERT INTO users(id, username, password, email, role, status, created_at, updated_at)"
+            " VALUES(?,?,?,?, 'user', 1, '2026-11-13T00:00:00+00:00', '2026-11-13T00:00:00+00:00')",
+            (uid, f"u{uid}", "x", f"u{uid}@e.invalid"),
+        )
+    conn.close()
+    svc.begin_call(owner_id=7, source="chat", provider="p", model="m")
+    svc.begin_call(owner_id=9, source="chat", provider="p", model="m")
+
+    plain = Principal(user_id=7, role="user", permission_revision=0)
+    svc._effective_permissions = lambda p: frozenset({"trace.view"})
+    with pytest.raises(ForbiddenError):
+        svc.user_options(plain)
+
+    admin = Principal(user_id=4, role="user", permission_revision=0)
+    svc._effective_permissions = lambda p: (
+        frozenset({"trace.view", "trace.manage"}) if p.user_id == 4 else frozenset()
+    )
+    result = svc.user_options(admin)
+    assert result["total"] == 2
+    for item in result["users"]:
+        assert set(item) == {"user_id", "username", "last_call"}
+    ids = {r["user_id"] for r in result["users"]}
+    assert ids == {7, 9}
+
+    sup = Principal(user_id=1, role="super_admin", permission_revision=0)
+    assert svc.user_options(sup)["total"] == 2

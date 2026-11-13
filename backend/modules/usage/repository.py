@@ -227,6 +227,26 @@ class UsageRepository:
         finally:
             conn.close()
 
+    def user_options(self, *, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        """有调用记录的用户最小选项(id+用户名),按最近调用排序分页。
+
+        仅供全局用量页筛选控件:不返回邮箱/角色/状态等非必要字段(最小授权)。
+        """
+        conn = self.db.connect()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(DISTINCT owner_id) AS c FROM llm_calls"
+            ).fetchone()["c"]
+            rows = conn.execute(
+                "SELECT u.id AS user_id, u.username AS username, MAX(c.created_at) AS last_call"
+                " FROM llm_calls c JOIN users u ON u.id = c.owner_id"
+                " GROUP BY u.id, u.username ORDER BY last_call DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [dict(r) for r in rows], int(total or 0)
+        finally:
+            conn.close()
+
     # ---- 排行 ------------------------------------------------------------------
 
     def ranking(self, *, days: int = 7, limit: int = 20, today_utc: datetime) -> list[dict[str, Any]]:
