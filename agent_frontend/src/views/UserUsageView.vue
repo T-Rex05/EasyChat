@@ -1,12 +1,12 @@
 <template>
-  <div class="usage-page">
+  <div id="global-detail" class="usage-page">
     <div class="page-header">
       <div>
         <h2>全局调用明细</h2>
         <p class="hint">按用户查看模型调用记录（需要「查看全局用量」权限）。时间按 {{ tzDisplay }} 显示。</p>
       </div>
       <div class="filters">
-        <select v-model="selectedUid" class="select" @change="loadCalls">
+        <select v-model.number="selectedUid" class="select" @change="onFilterChange()">
           <option :value="0">全部用户</option>
           <option v-for="u in users" :key="u.user_id" :value="u.user_id">{{ u.username }}</option>
         </select>
@@ -17,7 +17,7 @@
     <p v-if="error" class="err">{{ error }}</p>
 
     <section class="card">
-      <h3>调用记录（{{ page }} / {{ totalPages }} 页，共 {{ total }} 条）</h3>
+      <h3>调用记录（第 {{ page }} 页）</h3>
       <div v-if="calls.length === 0" class="empty">暂无调用记录</div>
       <table v-else class="table">
         <thead>
@@ -35,20 +35,25 @@
           </tr>
         </tbody>
       </table>
+      <!-- 分页真实口径：后端未提供调用总数，只承诺当前页与"能否继续翻页"，不显示伪总数 -->
       <div class="pager">
         <button class="btn btn-sm btn-secondary" :disabled="page <= 1" @click="goto(page - 1)">上一页</button>
-        <span class="muted">第 {{ page }} 页</span>
-        <button class="btn btn-sm btn-secondary" :disabled="page >= totalPages" @click="goto(page + 1)">下一页</button>
+        <span class="muted">第 {{ page }} 页 · 本页 {{ calls.length }} 条</span>
+        <button class="btn btn-sm btn-secondary" :disabled="!nextAvailable" @click="goto(page + 1)">下一页</button>
       </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-// 全局调用明细页（WP-B）：trace.manage 专属；用户选项来自 /api/usage/users 最小字段。
+// 全局调用明细区域（P2 并入 UsageView；组件保留供路由重定向与嵌入复用）。
+// trace.manage 专属；用户选项来自 /api/usage/users 最小字段。
 import { computed, onMounted, ref } from 'vue'
 import request from '@/api/request'
 import { formatDateTime, timezoneLabel, DEFAULT_TIMEZONE } from '@/utils/dateTime'
+import {
+  GLOBAL_PAGE_SIZE, beginLoad, isStaleResponse, onFilterChanged, canGoNext,
+} from '@/utils/globalUsage'
 
 interface UserOption { user_id: number; username: string; last_call: string }
 interface Call { call_id: string; owner_id: number; created_at: string; source?: string; model?: string; input_tokens: number; output_tokens: number; status?: string }
@@ -57,11 +62,10 @@ const users = ref<UserOption[]>([])
 const calls = ref<Call[]>([])
 const selectedUid = ref(0) // 0=全部
 const page = ref(1)
-const total = ref(0)
-const pageSize = 50
+const nextAvailable = ref(false)
 const error = ref('')
+let loadToken = 0
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 const tzDisplay = computed(() => timezoneLabel(localStorage.getItem('userTimezone') || DEFAULT_TIMEZONE))
 
 function usernameOf(uid: number): string {
@@ -69,29 +73,34 @@ function usernameOf(uid: number): string {
 }
 
 async function loadUsers() {
-  const res = await request.get<{ users: UserOption[]; total: number }>('/api/usage/users', { params: { limit: 500 } })
+  const res = await request.get<{ users: UserOption[] }>('/api/usage/users', { params: { limit: 500 } })
   users.value = res.data.users || []
 }
 
 async function loadCalls() {
   error.value = ''
+  const { nextToken, requestToken } = beginLoad(loadToken)
+  loadToken = nextToken
   try {
-    const params: Record<string, number> = { limit: pageSize, offset: (page.value - 1) * pageSize }
+    const params: Record<string, number> = { limit: GLOBAL_PAGE_SIZE, offset: (page.value - 1) * GLOBAL_PAGE_SIZE }
     if (selectedUid.value > 0) params.owner_id = selectedUid.value
     const res = await request.get<Call[]>('/api/usage/calls', { params })
+    // 竞态防护：快速切换用户/翻页时，晚到的旧筛选响应必须整批丢弃
+    if (isStaleResponse(loadToken, requestToken)) return
     calls.value = res.data || []
-    // 总数:仅"全部"时按选项接口统计,单选时以本页是否满页近似(后端未提供 count,保持窄接口不扩权)
-    if (selectedUid.value === 0) {
-      const all = await request.get<{ total: number }>('/api/usage/users', { params: { limit: 1 } })
-      // users.total 是"用户数"而非调用数;调用总数用一次大 limit 估算代价高——以当前页是否满页给出可翻页提示
-      total.value = calls.value.length < pageSize ? (page.value - 1) * pageSize + calls.value.length : page.value * pageSize + 1
-      void all
-    } else {
-      total.value = calls.value.length < pageSize ? (page.value - 1) * pageSize + calls.value.length : page.value * pageSize + 1
-    }
+    nextAvailable.value = canGoNext(calls.value.length, GLOBAL_PAGE_SIZE)
   } catch (e: any) {
-    error.value = e?.response?.data?.detail?.message || e?.message || '加载失败（需要查看全局用量权限）'
+    if (isStaleResponse(loadToken, requestToken)) return
+    error.value = e?.message || '加载失败（需要查看全局用量权限）'
   }
+}
+
+function onFilterChange() {
+  // v-model 已同步 selectedUid；此处只需把筛选变化收敛为"回到第 1 页再查询"
+  const state = onFilterChanged(selectedUid.value)
+  selectedUid.value = state.selectedUid
+  page.value = state.page
+  loadCalls()
 }
 
 function goto(p: number) {

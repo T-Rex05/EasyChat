@@ -60,9 +60,11 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '用量与排行', icon: '', requiresAuth: true, permission: 'trace.view', capModule: 'trace', capLevel: 'read' },
   },
   {
+    // P2：全局用量已并入"用量与排行"（UsageView 内 trace.manage 区域）；
+    // 旧链接重定向到合并页并锚点定位全局明细区域。
     path: '/trace/users',
     name: 'TraceUsers',
-    component: () => import('../views/UserUsageView.vue'),
+    redirect: { path: '/trace', hash: '#global-detail' },
     meta: { title: '全局用量', icon: '', requiresAuth: true, permission: 'trace.manage', capModule: 'trace', capLevel: 'manage' },
   },
   {

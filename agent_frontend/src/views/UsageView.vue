@@ -51,8 +51,9 @@
     </section>
 
     <section class="card">
-      <h3>最近调用</h3>
-      <div v-if="calls.length === 0" class="empty">暂无调用记录</div>
+      <h3>最近调用（本人）</h3>
+      <p v-if="ownerPendingHint" class="empty">{{ ownerPendingHint }}</p>
+      <div v-else-if="calls.length === 0" class="empty">暂无调用记录</div>
       <table v-else class="table">
         <thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>状态</th></tr></thead>
         <tbody>
@@ -61,29 +62,44 @@
             <td>{{ c.model || '—' }}</td>
             <td>{{ c.input_tokens }}</td>
             <td>{{ c.output_tokens }}</td>
-            <td>{{ c.status || 'ok' }}</td>
+            <td :class="c.status && c.status !== 'ok' ? 'st-bad' : 'st-ok'">{{ c.status || 'ok' }}</td>
           </tr>
         </tbody>
       </table>
     </section>
+
+    <!-- P2：全局用量并入本页，单菜单入口；仅 trace.manage（或 super_admin）可见 -->
+    <UserUsageView v-if="canManageGlobal" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import request from '@/api/request'
 import { formatDateTime } from '@/utils/dateTime'
+import { resolveMyUid } from '@/utils/globalUsage'
+import { useAuthStore } from '@/stores/auth'
+import UserUsageView from './UserUsageView.vue'
 
 interface Daily { stat_date: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface RankRow { owner_id?: number; username?: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface Call { call_id: string; created_at: string; model?: string; input_tokens: number; output_tokens: number; status?: string }
 
-const myUid = Number(localStorage.getItem('chatUserId') || 0)
+const auth = useAuthStore()
 const days = ref(7)
 const daily = ref<Daily[]>([])
 const ranking = ref<RankRow[]>([])
 const calls = ref<Call[]>([])
 const error = ref('')
+const ownerPendingHint = ref('')
+
+// capabilities 为唯一判定来源；未加载时退回原子权限（与侧栏口径一致）
+const canManageGlobal = computed(() => {
+  const cap = auth.capabilities
+  if (cap?.super_admin) return true
+  if (cap?.modules?.trace) return !!cap.modules.trace.manage
+  return auth.permissions.includes('trace.manage')
+})
 
 async function loadRanking() {
   error.value = ''
@@ -95,13 +111,35 @@ async function loadRanking() {
   }
 }
 
+async function loadMyCalls() {
+  // 本人区显式 owner：身份未就绪不发请求——trace.manage 用户此前
+  // "个人页默认拉全量却呈现为我的调用"的语义失真必须杜绝。
+  const uid = resolveMyUid(auth.userId)
+  if (!uid) {
+    ownerPendingHint.value = '身份尚未就绪，无法确定"本人"范围，暂不加载调用记录'
+    calls.value = []
+    return
+  }
+  ownerPendingHint.value = ''
+  try {
+    const res = await request.get<Call[]>('/api/usage/calls', { params: { limit: 50, owner_id: uid } })
+    calls.value = res.data
+  } catch {
+    calls.value = []
+  }
+}
+
 async function loadAll() {
+  // 等待 App 的 /me 身份对齐完成（ready），再发本人请求
+  const start = Date.now()
+  while (!auth.ready && Date.now() - start < 5000) {
+    await new Promise((r) => setTimeout(r, 100))
+  }
   await Promise.all([
     loadRanking(),
     request.get<Daily[]>('/api/usage/me/daily', { params: { days: 30 } })
       .then(r => { daily.value = r.data }).catch(() => { daily.value = [] }),
-    request.get<Call[]>('/api/usage/calls', { params: { limit: 50, ...(myUid ? { owner_id: myUid } : {}) } })
-      .then(r => { calls.value = r.data }).catch(() => { calls.value = [] }),
+    loadMyCalls(),
   ])
 }
 
