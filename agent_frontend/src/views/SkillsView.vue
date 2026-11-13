@@ -10,6 +10,32 @@
 
     <div v-if="error" class="error-banner">{{ error }}</div>
 
+    <!-- P3：内置示例技能模板（来源与固定版本可查；导入≠默认激活） -->
+    <section class="card templates-panel">
+      <button type="button" class="btn-link" @click="showTemplates = !showTemplates">
+        {{ showTemplates ? '▾' : '▸' }} 示例技能模板（PDF 处理 / 表格处理 / 技能编写）
+      </button>
+      <div v-show="showTemplates" class="template-grid">
+        <p v-if="templates.length === 0" class="empty">模板目录加载失败或为空</p>
+        <div v-for="tpl in templates" :key="tpl.key" class="template-card">
+          <h4>{{ tpl.title }}</h4>
+          <p class="muted">{{ tpl.purpose }}</p>
+          <p class="muted small">来源：{{ tpl.origin }} · 固定版本 {{ tpl.commit }} · {{ tpl.license }}</p>
+          <p class="muted small">依赖：{{ tpl.dependencies.length ? tpl.dependencies.join('、') : '无第三方依赖' }}</p>
+          <p class="muted small">{{ tpl.resources }}</p>
+          <div class="template-actions">
+            <button class="btn btn-sm btn-secondary" :disabled="importing === tpl.key" @click="importTemplate(tpl, false)">
+              导入为候选
+            </button>
+            <button class="btn btn-sm btn-primary" :disabled="importing === tpl.key" @click="importTemplate(tpl, true)">
+              导入并激活
+            </button>
+          </div>
+        </div>
+      </div>
+      <p v-if="templateNotice" class="muted notice-line">{{ templateNotice }}</p>
+    </section>
+
     <div class="layout">
       <aside class="card list-panel">
         <div v-if="loading" class="empty">加载中...</div>
@@ -110,6 +136,17 @@ interface Version {
   source: string
   created_at: string
 }
+interface TemplateInfo {
+  key: string
+  name: string
+  title: string
+  purpose: string
+  origin: string
+  commit: string
+  license: string
+  dependencies: string[]
+  resources: string
+}
 
 const skills = ref<Skill[]>([])
 const selected = ref<Skill | null>(null)
@@ -121,6 +158,43 @@ const error = ref('')
 const creating = ref(false)
 const newName = ref('')
 const newContent = ref('')
+
+// P3 模板面板
+const templates = ref<TemplateInfo[]>([])
+const showTemplates = ref(false)
+const importing = ref('')
+const templateNotice = ref('')
+
+async function loadTemplates() {
+  try {
+    const res = await request.get<{ templates: TemplateInfo[] }>('/api/skills/templates')
+    templates.value = res.data.templates || []
+  } catch {
+    // 模板目录是可选能力：加载失败仅面板显示空态，不打断主流程
+    templates.value = []
+  }
+}
+
+async function importTemplate(tpl: TemplateInfo, activate: boolean) {
+  importing.value = tpl.key
+  templateNotice.value = ''
+  error.value = ''
+  try {
+    const res = await request.post(`/api/skills/templates/${tpl.key}/import`, {
+      activate,
+    })
+    const v = res.data.version
+    templateNotice.value = activate
+      ? `已导入并激活「${tpl.title}」来源版本 ${v.source} v${v.version_seq}（${tpl.origin}@${tpl.commit}）`
+      : `已导入「${tpl.title}」为候选版本 v${v.version_seq}，可在技能详情中确认后激活`
+    await load()
+    if (v.skill_id) await openSkill(v.skill_id)
+  } catch (e: any) {
+    error.value = e?.message || '模板导入失败'
+  } finally {
+    importing.value = ''
+  }
+}
 
 const activeVersion = computed(() => versions.value.find(v => v.version_id === selected.value?.active_version_id) || null)
 
@@ -233,7 +307,7 @@ async function createSkill() {
   }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadTemplates() })
 </script>
 
 <style scoped>
@@ -269,4 +343,12 @@ onMounted(load)
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal-card { width: min(680px, 92vw); background: var(--bg-primary); border-radius: 10px; padding: 20px; display: grid; gap: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.templates-panel { padding: 12px 16px; margin-bottom: 16px; }
+.btn-link { background: none; border: none; color: var(--brand); cursor: pointer; font-size: 14px; padding: 0; }
+.template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 10px; }
+.template-card { border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 12px; display: grid; gap: 4px; }
+.template-card h4 { margin: 0 0 4px; font-size: 14px; }
+.template-card .small { font-size: 12px; margin: 0; }
+.template-actions { display: flex; gap: 8px; margin-top: 6px; }
+.notice-line { margin-top: 8px; }
 </style>

@@ -80,6 +80,41 @@ def build_skills_router(service: SkillService, authenticate: Any) -> APIRouter:
         )
         return {"skills": [_skill_payload(s) for s in skills]}
 
+    # ---- P3 内置模板目录（必须先于 /{skill_id} 注册，避免路径被参数路由吞掉） ----
+
+    @router.get("/templates")
+    async def list_templates(authorization: Annotated[str | None, Header()] = None):
+        # 模板元数据为公开内容（来源/许可固定），登录即可浏览；
+        # 导入的写权限（skill.create/manage）由 SkillService 内校验。
+        _principal(authorization)
+        from backend.modules.skills.templates import templates_catalog
+
+        return {"templates": templates_catalog()}
+
+    @router.post("/templates/{key}/import")
+    async def import_template(
+        key: str,
+        body: dict | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        principal = _principal(authorization)
+        payload = body or {}
+        raw_name = payload.get("name")
+        name = str(raw_name) if isinstance(raw_name, str) and raw_name.strip() else None
+        version = service.import_template(principal, key, name=name)
+        activated = None
+        if payload.get("activate") is True:
+            # 显式勾选才激活：导入≠启用，避免批量生效
+            skill = service.get(principal, version.skill_id)
+            activated = service.activate(
+                principal, version.skill_id, version.version_id,
+                skill.active_version_id,
+            )
+        return {
+            "version": _version_payload(version),
+            "activated": _skill_payload(activated) if activated else None,
+        }
+
     @router.get("/{skill_id}")
     async def get_skill(
         skill_id: str,

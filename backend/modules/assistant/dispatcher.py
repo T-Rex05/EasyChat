@@ -320,9 +320,13 @@ class RunDispatcher:
                 for snap in snaps:
                     block = "\n".join((f"### {snap.name}", snap.description, snap.content))
                     if len(block) > budget:
-                        break
+                        # 超预算截断注入而非整体跳过：激活内容必须实际进入请求
+                        # （来源/许可头在文首，截断后保留）；完整正文可在技能页查看。
+                        block = block[:budget] + "\n（内容超出预算已截断；完整版见技能页）"
                     parts.append(block)
                     budget -= len(block)
+                    if budget <= 0:
+                        break
                 if parts:
                     skill_context = "已激活技能（本轮固定版本）：\n\n" + "\n\n".join(parts)
                 skill_versions = tuple((s.name, str(s.version_seq)) for s in snaps)

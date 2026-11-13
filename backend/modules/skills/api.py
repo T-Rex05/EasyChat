@@ -227,6 +227,32 @@ class SkillService:
     def unarchive(self, actor: Principal, skill_id: str) -> SkillView:
         return self.set_archived(actor, skill_id, False)
 
+    # ---- 内置模板导入（P3） ------------------------------------------------------
+
+    def import_template(
+        self, actor: Principal, key: str, *, name: str | None = None
+    ) -> SkillVersionView:
+        """把内置示例模板导入为本人技能候选版本（默认不激活）。
+
+        内容冲突语义：同名技能当前激活内容已与模板一致时复用现有版本，
+        不重复追加；否则经真实 propose 流程产生 validated 版本。
+        """
+        from backend.modules.skills.templates import load_template_content, template_meta
+
+        meta = template_meta(key)
+        target = validate_skill_name(name or meta["name"])
+        content = load_template_content(key)
+        principal = self._principal(actor)
+        skill = self.repo.find_skill(principal.user_id, target)
+        if skill is not None and skill.active_version_id:
+            active = self.repo.get_version(skill.active_version_id)
+            try:
+                if self._read_version_text(active) == content:
+                    return active
+            except FileNotFoundError:
+                pass  # 激活内容文件缺失时按"新建版本"处理，不阻断导入
+        return self.propose(principal, target, content, source=SOURCE_WEB)
+
     # ---- 读取 ------------------------------------------------------------------
 
     def list(
