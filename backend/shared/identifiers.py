@@ -81,6 +81,10 @@ def new_schedule_id() -> str:
     return _new_id(_PREFIX_SCHEDULE)
 
 
+def new_mcp_server_id() -> str:
+    return _new_id("mcp")
+
+
 def new_occurrence_id() -> str:
     return _new_id(_PREFIX_OCCURRENCE)
 

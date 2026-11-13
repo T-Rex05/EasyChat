@@ -90,7 +90,7 @@ def test_0013_database_upgrades_without_rewriting_old_checksums(tmp_path: Path) 
     assert "0014" not in before
 
     applied = db.migrate()
-    assert applied == ["0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025"]
+    assert applied == ["0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026"]
     after = _checksums(db)
     assert after["0012"] == before["0012"]
     assert after["0013"] == before["0013"]

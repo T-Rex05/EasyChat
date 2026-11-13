@@ -57,6 +57,9 @@ class RunDispatcher:
         # 由 bootstrap 晚绑定（channels 装配后）：session → 渠道来源标识；
         # ToolContext 携带后业务工具可固定任务回执目标。
         self.source_for_session: Callable[[str], dict[str, str] | None] | None = None
+        # bootstrap 晚绑定（P4）：principal → 已启用且对其可见的 MCP 工具组名，
+        # 逐 run 并入 allowed_tools；audience 门控在服务层完成。
+        self.mcp_grantor: Callable[[Any], tuple[str, ...]] | None = None
         self.poll_interval = poll_interval
         self._task: asyncio.Task | None = None
         self._stopping = False
@@ -293,6 +296,17 @@ class RunDispatcher:
         principal = self.access.snapshot_principal(owner_id)
         self.access.require_permission(principal, "chat.use")
         role_toolsets = self.access.hermes_toolsets(owner_id)
+        # P4：MCP 工具组逐 run 注入（audience=config_admin 仅系统配置者，
+        # audience=all 面向所有登录用户）。判定失败按不授予处理。
+        grantor = self.mcp_grantor
+        if grantor is not None:
+            try:
+                granted = tuple(grantor(principal))
+            except Exception:  # noqa: BLE001
+                logger.exception("MCP 工具组获取失败 run=%s（本轮不授予）", run["id"])
+                granted = ()
+            if granted:
+                role_toolsets = tuple(set(role_toolsets) | set(granted))
         source = str(run["source"])
         text = self._input_text(run)
         persona_context = ""

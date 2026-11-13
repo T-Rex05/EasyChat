@@ -57,6 +57,7 @@ class ModuleRegistry:
     superagent: Any | None = None  # 超级代理：微信收需求 → 编码 → 自动提 PR
     superagent_worker: Any | None = None
     superagent_webhooks: Any | None = None  # GitHub 回流（T7）
+    mcp: Any | None = None  # P4：MCP 配置服务
     job_queue: Any | None = None  # 共享 JobQueue（run 终态/调度/投递 worker）
 
 
@@ -492,6 +493,25 @@ async def run_startup(registry: ModuleRegistry) -> None:
     # WP-C：assistant 先于 skills 装配，此处晚绑定技能快照入口。
     if registry.assistant is not None and registry.skills is not None:
         registry.assistant.set_skills(registry.skills)
+
+    # 15) MCP 配置能力（P4）：默认关闭；启动仅注册 enabled 配置，
+    # 注册失败不影响核心服务（R04 能力健康独立）。
+    if registry.access is not None:
+        from backend.integrations.mcp import McpAdapter
+        from backend.modules.mcp.api import McpService
+
+        registry.mcp = McpService(
+            db, access=registry.access,
+            encryption_secret=registry.settings.encryption_secret,
+            adapter=McpAdapter(),
+        )
+        try:
+            registry.mcp.register_enabled()
+        except Exception:  # noqa: BLE001  MCP 故障不阻塞启动
+            logger.exception("MCP 启动注册异常（能力降级为未注册）")
+        if registry.assistant is not None:
+            # dispatcher 晚绑定：逐 run 注入 mcp-<name> 工具组（audience 门控）
+            registry.assistant.dispatcher.mcp_grantor = registry.mcp.granted_toolsets
 
 
 def make_memory_confirm(db, registry=None, target_provider=None):

@@ -599,6 +599,13 @@
     </div>
 
     <!-- ──────────────────────────────────────────── -->
+    <!-- Tab: MCP 服务（P4：真实配置 API + 加密凭据 + 连接测试 + 目录发现） -->
+    <!-- ──────────────────────────────────────────── -->
+    <div v-show="activeTab === 'mcp'" class="tab-content">
+      <McpSettingsPanel />
+    </div>
+
+    <!-- ──────────────────────────────────────────── -->
     <!-- Tab 4: 系统信息 -->
     <!-- ──────────────────────────────────────────── -->
     <div v-show="activeTab === 'info'" class="tab-content">
@@ -650,6 +657,7 @@ python main.py</pre>
 </template>
 
 <script setup lang="ts">
+import McpSettingsPanel from '@/components/config/McpSettingsPanel.vue'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { useAuthStore } from '@/stores/auth';
 import { getModelConfigs, createModelConfig, setActiveModelConfig, deleteModelConfig, updateModelConfig, testModelConfig, getEmailConfigs, createEmailConfig, setActiveEmailConfig, deleteEmailConfig, testEmailConfig, getPersonalEmails, addPersonalEmail as apiAddPersonalEmail, setActivePersonalEmail, deletePersonalEmail, getFallbackChain, saveFallbackChain, getSceneRouting, saveSceneRouting, evaluateRoute, getAvailableScenes, type ModelConfig, type TestResult, type EmailConfig, type PersonalEmail, type FallbackChainItem, type SceneRoutingItem, type SceneDefinition, type SceneCategory } from '@/api/config';
@@ -666,6 +674,7 @@ const allTabs = [
   { key: 'model', label: '模型配置', icon: '🤖', perm: 'system.config' },
   { key: 'channel', label: '渠道绑定', icon: '🔗', perm: null },
   { key: 'email', label: '邮箱配置', icon: '📧', perm: 'system.config' },
+  { key: 'mcp', label: 'MCP 服务', icon: '🔌', perm: 'system.config' },
 ];
 const tabs = computed(() => {
   return allTabs.filter(t => !t.perm || authStore.hasPerm(t.perm));

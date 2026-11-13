@@ -102,6 +102,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     from backend.modules.profiles.routes import build_profiles_router
     from backend.modules.scheduling.routes import build_scheduling_router
     from backend.modules.skills.routes import build_skills_router
+    from backend.modules.mcp.routes import build_mcp_router
     from backend.modules.superagent.routes import build_superagent_router
     from backend.modules.usage.routes import build_usage_router
 
@@ -127,6 +128,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     app.include_router(build_email_compat_router(_LazyModule(registry, "email"), authenticate))
     app.include_router(build_memory_router(_LazyModule(registry, "memory"), authenticate))
     app.include_router(build_skills_router(_LazyModule(registry, "skills"), authenticate))
+    app.include_router(build_mcp_router(_LazyModule(registry, "mcp"), authenticate))
     app.include_router(build_superagent_router(_LazyModule(registry, "superagent"), authenticate))
     # GitHub webhook：验签保护（无 JWT）；模块未就绪时 503 由 _LazyModule 兜底
     from backend.modules.superagent.webhooks import build_superagent_webhook_router
