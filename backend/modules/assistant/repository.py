@@ -253,8 +253,12 @@ class AssistantRepository:
                 return False
             return True
 
-    def request_cancel(self, run_id: str) -> str:
-        """请求取消：queued→cancelled 直接取消；running→cancel_requested。"""
+    def request_cancel(self, run_id: str, on_finish: Any = None) -> str:
+        """请求取消：queued→cancelled 直接取消；running→cancel_requested。
+
+        queued 直接取消同样经 finish_terminal 走终态回调（缺陷②：排队取消的
+        微信 run 也必须有可读回执）；running 路径由流结束后的终态推进通知。
+        """
         with self.db.transaction() as conn:
             row = conn.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
             if row is None:
@@ -263,11 +267,43 @@ class AssistantRepository:
         if status in (RUN_COMPLETED, RUN_FAILED, RUN_CANCELLED, RUN_INTERRUPTED):
             return status  # 已终态：幂等，不再变更
         if status == RUN_QUEUED:
-            self.transition_run(run_id, to_status=RUN_CANCELLED)
+            self.finish_terminal(run_id, to_status=RUN_CANCELLED, on_finish=on_finish)
             return RUN_CANCELLED
         if self.transition_run(run_id, to_status=RUN_CANCEL_REQUESTED):
             return RUN_CANCEL_REQUESTED
         return status
+
+    def finish_terminal(
+        self,
+        run_id: str,
+        *,
+        to_status: str,
+        error: str | None = None,
+        on_finish: Callable[[Any, dict[str, Any]], None] | None = None,
+    ) -> bool:
+        """failed/cancelled/interrupted 终态推进 + 终态回调同事务（缺陷②）。
+
+        与 completed 路径的 finish_run_with_projection 对称，但不投影
+        assistant 消息——回执文案由 on_finish（bootstrap 终态回调）按状态
+        映射生成并入队。幂等：条件 UPDATE 以合法旧状态为条件，已终态返回
+        False 且回调不触发；重复终态不产生第二条回执（run 级 dedup 双保险）。
+        """
+        allowed = _TRANSITIONS.get(to_status)
+        if allowed is None:
+            raise InvalidInputError(f"未知目标状态: {to_status}")
+        now = utc_now_iso()
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                f"UPDATE runs SET status=?, finished_at=?, error=?, updated_at=? "
+                f"WHERE id=? AND status IN ({','.join('?' * len(allowed))})",
+                (to_status, now, error, now, run_id, *allowed),
+            )
+            if cur.rowcount != 1:
+                return False
+            if on_finish is not None:
+                row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+                on_finish(conn, dict(row))
+        return True
 
     # ---- 投影与终态（同事务） -------------------------------------------------------
 

@@ -82,7 +82,10 @@ class RunDispatcher:
         self._task = None
 
     async def recover_interrupted(self) -> int:
-        """启动对账：上一进程遗留的 running/cancel_requested 标 interrupted。"""
+        """启动对账：上一进程遗留的 running/cancel_requested 标 interrupted。
+
+        缺陷②：中断也必须走终态回调——微信用户此前对遗留 run 永远无回应。
+        """
         recovered = 0
         conn = self.repo.db.connect()
         try:
@@ -93,8 +96,11 @@ class RunDispatcher:
             conn.close()
         for row in rows:
             run_id = str(row["id"])
-            if self.repo.transition_run(run_id, to_status=RUN_INTERRUPTED,
-                                        error="进程重启，执行中断（已保留检查点，不自动重跑）"):
+            if self.repo.finish_terminal(
+                run_id, to_status=RUN_INTERRUPTED,
+                error="进程重启，执行中断（已保留检查点，不自动重跑）",
+                on_finish=self.on_run_finished,
+            ):
                 self.events.finish(run_id, "interrupted", {"reason": "process_restart"})
                 recovered += 1
         return recovered
@@ -114,7 +120,7 @@ class RunDispatcher:
             return {}
 
     async def request_cancel(self, run_id: str) -> str:
-        status = self.repo.request_cancel(run_id)
+        status = self.repo.request_cancel(run_id, on_finish=self.on_run_finished)
         if status == RUN_CANCEL_REQUESTED:
             self._cancel_flags.add(run_id)
             if run_id not in self._cancelled_runtime:
@@ -146,7 +152,10 @@ class RunDispatcher:
         if not run_id:
             return
         try:
-            if self.repo.transition_run(run_id, to_status=RUN_FAILED, error=error[:500]):
+            if self.repo.finish_terminal(
+                run_id, to_status=RUN_FAILED, error=error[:500],
+                on_finish=self.on_run_finished,
+            ):
                 self.events.finish(run_id, "failed", {"error": error[:500]})
         except Exception:  # noqa: BLE001  状态推进也失败时依赖退避避免热循环
             logger.exception("落 failed 失败 run_id=%s", run_id)
@@ -179,7 +188,10 @@ class RunDispatcher:
             request = self._build_request(run)
         except Exception as exc:  # noqa: BLE001  身份失效/配置损坏必须明确失败
             logger.exception("构建 run 请求失败 run_id=%s", run_id)
-            if self.repo.transition_run(run_id, to_status=RUN_FAILED, error=str(exc)[:500]):
+            if self.repo.finish_terminal(
+                run_id, to_status=RUN_FAILED, error=str(exc)[:500],
+                on_finish=self.on_run_finished,
+            ):
                 self.events.finish(run_id, "failed", {"error": str(exc)[:500]})
             return
 
@@ -240,12 +252,20 @@ class RunDispatcher:
         self._cancel_flags.discard(run_id)
         self._cancelled_runtime.discard(run_id)
 
+        # 缺陷②：failed/cancelled 与 completed 对称，状态推进和可读回执
+        # 入队同事务（finish_terminal 内条件 UPDATE 保证重复终态不双发）。
         if final_status == RUN_CANCELLED:
-            if self.repo.transition_run(run_id, to_status=RUN_CANCELLED, error=error):
+            if self.repo.finish_terminal(
+                run_id, to_status=RUN_CANCELLED, error=error,
+                on_finish=self.on_run_finished,
+            ):
                 self.events.finish(run_id, "cancelled", {"error": error})
             return
         if final_status == RUN_FAILED:
-            if self.repo.transition_run(run_id, to_status=RUN_FAILED, error=error):
+            if self.repo.finish_terminal(
+                run_id, to_status=RUN_FAILED, error=error,
+                on_finish=self.on_run_finished,
+            ):
                 self.events.finish(run_id, "failed", {"error": error})
             return
         # completed：终态 + 投影 + 注入 job 同事务

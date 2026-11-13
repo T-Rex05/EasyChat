@@ -330,28 +330,49 @@ class ChannelService:
     def make_session_target_provider(self):
         """WP-D:为记忆确认提供 (owner_id, session_id)->渠道投递目标 闭包。
 
-        仅当会话归属当前 owner 且其 wechat 绑定仍活跃时返回目标
-        (撤销/换绑后目标自然失效,fail-closed);入队走 delivery 既有
-        dedup/账本机制,重复确认不双发。
+        复用 delivery_target_for_run 同一套真实渠道路由解析
+        (channel_session_cursors)：sessions.external_chat_id 是
+        `account_id:chat_id` 隔离键(/new 还追加时间戳)，绝不能当收件人。
+        fail-closed：会话归属、账号活跃、绑定有效且绑定归属=当前 owner
+        全部核验后才返回；任一失效返回 None(解绑/换绑后不投递)。
         """
 
         def provider(owner_id: int, session_id: str) -> ChannelTarget | None:
             conn = self.db.connect()
             try:
                 row = conn.execute(
-                    "SELECT owner_id, channel_account_id, external_chat_id"
-                    " FROM sessions WHERE id=?",
+                    "SELECT owner_id, source FROM sessions WHERE id=?",
                     (session_id,),
                 ).fetchone()
                 if row is None or int(row["owner_id"]) != int(owner_id):
                     return None
-                ext = str(row["external_chat_id"] or "")
-                acct = str(row["channel_account_id"] or "")
-                if not ext or not acct:
+                if str(row["source"] or "") != "wechat":
                     return None
-                return ChannelTarget(kind="wechat", ref=ext, channel_account_id=acct)
             finally:
                 conn.close()
+            route = self.repo.find_session_route(session_id)
+            if route is None:
+                return None
+            platform = str(route["platform"])
+            account_id = str(route["account_id"])
+            external_user = str(route.get("external_user_id") or "")
+            if not external_user:
+                return None
+            account = self.repo.get_account_by_platform_id(platform, account_id)
+            if account is None or account.status != ACCOUNT_ACTIVE:
+                return None
+            resolved = self.repo.find_active_binding(platform, account_id, external_user)
+            if resolved is None or int(resolved[1].get("status") or 0) != 1:
+                return None
+            binding, _user_state = resolved
+            if int(binding.user_id) != int(owner_id):
+                return None
+            return ChannelTarget(
+                kind=platform,
+                ref=external_user,
+                channel_account_id=account.id,
+                context_token=str(route.get("context_token") or ""),
+            )
 
         return provider
 
