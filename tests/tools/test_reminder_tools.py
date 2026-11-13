@@ -1,6 +1,7 @@
 """提醒工具：ToolContext 身份、无绑定拒绝、创建/列表/取消/稍后。"""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -140,3 +141,31 @@ def test_owner_isolation_cannot_cancel_other_users(rig) -> None:
     )
     assert "失败" in result
     assert service.get(user, schedule.schedule_id).enabled is True
+
+
+def test_reminder_e2e_create_due_delivers(rig) -> None:
+    """WP-E 端到端:工具创建→未到期不触发→到期投递到绑定微信。"""
+    rig, user, service, tools, context = _setup(rig)
+    sender = service.delivery.sender
+
+    out = _invoke(tools["reminder_create"],
+                  {"text": "喝水", "at": "2026-11-05T14:30:00+08:00"}, context)
+    assert "已设置" in out and "14:30" in out
+
+    # NOW=12:00 未到:不触发不投递
+    assert service.tick() == []
+    assert sender.sent == []
+
+    # 14:31:到期触发,投递引用原文本
+    rig.clock.advance((14 * 3600 + 31 * 60) - (12 * 3600))
+    fired = service.tick()
+    assert fired, "到期应触发"
+
+    async def _drain() -> None:
+        # tick 只入队；真实发送由投递队列消费（与 worker 同一条 process_next 路径）
+        while await service.delivery.process_next():
+            pass
+
+    asyncio.run(_drain())
+    assert len(sender.sent) == 1
+    assert "喝水" in str(sender.sent[0]["text"])
