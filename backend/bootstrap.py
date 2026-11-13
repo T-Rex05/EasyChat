@@ -495,10 +495,13 @@ async def run_startup(registry: ModuleRegistry) -> None:
 
 
 def make_memory_confirm(db, registry=None, target_provider=None):
-    """WP-D：显式记忆写入后的确认——会话内 assistant 消息 + 渠道回执(双通道)。
+    """WP-D：memory.confirm job 的执行体——会话内 assistant 消息 + 渠道回执(双通道)。
 
-    独立事务；失败不回滚记忆(已持久化)，由 worker 记录明确原因。
-    渠道回执仅在原会话为 wechat 且绑定仍活跃时发送；dedup 键 run 级,不双发。
+    由记忆 worker 作为持久 job 消费（缺陷④），异常上抛交队列有界重试。
+    缺陷⑤幂等：会话确认按稳定操作身份 (session, run, source='system', content)
+    去重——与 memory.confirm dedup(`memory-confirm:{run}`)、delivery run 级
+    dedup 同一身份链；租约恢复/重复消费只保留一次逻辑确认。
+    渠道回执仅在原会话为 wechat 且绑定仍活跃时发送（真实路由解析，缺陷③）。
     """
     from backend.platform.sqlite import utc_now_iso
 
@@ -513,18 +516,25 @@ def make_memory_confirm(db, registry=None, target_provider=None):
         session_id = str(run_row["session_id"])
         now = utc_now_iso()
         with db.transaction() as tx:
-            cur = tx.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversations"
-                " WHERE session_id=? AND run_id=?",
-                (session_id, run_id),
-            )
-            seq = int(cur.fetchone()[0])
-            tx.execute(
-                "INSERT INTO conversations(session_id, owner_id, run_id, role, content,"
-                " status, chat_mode, source, seq, created_at, updated_at)"
-                " VALUES(?,?,?, 'assistant', ?, 1, 'normal', 'system', ?, ?, ?)",
-                (session_id, owner_id, run_id, text, seq, now, now),
-            )
+            # 稳定操作身份：同 run 同文本已存在则整条确认视为已提交（幂等重放）。
+            done = tx.execute(
+                "SELECT 1 FROM conversations WHERE session_id=? AND run_id=?"
+                " AND role='assistant' AND source='system' AND content=?",
+                (session_id, run_id, text),
+            ).fetchone()
+            if done is None:
+                cur = tx.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversations"
+                    " WHERE session_id=? AND run_id=?",
+                    (session_id, run_id),
+                )
+                seq = int(cur.fetchone()[0])
+                tx.execute(
+                    "INSERT INTO conversations(session_id, owner_id, run_id, role, content,"
+                    " status, chat_mode, source, seq, created_at, updated_at)"
+                    " VALUES(?,?,?, 'assistant', ?, 1, 'normal', 'system', ?, ?, ?)",
+                    (session_id, owner_id, run_id, text, seq, now, now),
+                )
         # 渠道回执:原微信指令必须有微信侧回应(缺陷①闭环)
         if target_provider is not None and registry is not None and registry.delivery is not None:
             target = target_provider(owner_id, session_id)

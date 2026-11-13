@@ -1,8 +1,13 @@
-"""记忆提取 worker：认领 memory.extract/memory.signal job，幂等应用后完成/重试。
+"""记忆提取 worker：认领 memory.extract/memory.signal/memory.confirm job。
 
-`memory.extract` 读取 run 的用户原文与最终回复，调用受控 TextGenerator 生成
-候选 JSON；用户原文是唯一事实来源，助手回复只用于消解指代。没有 generator
-时退化为旧的正则提取，只支持句首「记住/记一下/别忘了」。
+- `memory.extract`：读取 run 的用户原文与最终回复。明确"记住…"先走确定性
+  提取（缺陷①：不依赖辅助模型可用，也不依赖主回答成功）；自然表达才调用
+  受控 TextGenerator。用户原文是唯一事实来源，助手回复只用于消解指代。
+- `memory.confirm`：持久确认意图（缺陷④）。记忆写入成功后同身份入队，
+  渠道/写入异常只让确认有界重试，不回滚已持久记忆；重复执行由稳定
+  dedup 身份与下游幂等保证逻辑上恰好一次。
+- 没有 generator 时自然表达 fail-closed 不猜测；状态计数区分
+  无候选/模型不可用/模型未配置/空输出/非法输出/写入失败。
 """
 from __future__ import annotations
 
@@ -26,7 +31,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL = 0.2
 MAX_PER_TICK = 50
 EXTRACT_JOB_KIND = "memory.extract"
+CONFIRM_JOB_KIND = "memory.confirm"
 LEGACY_CAPTURE_JOB_KIND = "memory.capture"
+# 瞬时基础设施类结果：交给队列有界重试（max_attempts 封顶），不记成功。
+_RETRYABLE_EXTRACT_STATES = frozenset(
+    {"model_unavailable", "empty_output", "write_failed"}
+)
 
 _EXTRACT_SYSTEM = """你是用户私人助理的记忆提取器。只提取用户明确表达、值得长期记住的事实或偏好。
 用户消息是唯一事实来源；助手回复只能帮助理解指代，不能作为记忆内容。
@@ -65,19 +75,30 @@ class MemoryWorker:
             )
 
     def enqueue_capture_tx(self, conn, run) -> str | None:
-        """在 run 终态事务内入队；只对完成且有显式表达的 web/wechat run。"""
-        if str(run.get("status") or "") != "completed":
+        """在 run 终态事务内入队；只对 web/wechat run。
+
+        completed：全部触发词（自然表达需要完整回答上下文）；
+        failed/interrupted：仅显式"记住…"——显式记忆的可靠性不依赖主
+        回答成功（缺陷①）。cancelled 尊重用户意图，不入队。
+        """
+        status = str(run.get("status") or "")
+        if status not in ("completed", "failed", "interrupted"):
             return None
         if str(run.get("source") or "") not in ("web", "wechat"):
             return None
         if self.message_loader is None:
             return None
         messages = self.message_loader(int(run["owner_id"]), str(run["id"]))
-        if not any(
-            should_extract(str(item.get("content") or ""))
+        user_texts = [
+            str(item.get("content") or "")
             for item in messages
             if item.get("role") == "user"
-        ):
+        ]
+        if status == "completed":
+            hit = any(should_extract(text) for text in user_texts)
+        else:
+            hit = any(should_capture(text) for text in user_texts)
+        if not hit:
             return None
         return self.queue.enqueue_tx(
             conn,
@@ -108,16 +129,30 @@ class MemoryWorker:
         while count < MAX_PER_TICK:
             lease = self.queue.claim(
                 "memory-worker",
-                kinds=("memory.signal", EXTRACT_JOB_KIND, LEGACY_CAPTURE_JOB_KIND),
+                kinds=(
+                    "memory.signal", EXTRACT_JOB_KIND,
+                    CONFIRM_JOB_KIND, LEGACY_CAPTURE_JOB_KIND,
+                ),
             )
             if lease is None:
                 break
             payload = lease.payload_json()
             try:
-                if lease.kind in (EXTRACT_JOB_KIND, LEGACY_CAPTURE_JOB_KIND):
+                if lease.kind == CONFIRM_JOB_KIND:
+                    self._run_confirm(payload)
+                elif lease.kind in (EXTRACT_JOB_KIND, LEGACY_CAPTURE_JOB_KIND):
                     status = await self._extract(payload)
                     if status:
                         self._status_counts[status] = self._status_counts.get(status, 0) + 1
+                    if status in _RETRYABLE_EXTRACT_STATES:
+                        # 缺陷①：模型故障/空输出/写入失败是瞬时结果，不能记成功；
+                        # 有界重试期间记忆写入幂等(find_active_content 去重)。
+                        self.queue.fail(
+                            lease, f"记忆提取待重试({status})",
+                            retryable=True, retry_delay_seconds=60,
+                        )
+                        count += 1
+                        continue
                 else:
                     signal_id = str(payload.get("signal_id") or "")
                     receipt = self.service.apply_signal(signal_id)
@@ -126,7 +161,7 @@ class MemoryWorker:
                 logger.exception("记忆任务处理失败 kind=%s", lease.kind)
                 self.queue.fail(lease, str(exc), retryable=True, retry_delay_seconds=60)
             else:
-                # 无显式指令/模型非法输出/已遗忘也是确定性结果，不反复重试
+                # 无显式指令/模型非法输出/已遗忘是确定性结果，不反复重试
                 self.queue.complete(lease)
             count += 1
         return count
@@ -155,27 +190,31 @@ class MemoryWorker:
         ]
         return selected, (assistant_texts[-1] if assistant_texts else "")
 
-    async def _extract(self, payload: dict) -> None:
+    async def _extract(self, payload: dict) -> str | None:
         owner_id = int(payload.get("owner_id") or 0)
         run_id = str(payload.get("run_id") or "")
         if owner_id <= 0 or not run_id:
-            return
+            return None
         context = self._context(owner_id, run_id)
         if context is None:
-            return
+            return None
         user_text, assistant_text = context
         principal = self.service.access.snapshot_principal(owner_id)
 
-        if self.generator is None:
-            # 显式降级：只支持旧的句首触发词；新触发词不会在这里被猜测。
-            if should_capture(user_text):
-                candidate = candidate_from_user_message(run_id=run_id, text=user_text)
-                if candidate is not None:
-                    self.service.remember_explicit(principal, candidate)
-                    self._confirm(owner_id, run_id, candidate.content)
-                    return "captured_deterministic"
+        if should_capture(user_text):
+            # 缺陷①：明确"记住…"永远先走可信确定性提取——覆盖辅助模型
+            # 空输出/异常/未配置，以及主回答失败/中断的 run。
+            candidate = candidate_from_user_message(run_id=run_id, text=user_text)
+            if candidate is None:
                 return "no_candidate"
-            return "no_explicit"
+            if not self._write(principal, candidate, run_id):
+                return "write_failed"
+            self._confirm(owner_id, run_id, candidate.content)
+            return "captured_deterministic"
+
+        if self.generator is None:
+            # 自然表达没有模型不可靠入库：fail-closed，状态可诊断。
+            return "model_unconfigured"
 
         try:
             raw = await self.generator.generate(
@@ -190,13 +229,12 @@ class MemoryWorker:
                 owner_id=owner_id,
                 max_chars=600,
             )
-        except Exception:  # noqa: BLE001  模型失败按确定性失败处理，不重试(现口径保持,状态可诊断)
+        except Exception:  # noqa: BLE001  瞬时基础设施失败：有界重试恢复
             logger.warning("记忆提取模型调用失败 run=%s", run_id)
             return "model_unavailable"
 
         text = (raw or "").strip()
         if not text:
-            # WP-D 复现缺陷:此前空文本静默 return→job 成功零记忆,不可区分
             logger.warning("记忆提取模型返回空文本 run=%s(未写入)", run_id)
             return "empty_output"
         if not text.startswith("{") or not text.endswith("}"):
@@ -214,19 +252,48 @@ class MemoryWorker:
             return "invalid_output"
         if candidate is None:
             return "no_candidate"
-        self.service.remember_explicit(principal, candidate)
+        if not self._write(principal, candidate, run_id):
+            return "write_failed"
         self._confirm(owner_id, run_id, candidate.content)
         return "captured_model"
 
+    def _write(self, principal, candidate, run_id: str) -> bool:
+        """记忆写入：权限/fail-closed 校验在 service.remember_explicit 内；
+        失败按写入失败状态上报供重试。成功重放由内容去重保证幂等。"""
+        try:
+            self.service.remember_explicit(principal, candidate)
+        except Exception:  # noqa: BLE001  存储/校验失败区分状态，交重试
+            logger.exception("记忆写入失败 run=%s", run_id)
+            return False
+        return True
+
     def _confirm(self, owner_id: int, run_id: str, content: str) -> None:
-        """写入成功后的会话内确认。确认失败不回滚记忆(已持久化),
-        记录明确原因供运维(方案:业务确认在持久写入后产生)。"""
+        """缺陷④：确认是持久意图（memory.confirm job），不在 extract 内
+        直接触达渠道。入队异常上抛 → extract job 有界重试：记忆写入幂等、
+        确认意图按 run 稳定 dedup 复用，不产生第二条。"""
         if self.confirm_writer is None or not content:
             return
-        try:
-            self.confirm_writer(owner_id, run_id, f"已记住：{content[:120]}")
-        except Exception:  # noqa: BLE001
-            logger.exception("记忆确认消息写入失败 run=%s", run_id)
+        self.queue.enqueue(
+            kind=CONFIRM_JOB_KIND,
+            dedup_key=f"memory-confirm:{run_id}",
+            payload={
+                "owner_id": owner_id, "run_id": run_id,
+                "text": f"已记住：{content[:120]}",
+            },
+            owner_id=owner_id,
+        )
+
+    def _run_confirm(self, payload: dict) -> None:
+        """消费持久确认意图：会话消息 + 渠道回执由 bootstrap 注入的
+        confirm_writer 完成（其内部为独立小事务；异常上抛交队列重试）。"""
+        if self.confirm_writer is None:
+            return
+        owner_id = int(payload.get("owner_id") or 0)
+        run_id = str(payload.get("run_id") or "")
+        text = str(payload.get("text") or "")
+        if owner_id <= 0 or not run_id or not text:
+            return
+        self.confirm_writer(owner_id, run_id, text)
 
     def extraction_status_counts(self) -> dict[str, int]:
         return dict(self._status_counts)
