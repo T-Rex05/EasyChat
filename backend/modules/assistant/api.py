@@ -52,6 +52,10 @@ class AssistantService:
         """bootstrap 晚绑定：session → 渠道来源标识（ToolContext 用）。"""
         self.dispatcher.source_for_session = lookup
 
+    def set_skills(self, skills) -> None:
+        """bootstrap 晚绑定：技能服务（assistant 先于 skills 装配，WP-C）。"""
+        self.dispatcher.skills = skills
+
     async def start(self) -> None:
         await self.dispatcher.start()
 

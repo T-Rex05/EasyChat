@@ -480,6 +480,9 @@ async def run_startup(registry: ModuleRegistry) -> None:
         from backend.modules.evolution.adoption import AdoptionService
 
         registry.adoption = AdoptionService(db, registry.skills)
+    # WP-C：assistant 先于 skills 装配，此处晚绑定技能快照入口。
+    if registry.assistant is not None and registry.skills is not None:
+        registry.assistant.set_skills(registry.skills)
 
 
 def _make_superagent_intake(service: Any):

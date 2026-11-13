@@ -53,6 +53,7 @@ class RunDispatcher:
         # 由 bootstrap 晚绑定，避免 assistant 构造早于 profiles/memory。
         self.profiles = profiles
         self.memory = memory
+        self.skills = None  # bootstrap 晚绑定（assistant 先装配、skills 后装配）
         # 由 bootstrap 晚绑定（channels 装配后）：session → 渠道来源标识；
         # ToolContext 携带后业务工具可固定任务回执目标。
         self.source_for_session: Callable[[str], dict[str, str] | None] | None = None
@@ -287,6 +288,27 @@ class RunDispatcher:
                 logger.exception("人格渲染失败 owner=%s", owner_id)
 
         attachment_ids = tuple(json.loads(run["attachment_ids"] or "[]"))
+
+        # WP-C: 已激活技能按 owner 快照注入本轮（版本固定，激活/回滚只影响下一轮）。
+        skill_context = ""
+        skill_versions: tuple[tuple[str, str], ...] = ()
+        if self.skills is not None:
+            try:
+                snaps = self.skills.list_for_runtime(principal)
+                parts = []
+                budget = 16000
+                for snap in snaps:
+                    block = "\n".join((f"### {snap.name}", snap.description, snap.content))
+                    if len(block) > budget:
+                        break
+                    parts.append(block)
+                    budget -= len(block)
+                if parts:
+                    skill_context = "已激活技能（本轮固定版本）：\n\n" + "\n\n".join(parts)
+                skill_versions = tuple((s.name, str(s.version_seq)) for s in snaps)
+            except Exception:  # noqa: BLE001  技能加载失败不阻塞对话
+                logger.exception("技能快照加载失败 owner=%s", owner_id)
+
         prefix = self._context_prefix(
             owner_id, str(run["id"]), text, attachment_ids, source, timezone_name
         )
@@ -304,11 +326,11 @@ class RunDispatcher:
             context=ctx,
             text=text,
             attachment_ids=attachment_ids,
-            system_context="",
+            system_context=skill_context,
             # 对话 run 显式启用项目工具组（内核无自动包含；权限由 service 层
             # 逐操作校验，__always_available__ 只表示 schema 可见）。
             allowed_tools=frozenset(role_toolsets) | {ALWAYS_AVAILABLE_TOOLSET},
-            skill_versions=(),
+            skill_versions=skill_versions,
             persona_context=persona_context,
             context_prefix=prefix,
             persist_user_message=text,
