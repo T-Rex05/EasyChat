@@ -36,3 +36,14 @@ test('受众两档可显式选择', () => {
   assert.match(panel, /value="all"/)
   assert.match(panel, /仅系统配置者|所有登录用户/)
 })
+
+test('WP-B：配置页渠道区展示模块装配状态与可见错误', () => {
+  const configView = readFileSync(new URL('../src/views/ConfigView.vue', import.meta.url), 'utf8')
+  const platformApi = readFileSync(new URL('../src/api/platform.ts', import.meta.url), 'utf8')
+  assert.match(platformApi, /\/api\/system\/module-status/)
+  assert.match(configView, /loadChannelModule/)
+  assert.match(configView, /渠道模块当前不可用/)
+  assert.match(configView, /重新检测/)
+  // accounts 失败不再只 console
+  assert.match(configView, /channelLoadError\.value = e\?\.message/)
+})

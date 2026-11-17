@@ -10,13 +10,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.bootstrap import AppSettings, ModuleRegistry, default_settings, run_shutdown, run_startup
-from backend.shared.errors import AppError, CapabilityUnavailableError
+from typing import Annotated, Any
+
+from backend.shared.errors import AppError, CapabilityUnavailableError, UnauthenticatedError
 from backend.utils.rate_limit import AuthRateLimiter, make_auth_rate_limit_middleware
 
 
@@ -85,6 +87,83 @@ def _authenticate_ticket(registry: ModuleRegistry):
     return authenticate_ticket
 
 
+
+
+def build_module_status_router(registry: ModuleRegistry, authenticate):
+    """WP-B：模块装配状态（登录可读、脱敏）——能力开关与依赖原因，不是 readyz。
+
+    readyz 只说明进程启动完成；认证成功只说明 access 可用；二者都不能当
+    channels/assistant 模块可用证据。此处输出装配布尔、状态与可执行原因，
+    绝不含凭据值。
+    """
+    router = APIRouter(prefix="/api/system", tags=["system"])
+
+    @router.get("/module-status")
+    async def module_status(authorization: Annotated[str | None, Header()] = None):
+        token = (authorization or "").replace("Bearer ", "").strip()
+        if not token:
+            raise UnauthenticatedError("请先登录")
+        authenticate(token)
+        settings = registry.settings
+        secret_present = bool(settings.encryption_secret)
+
+        def _assistant_state() -> dict:
+            if registry.assistant is not None:
+                return {"assembled": True, "state": "ready", "reason": ""}
+            if not settings.hermes_enabled:
+                return {"assembled": False, "state": "disabled",
+                        "reason": "对话运行时未开启（EASYCHAT_HERMES_ENABLED=false），助手模块不可用"}
+            if registry.access is None:
+                return {"assembled": False, "state": "dependency_missing",
+                        "reason": "认证模块未装配，助手模块无法启动"}
+            return {"assembled": False, "state": "init_failed",
+                    "reason": "助手模块初始化失败，请查看服务启动日志"}
+
+        def _channels_state() -> dict:
+            if registry.channels is not None:
+                return {"assembled": True, "state": "ready", "reason": ""}
+            if not settings.wechat_enabled:
+                return {"assembled": False, "state": "disabled",
+                        "reason": "渠道能力未开启（EASYCHAT_WECHAT_ENABLED=false）。"
+                                  "恢复：设置 EASYCHAT_WECHAT_ENABLED=true 与 "
+                                  "EASYCHAT_ENCRYPTION_SECRET 后重启服务"}
+            if not secret_present:
+                # 缺密钥是用户可直接修复的配置错误，归因优先于依赖缺失
+                return {"assembled": False, "state": "misconfigured",
+                        "reason": "已开启渠道但缺少 EASYCHAT_ENCRYPTION_SECRET，"
+                                  "bot token 无法加密保存，渠道保持关闭。"
+                                  "恢复：设置该环境变量后重启服务"}
+            if registry.assistant is None:
+                return {"assembled": False, "state": "dependency_missing",
+                        "reason": "助手模块未装配（对话运行时依赖 EASYCHAT_HERMES_ENABLED=true），"
+                                  "渠道无法启动。恢复：开启 EASYCHAT_HERMES_ENABLED 并重启"}
+            return {"assembled": False, "state": "init_failed",
+                    "reason": "渠道模块初始化失败，请查看服务启动日志"}
+
+        assistant_state = _assistant_state()
+        channels_state = _channels_state()
+        # assistant 关闭时渠道的真实根因优先展示（channels 依赖 assistant）
+        if channels_state["state"] == "dependency_missing" and assistant_state["assembled"] is False:
+            channels_state["reason"] = (
+                "助手模块未装配（" + assistant_state["reason"] + "），渠道因此无法启动"
+            )
+        return {
+            "assistant": assistant_state,
+            "channels": channels_state,
+            "runtime": {
+                "assembled": registry.runtime is not None,
+                "state": "ready" if registry.runtime is not None else (
+                    "disabled" if not settings.hermes_enabled else "init_failed"),
+                "reason": "" if registry.runtime is not None else (
+                    "对话运行时未开启（EASYCHAT_HERMES_ENABLED=false）"
+                    if not settings.hermes_enabled else "运行时初始化失败，请查看启动日志"),
+            },
+            "secret_present": secret_present,
+        }
+
+    return router
+
+
 def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
     """Task 15：显式注册新模块路由，不扫描 backend/controller。"""
     from backend.modules.access.routes import build_access_router
@@ -108,6 +187,7 @@ def _register_explicit_routers(app: FastAPI, registry: ModuleRegistry) -> None:
 
     authenticate = _authenticate(registry)
     authenticate_ticket = _authenticate_ticket(registry)
+    app.include_router(build_module_status_router(registry, authenticate))
     app.include_router(build_access_router(_LazyModule(registry, "access")))
     app.include_router(build_usage_router(_LazyModule(registry, "usage"), authenticate))
     app.include_router(build_models_router(_LazyModule(registry, "models"), authenticate))

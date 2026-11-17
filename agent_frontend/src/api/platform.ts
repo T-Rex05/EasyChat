@@ -123,3 +123,15 @@ export async function deleteUserBinding(id: string): Promise<{ ok: boolean }> {
   await request.delete(`/api/channels/bindings/${id}`)
   return { ok: true }
 }
+
+// WP-B：模块装配状态（登录可读、脱敏）——readyz/认证成功不代表模块可用
+export interface ModuleStatus {
+  assembled: boolean
+  state: 'ready' | 'disabled' | 'misconfigured' | 'dependency_missing' | 'init_failed'
+  reason: string
+}
+
+export async function getModuleStatus(): Promise<{ assistant: ModuleStatus; channels: ModuleStatus; runtime: ModuleStatus; secret_present: boolean }> {
+  const res = await request.get('/api/system/module-status')
+  return res.data
+}

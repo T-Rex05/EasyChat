@@ -401,6 +401,15 @@
     <!-- Tab 2: 渠道绑定 -->
     <!-- ──────────────────────────────────────────── -->
     <div v-show="activeTab === 'channel'" class="tab-content">
+      <!-- WP-B：模块装配状态——区分功能关闭/缺密钥/依赖缺失/初始化失败，不再只有无限 loading -->
+      <div v-if="channelModule && channelModule.state !== 'ready'" class="card" style="margin-bottom:16px;border-color:#f0ad4e;">
+        <div class="card-header">⚠️ 渠道模块当前不可用（{{ channelModule.state }}）</div>
+        <div class="card-body">
+          <p class="section-tip" style="color:var(--text-primary);">{{ channelModule.reason }}</p>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px;" @click="loadChannelModule">重新检测</button>
+        </div>
+      </div>
+      <div v-if="channelLoadError" class="error-banner">{{ channelLoadError }}</div>
       <!-- 微信 -->
       <div class="card">
         <div class="card-header">🟢 微信 <span v-if="wechatConfigured" class="badge badge-success">已配置</span></div>
@@ -658,6 +667,7 @@ python main.py</pre>
 
 <script setup lang="ts">
 import McpSettingsPanel from '@/components/config/McpSettingsPanel.vue'
+import { getModuleStatus } from '@/api/platform'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { useAuthStore } from '@/stores/auth';
 import { getModelConfigs, createModelConfig, setActiveModelConfig, deleteModelConfig, updateModelConfig, testModelConfig, getEmailConfigs, createEmailConfig, setActiveEmailConfig, deleteEmailConfig, testEmailConfig, getPersonalEmails, addPersonalEmail as apiAddPersonalEmail, setActivePersonalEmail, deletePersonalEmail, getFallbackChain, saveFallbackChain, getSceneRouting, saveSceneRouting, evaluateRoute, getAvailableScenes, type ModelConfig, type TestResult, type EmailConfig, type PersonalEmail, type FallbackChainItem, type SceneRoutingItem, type SceneDefinition, type SceneCategory } from '@/api/config';
@@ -785,9 +795,24 @@ async function loadStats() {
 const wechatConfig = reactive({ token: '', account_id: '', base_url: '', bot_user_id: '' });
 const wechatConfigured = ref(false);
 
+const channelModule = ref<{ state: string; reason: string } | null>(null);
+const channelLoadError = ref('');
+
+async function loadChannelModule() {
+  channelLoadError.value = '';
+  try {
+    const status = await getModuleStatus();
+    channelModule.value = { state: status.channels.state, reason: status.channels.reason };
+  } catch (e: any) {
+    channelModule.value = null;
+    channelLoadError.value = e?.message || '模块状态加载失败，请稍后重试';
+  }
+}
+
 async function loadWechatConfig() {
   try {
     const data = await getPlatformConfig('wechat');
+    channelLoadError.value = '';
     if (data.configured) {
       wechatConfig.account_id = data.raw_config_json?.account_id || '';
       wechatConfig.bot_user_id = data.raw_config_json?.bot_user_id || '';
@@ -795,7 +820,11 @@ async function loadWechatConfig() {
     } else {
       wechatConfigured.value = false;
     }
-  } catch (e) { console.error('加载微信配置失败:', e); }
+  } catch (e: any) {
+    // WP-B：accounts 请求失败必须可见（503=模块未装配；401/403=权限），不再只 console
+    channelLoadError.value = e?.message || '微信配置加载失败（渠道模块可能未开启）';
+    wechatConfigured.value = false;
+  }
 }
 
 // ── 手动绑定 ──
@@ -1269,6 +1298,7 @@ onMounted(() => {
   loadModelConfigs();
   loadFallbackChain();
   loadAvailableScenes();
+  loadChannelModule();
   loadWechatConfig();
   loadWechatBinding();
   loadEmailConfigs();
