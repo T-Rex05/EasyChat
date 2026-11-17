@@ -87,15 +87,15 @@ function handleAuthExpired(): void {
 const SSE_MAX_RECONNECTS = 2
 
 /**
- * 发送消息并建立 SSE 流式连接（GET 方式，纯文本）
+ * 发送消息并建立 SSE 流式连接（GET 方式，纯文本）。
  *
- * 错误语义（11-14 整改）：
- * - ticket 获取按 HTTP 状态分类（401/403→登录机制；409/429/5xx/网络→各自
- *   可读原因），不得折叠为"请先登录"；
- * - EventSource 的 error 帧不携带 HTTP 状态，不能据此推断 JWT 失效——
- *   3 秒启发式已移除；需要认证判定时用有明确状态的 /api/auth/me 探测；
- * - 断线重连使用新 ticket + 原 client_msg_id（后端按 client_message_id 幂等，
- *   命中同一 run，不会二次执行模型）+ 已收事件游标 last_seq（服务端续传）。
+ * 传输层为 fetch+SSE 手工解析（WP-C）：HTTP 状态对前端可读——EventSource 的
+ * error 事件不带状态，409/422/503 等失败此前只能显示泛化断流文案。
+ * - 凭据走 Authorization header，不进 URL（审计 #3；ticket 机制因此不再需要）；
+ * - 失败分类：401/403→现有登录机制；409/429/5xx→各自可读原因，不做无效重试；
+ * - 断流恢复：互斥（单一恢复流程）+ 连接代次（晚到回调按代次丢弃）+
+ *   恢复即关闭旧连接；同一 client_msg_id + last_seq 续传，服务端幂等不重复执行；
+ * - 所有终态（完成/错误帧/认证失效/重试耗尽/手动停止）都收敛到关闭状态。
  */
 export async function sendMessageStream(
   message: string,
@@ -104,59 +104,35 @@ export async function sendMessageStream(
   clientMsgId?: string,
   mode: string = 'normal',
   modelId?: number,
-): Promise<{ eventSource: EventSource; close: () => void }> {
+): Promise<{ eventSource: EventSource | null; close: () => void }> {
   // ── Token 预检 ──
-  const token = getAuthToken()
-  if (!token) {
+  if (!getAuthToken()) {
     callbacks.onError?.('请先登录')
-    // 返回一个假的 close 函数，保持接口一致
-    return { eventSource: new EventSource('data:text/plain,'), close: () => {} }
+    return { eventSource: null, close: () => {} }
   }
   // 不做本地过期预检：后端有宽限期刷新机制，由后端决定 token 是否可用
 
   const state = { fullContent: '', isComplete: false, lastSeq: '' }
-  const ctrl = { manuallyClosed: false, reconnects: 0, current: null as EventSource | null }
-
-  // 用长效 JWT（Header 认证）换取秒级一次性 ticket；错误按状态分类上报。
-  // 返回 null 表示失败且原因已回调（不再统一误报"请先登录"）。
-  async function acquireTicket(): Promise<string | null> {
-    let resp: Response
-    try {
-      resp = await fetch(`${API_BASE}/api/chat/sse-ticket`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
-      })
-    } catch {
-      callbacks.onError?.('无法连接服务，请检查网络后重试')
-      return null
-    }
-    if (resp.status === 401 || resp.status === 403) {
-      handleAuthExpired()
-      callbacks.onError?.('登录已过期，请重新登录')
-      return null
-    }
-    if (resp.status === 409) {
-      callbacks.onError?.('服务繁忙（排队已满），请稍后重试')
-      return null
-    }
-    if (resp.status === 429) {
-      callbacks.onError?.('请求过于频繁，请稍后重试')
-      return null
-    }
-    if (!resp.ok) {
-      callbacks.onError?.(`服务暂时不可用（HTTP ${resp.status}），请稍后重试`)
-      return null
-    }
-    const data = await resp.json().catch(() => null)
-    const freshTicket = data && typeof data.ticket === 'string' ? data.ticket : ''
-    if (!freshTicket) {
-      callbacks.onError?.('登录凭据服务响应异常，请稍后重试')
-      return null
-    }
-    return freshTicket
+  // gen 为连接代次：每次关闭/重连推进，晚到的旧连接回调按代次丢弃
+  const ctrl = {
+    manuallyClosed: false,
+    reconnects: 0,
+    gen: 0,
+    recovering: false,
+    abort: null as AbortController | null,
   }
 
-  function buildStreamUrl(freshTicket: string): string {
+  function isTerminal(gen: number): boolean {
+    return ctrl.manuallyClosed || state.isComplete || ctrl.gen !== gen
+  }
+
+  function closeCurrentConnection(): void {
+    ctrl.gen += 1
+    try { ctrl.abort?.abort() } catch { /* 已断开 */ }
+    ctrl.abort = null
+  }
+
+  function buildStreamUrl(): string {
     let url = `${API_BASE}/chat/stream?message=${encodeURIComponent(message)}&thread_id=${threadId}`
     if (mode === 'disposal') {
       url += `&mode=disposal`
@@ -171,107 +147,171 @@ export async function sendMessageStream(
     if (ctrl.reconnects > 0 && state.lastSeq) {
       url += `&last_seq=${encodeURIComponent(state.lastSeq)}`
     }
-    url += `&ticket=${encodeURIComponent(freshTicket)}`
     return url
   }
 
-  function attach(es: EventSource): void {
-    es.addEventListener('message', (event: MessageEvent) => {
-      try {
-        if (!event.data || event.data.trim() === '') {
-          return
-        }
-
-        const data = JSON.parse(event.data)
-
-        // ── 处理 token 续期事件 ──
-        if (data.type === 'token_refresh' && data.token) {
-          localStorage.setItem('authToken', data.token)
-          try {
-            const authStore = useAuthStore()
-            authStore.token = data.token
-          } catch { /* store 未初始化时忽略 */ }
-          return
-        }
-
-        const seq = (event as MessageEvent & { lastEventId?: string }).lastEventId
-        if (seq) {
-          state.lastSeq = String(seq)
-        }
-        dispatchStreamEvent(data, callbacks, state, () => es.close())
-      } catch (e: any) {
-        if (callbacks.onError) {
-          callbacks.onError(`解析事件失败：${e.message}`)
-        }
-        es.close()
-      }
-    })
-
-    es.addEventListener('error', () => {
-      // 完成事件后的正常关闭、用户主动停止都不算异常
-      if (ctrl.manuallyClosed || state.isComplete) {
-        return
-      }
-      void recoverFromDrop(es)
-    })
-  }
-
-  async function recoverFromDrop(dead: EventSource): Promise<void> {
-    // SSE error 帧没有 HTTP 状态：认证判定走显式状态接口，而不是时间启发式
-    let auth: 'ok' | 'expired' | 'unknown' = 'unknown'
-    try {
-      const probe = await fetch(`${API_BASE}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
-      })
-      if (probe.status === 401 || probe.status === 403) {
-        auth = 'expired'
-      } else {
-        auth = probe.ok ? 'ok' : 'unknown'
-      }
-    } catch {
-      auth = 'unknown'
-    }
-    if (ctrl.manuallyClosed || state.isComplete) {
-      return
-    }
-    if (auth === 'expired') {
+  /** 流请求的 HTTP 失败分类；返回 true 表示终态已回调。 */
+  function handleStreamHttpFailure(status: number): boolean {
+    if (status >= 200 && status < 300) return false
+    if (status === 401 || status === 403) {
       handleAuthExpired()
       callbacks.onError?.('登录已过期，请重新登录')
-      return
+      return true
     }
-    if (ctrl.reconnects >= SSE_MAX_RECONNECTS) {
-      callbacks.onError?.('SSE 连接意外断开，可能为服务繁忙或网络波动，请重试')
-      return
+    if (status === 409) {
+      callbacks.onError?.('服务繁忙：已有正在执行的任务，请等待完成或稍后重试')
+      return true
     }
-    ctrl.reconnects += 1
-    try { dead.close() } catch { /* 已断开 */ }
-    const freshTicket = await acquireTicket()
-    if (!freshTicket || ctrl.manuallyClosed || state.isComplete) {
-      return
+    if (status === 429) {
+      callbacks.onError?.('请求过于频繁，请稍后重试')
+      return true
     }
-    // 同一 client_msg_id 重新 GET：后端 submit 按消息标识幂等命中原 run，
-    // 携带 last_seq 续传——不会产生第二次模型执行，也不重复回放。
-    const es = new EventSource(buildStreamUrl(freshTicket))
-    ctrl.current = es
-    attach(es)
+    callbacks.onError?.(`服务暂时不可用（HTTP ${status}），请稍后重试`)
+    return true
   }
 
-  const ticket = await acquireTicket()
-  if (!ticket) {
-    // 失败原因已按状态精确回调；保持返回接口形状一致
-    return { eventSource: new EventSource('data:text/plain,'), close: () => { ctrl.manuallyClosed = true } }
+  function dispatchFrame(dataText: string, myGen: number): void {
+    let data: any
+    try {
+      data = JSON.parse(dataText)
+    } catch (e: any) {
+      callbacks.onError?.(`解析事件失败：${e.message}`)
+      finishWithTerminal(myGen)
+      return
+    }
+    if (data.type === 'token_refresh' && data.token) {
+      localStorage.setItem('authToken', data.token)
+      try {
+        const authStore = useAuthStore()
+        authStore.token = data.token
+      } catch { /* store 未初始化时忽略 */ }
+      return
+    }
+    dispatchStreamEvent(data, callbacks, state, () => finishWithTerminal(myGen))
   }
 
-  const eventSource = new EventSource(buildStreamUrl(ticket))
-  ctrl.current = eventSource
-  attach(eventSource)
+  /** 终态收敛：推进代次并中止当前连接。 */
+  function finishWithTerminal(_myGen: number): void {
+    state.isComplete = state.isComplete || _myGen >= 0 // error/complete 帧都会置位
+    closeCurrentConnection()
+  }
+
+  async function readSseStream(resp: Response, myGen: number): Promise<void> {
+    const reader = resp.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done || isTerminal(myGen)) break
+        buffer += decoder.decode(value, { stream: true })
+        let sep = buffer.indexOf('\n\n')
+        while (sep >= 0) {
+          const frame = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          sep = buffer.indexOf('\n\n')
+          let seq = ''
+          const dataLines: string[] = []
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('id:')) seq = line.slice(3).trim()
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+          }
+          const dataText = dataLines.join('')
+          if (!dataText) continue
+          if (seq) state.lastSeq = seq
+          dispatchFrame(dataText, myGen)
+          if (isTerminal(myGen)) return
+        }
+      }
+    } catch (e: any) {
+      if (isTerminal(myGen)) return // 主动停止的 abort 属预期
+      callbacks.onError?.(`连接中断: ${e.message}`)
+      closeCurrentConnection()
+      return
+    } finally {
+      try { reader.releaseLock() } catch { /* 已释放 */ }
+    }
+    // 流被服务端正常关闭但没有任何终态帧 → 视为断流，进入恢复
+    if (!isTerminal(myGen)) {
+      closeCurrentConnection()
+      void recoverFromDrop()
+    }
+  }
+
+  async function openOnce(): Promise<void> {
+    const myGen = ctrl.gen
+    ctrl.abort = new AbortController()
+    let resp: Response
+    try {
+      resp = await fetch(buildStreamUrl(), {
+        headers: {
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${getAuthToken()}`,
+        },
+        signal: ctrl.abort.signal,
+      })
+    } catch (e: any) {
+      if (isTerminal(myGen)) return // 主动停止/已被更新代次取代
+      callbacks.onError?.('无法连接服务，请检查网络后重试')
+      return
+    }
+    if (isTerminal(myGen)) return
+    if (handleStreamHttpFailure(resp.status)) return
+    if (!resp.body) {
+      callbacks.onError?.('服务响应缺少数据流，请稍后重试')
+      return
+    }
+    // 读流不阻塞调用方返回（SSE 是长连接；调用方经由 close() 随时可停）
+    void readSseStream(resp, myGen)
+  }
+
+  async function recoverFromDrop(): Promise<void> {
+    // 恢复互斥：同一时刻只允许一个恢复流程；恢复开始即关闭旧连接并推进代次，
+    // 旧连接的晚到回调（chunk/错误）按代次丢弃。
+    if (ctrl.recovering || ctrl.manuallyClosed || state.isComplete) {
+      return
+    }
+    ctrl.recovering = true
+    closeCurrentConnection()
+    try {
+      // 认证判定走显式状态接口，而不是连接表现启发式
+      let auth: 'ok' | 'expired' | 'unknown' = 'unknown'
+      try {
+        const probe = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${getAuthToken()}` },
+        })
+        auth = probe.status === 401 || probe.status === 403
+          ? 'expired'
+          : (probe.ok ? 'ok' : 'unknown')
+      } catch {
+        auth = 'unknown'
+      }
+      if (ctrl.manuallyClosed || state.isComplete) return
+      if (auth === 'expired') {
+        handleAuthExpired()
+        callbacks.onError?.('登录已过期，请重新登录')
+        return
+      }
+      if (ctrl.reconnects >= SSE_MAX_RECONNECTS) {
+        callbacks.onError?.('SSE 连接意外断开，可能为服务繁忙或网络波动，请重试')
+        return
+      }
+      ctrl.reconnects += 1
+      // 同一 client_msg_id 重新 GET：后端 submit 按消息标识幂等命中原 run，
+      // 携带 last_seq 续传——不会产生第二次模型执行，也不重复计费。
+      await openOnce()
+    } finally {
+      ctrl.recovering = false
+    }
+  }
+
+  await openOnce()
 
   return {
-    eventSource,
+    eventSource: null,
     close: () => {
       ctrl.manuallyClosed = true
-      try { ctrl.current?.close() } catch { /* ignore */ }
-      try { eventSource.close() } catch { /* ignore */ }
+      closeCurrentConnection()
     },
   }
 }
@@ -490,7 +530,9 @@ function dispatchStreamEvent(
     case 'error':
       state.isComplete = true
       if (callbacks.onError) {
-        callbacks.onError(data.error || '未知错误')
+        // 后端终态帧为 {type:'error', message}（WP-C：此前只读 error 字段，
+        // 真实原因如"模型调用超时"被显示成"未知错误"）
+        callbacks.onError(data.message || data.error || '未知错误')
       }
       onClose()
       break
