@@ -87,3 +87,24 @@ test('结构：主编辑区为分组复选框，模式下拉不再是唯一真�
   // 依赖提示与定义加载失败保留策略
   assert.match(dialog, /file\.upload|依赖/)
 })
+
+test('WP-E：预设下拉与同步逻辑已删除，分组复选框是唯一授权入口', () => {
+  const dialog = readFileSync(new URL('../src/views/admin/RoleEditDialog.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(dialog, /mode-select|onModeChange|moduleModes|MODULE_ROWS|detectMode/)
+  assert.match(dialog, /onPermToggle/)
+  // ledger.manage 回到账单组（非文件依赖过滤）并标注当前范围
+  const util = readFileSync(new URL('../src/utils/permissionGroups.ts', import.meta.url), 'utf8')
+  assert.match(util, /'files'/)
+  assert.match(dialog, /ledger\.manage[\s\S]{0,200}当前范围：本人账本|当前范围：本人账本/)
+})
+
+test('WP-E：升级面板键盘可展开、带内边距、窄屏纵排', () => {
+  const panel = readFileSync(new URL('../src/views/admin/UpgradePreviewPanel.vue', import.meta.url), 'utf8')
+  assert.match(panel, /aria-expanded/)
+  assert.match(panel, /@keydown\.enter\.prevent/)
+  assert.match(panel, /@keydown\.space\.prevent/)
+  assert.match(panel, /padding: 10px 14px/)
+  assert.match(panel, /flex-wrap: wrap/)
+  assert.match(panel, /@media \(max-width: 760px\)/)
+  assert.match(panel, /word-break: break-all/)
+})

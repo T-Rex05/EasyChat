@@ -38,6 +38,14 @@ export interface PermissionDef extends PermissionItem {
   lifecycle?: string
   description?: string
   risk?: string
+  module?: string
+}
+
+function _isFileDependency(def: PermissionDef): boolean {
+  // internal 且归属 files 模块才是"文件依赖"；ledger.manage 等业务 internal 键
+  // 留在所属功能组显示（WP-E：标注当前范围）
+  const mod = def.module || def.key.split('.')[0]
+  return def.internal === true && (mod === 'files' || def.key.startsWith('file.'))
 }
 
 /**
@@ -46,12 +54,12 @@ export interface PermissionDef extends PermissionItem {
  * form.permissions 中原样保留、保存不丢。
  */
 export function visiblePermissions(defs: PermissionDef[]): PermissionDef[] {
-  return defs.filter((d) => d.lifecycle !== 'deprecated' && !d.internal)
+  return defs.filter((d) => d.lifecycle !== 'deprecated' && !_isFileDependency(d))
 }
 
 /** 内部依赖项（file.*）定义，单独成组呈现当前随附状态。 */
 export function internalPermissionDefs(defs: PermissionDef[]): PermissionDef[] {
-  return defs.filter((d) => d.internal && d.lifecycle !== 'deprecated')
+  return defs.filter((d) => _isFileDependency(d) && d.lifecycle !== 'deprecated')
 }
 
 /**

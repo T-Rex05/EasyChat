@@ -53,6 +53,9 @@
                 <span v-if="dependencyHint(perm.key, permDefs).length" class="tool-desc">
                   （附带：{{ dependencyHint(perm.key, permDefs).join('、') }}）
                 </span>
+                <span v-if="perm.key === 'ledger.manage'" class="tool-desc">
+                  （当前范围：本人账本）
+                </span>
               </label>
             </section>
 
@@ -94,26 +97,6 @@
               <span v-if="customCount" class="muted-hint">（{{ customCount }} 项原子授权/工具）</span>
             </button>
             <div v-show="showAdvanced" class="advanced-body">
-              <h4 class="tool-group-label">功能预设（快捷批量，结果同步到上方复选框）</h4>
-              <div class="module-rows" :class="{ readonly: isOwnerRole }">
-                <div v-for="row in moduleRows" :key="row.module" class="module-row">
-                  <div class="module-info">
-                    <span class="module-label">{{ row.label }}</span>
-                    <span class="module-desc">{{ row.desc }}</span>
-                  </div>
-                  <select
-                    v-model="form.moduleModes[row.module]"
-                    class="select mode-select"
-                    :disabled="isOwnerRole"
-                    @change="onModeChange(row.module)"
-                  >
-                    <option v-for="m in row.modes" :key="m.mode" :value="m.mode">{{ m.label }}</option>
-                    <option v-if="isCustomMode(row.module)" value="custom">自定义</option>
-                  </select>
-                </div>
-              </div>
-              <p v-if="modeChangeNote" class="muted-hint note">{{ modeChangeNote }}</p>
-
               <h4 class="tool-group-label">AI 对话工具组</h4>
               <template v-if="toolOptions.length > 0">
                 <div class="hermes-tools">
@@ -165,7 +148,6 @@ const emit = defineEmits<{ close: []; saved: [] }>()
 const saving = ref(false)
 const showAdvanced = ref(false)
 const toolOptions = ref<{ key: string; label: string; desc: string; risk?: string }[]>([])
-const modeChangeNote = ref('')
 const defsLoadFailed = ref(false)
 
 const form = reactive({
@@ -174,99 +156,11 @@ const form = reactive({
   description: '',
   permissions: [] as string[],
   hermes_tools: [] as string[],
-  moduleModes: {} as Record<string, string>,
 })
 
 const isOwnerRole = computed(() => props.role?.name === 'super_admin')
 
 // ---- 9 功能项模式定义（原子映射唯一来源；与后端 permission_catalog 对齐） --------
-interface ModeDef { mode: string; label: string; perms: string[] }
-interface ModuleRow { module: string; label: string; desc: string; modes: ModeDef[]; governed: string[] }
-
-const MODULE_ROWS: ModuleRow[] = [
-  {
-    module: 'chat', label: '智能对话', desc: '对话、微信入站、收藏与基础偏好',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'use', label: '使用', perms: ['chat.use'] },
-    ],
-    governed: ['chat.use'],
-  },
-  {
-    module: 'memory', label: '记忆与情绪', desc: '情绪记录始终需要本人开启',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'read', label: '只读', perms: ['memory.view'] },
-      { mode: 'use', label: '使用', perms: ['memory.view', 'memory.edit'] },
-    ],
-    governed: ['memory.view', 'memory.edit'],
-  },
-  {
-    module: 'skills', label: '个人技能', desc: '本人技能；跨用户管理与经验在高级设置',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'use', label: '使用', perms: ['skill.create'] },
-    ],
-    governed: ['skill.create'],
-  },
-  {
-    module: 'schedule', label: '提醒与简报', desc: '本人提醒/定时任务与日报',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'use', label: '使用', perms: ['cron.create'] },
-    ],
-    governed: ['cron.create'],
-  },
-  {
-    module: 'ledger', label: '账单', desc: '只读可看；使用含导入/修正/报告（自动包含文件依赖）',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'read', label: '只读', perms: ['ledger.view'] },
-      {
-        mode: 'use', label: '使用',
-        perms: ['ledger.view', 'ledger.import', 'ledger.edit', 'ledger.export', 'file.upload', 'file.read'],
-      },
-    ],
-    governed: ['ledger.view', 'ledger.import', 'ledger.edit', 'ledger.export'],
-  },
-  {
-    module: 'superagent', label: '编码代理', desc: '只读可查；执行会消耗模型用量并创建远端 Draft PR',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'read', label: '只读', perms: ['superagent.view'] },
-      { mode: 'execute', label: '执行', perms: ['superagent.view', 'superagent.create'] },
-    ],
-    governed: ['superagent.view', 'superagent.create'],
-  },
-  {
-    module: 'trace', label: '用量统计', desc: '查看本人用量与排行；管理范围可查看全部用户调用明细',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'read', label: '查看本人', perms: ['trace.view'] },
-      { mode: 'manage', label: '管理（含全部用户明细）', perms: ['trace.view', 'trace.manage'] },
-    ],
-    governed: ['trace.view', 'trace.manage'],
-  },
-  {
-    module: 'identity', label: '用户与角色管理', desc: '跨用户身份管理；不可管理拥有者身份',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'manage', label: '管理', perms: ['system.manage'] },
-    ],
-    governed: ['system.manage'],
-  },
-  {
-    module: 'config', label: '系统配置', desc: '模型、SMTP 等平台配置与凭证',
-    modes: [
-      { mode: 'off', label: '关闭', perms: [] },
-      { mode: 'manage', label: '配置', perms: ['system.config'] },
-    ],
-    governed: ['system.config'],
-  },
-]
-
-// 高级原子授权 = active 且不被功能行管辖
-const moduleRows = MODULE_ROWS
 
 // ---- P6 主区：后端权限定义（含 depends/internal/lifecycle）驱动分组复选框 ----
 const permDefs = ref<PermissionDef[]>([])
@@ -286,61 +180,6 @@ function onPermToggle(key: string, event: Event) {
   form.permissions = checked
     ? permsAfterCheck(form.permissions, key, permDefs.value)
     : permsAfterUncheck(form.permissions, key)
-  // 预设下拉与逐项真值保持同步（可能因此进入 custom）
-  syncModesFromPermissions()
-}
-
-function governedPerms(row: ModuleRow): string[] {
-  return row.governed
-}
-
-function detectMode(row: ModuleRow): string {
-  const governed = governedPerms(row)
-  const current = governed.filter(k => form.permissions.includes(k))
-  for (const m of row.modes) {
-    const expected = m.perms.filter(k => governed.includes(k))
-    if (expected.length === current.length && m.perms.every(k => form.permissions.includes(k))) return m.mode
-  }
-  return 'custom'
-}
-
-function isCustomMode(module: string): boolean {
-  const row = MODULE_ROWS.find(r => r.module === module)
-  return !!row && detectMode(row) === 'custom'
-}
-
-function syncModesFromPermissions() {
-  for (const row of MODULE_ROWS) {
-    form.moduleModes[row.module] = detectMode(row)
-  }
-}
-
-function onModeChange(module: string) {
-  const row = MODULE_ROWS.find(r => r.module === module)
-  if (!row) return
-  const mode = form.moduleModes[module]
-  if (mode === 'custom') return
-  const target = row.modes.find(m => m.mode === mode)
-  if (!target) return
-  // 应用模式：移除该模式未包含的管辖原子，加入目标原子
-  for (const key of governedPerms(row)) {
-    if (!target.perms.includes(key)) {
-      form.permissions = form.permissions.filter(k => k !== key)
-    }
-  }
-  for (const key of target.perms) {
-    if (!form.permissions.includes(key)) form.permissions.push(key)
-  }
-  // 文件依赖也可由高级区显式授予；账单降档保留已有共享授权。
-  if (module === 'ledger') {
-    if (mode === 'use') {
-      modeChangeNote.value = '已自动包含文件上传/读取依赖（账单导入与报告下载需要）。'
-    } else {
-      modeChangeNote.value = ''
-    }
-  } else {
-    modeChangeNote.value = ''
-  }
 }
 
 onMounted(async () => {
@@ -373,7 +212,6 @@ onMounted(async () => {
     form.description = props.role.description || ''
     form.permissions = [...(props.role.permissions || [])]
     form.hermes_tools = [...(props.role.hermes_tools || [])]
-    syncModesFromPermissions()
   }
 })
 
@@ -469,9 +307,6 @@ async function save() {
   color: var(--text-tertiary);
 }
 
-.mode-select {
-  min-width: 150px;
-}
 
 .sub-title {
   margin: 16px 0 8px;

@@ -1,10 +1,12 @@
 <template>
   <div class="card upgrade-panel">
-    <div class="panel-head" @click="open = !open">
-      <strong>权限模板升级（{{ preview?.current_template_version || '…' }}）</strong>
+    <button type="button" class="panel-head" :aria-expanded="open ? 'true' : 'false'"
+            @click="open = !open" @keydown.enter.prevent="open = !open"
+            @keydown.space.prevent="open = !open">
+      <strong class="panel-title">权限模板升级（{{ preview?.current_template_version || '…' }}）</strong>
       <span v-if="pendingCount" class="badge badge-warning">{{ pendingCount }} 个角色待确认升级</span>
-      <span class="arrow">{{ open ? '▾' : '▸' }}</span>
-    </div>
+      <span class="arrow" aria-hidden="true">{{ open ? '▾' : '▸' }}</span>
+    </button>
     <div v-show="open" class="panel-body">
       <p class="hint">
         已有角色的授权不会被自动补种（包括新增的编码代理权限）。升级由系统拥有者在此显式确认；
@@ -108,8 +110,20 @@ onMounted(load)
 .panel-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
+}
+
+.panel-title {
+  margin-right: auto;
 }
 
 .arrow {
@@ -117,7 +131,8 @@ onMounted(load)
 }
 
 .panel-body {
-  margin-top: 10px;
+  margin-top: 4px;
+  padding: 4px 14px 12px;
 }
 
 .hint {
@@ -148,6 +163,10 @@ onMounted(load)
 .diff {
   font-size: 12px;
   margin: 4px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
 }
 
 .diff-label {
@@ -160,7 +179,9 @@ onMounted(load)
   background: var(--bg-hover);
   border-radius: 4px;
   padding: 1px 6px;
-  margin: 2px 4px 2px 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  word-break: break-all;
+  max-width: 100%;
 }
 
 .diff-item.high {
@@ -170,5 +191,16 @@ onMounted(load)
 
 .diff-item.custom {
   background: rgba(240, 173, 78, 0.12);
+}
+
+@media (max-width: 760px) {
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .panel-title {
+    margin-right: 0;
+  }
 }
 </style>
