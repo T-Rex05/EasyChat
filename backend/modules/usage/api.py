@@ -118,7 +118,11 @@ class UsageService:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """明细查看：默认本人；他人/全量需 trace.manage。无权限看不到他人明细。"""
+        """明细查看：需 trace.view/manage；他人/全量需 trace.manage（WP-D：撤权后本人也 403）。"""
+        if actor.role != "super_admin" and not (
+            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
+        ):
+            raise ForbiddenError("缺少权限: trace.view")
         if owner_id is not None:
             if not self._can_view_owner(actor, owner_id):
                 raise ForbiddenError("无权查看他人调用明细")
@@ -161,6 +165,11 @@ class UsageService:
         return {"ranking": rows, "days": days}
 
     def my_daily_usage(self, actor: Principal, *, days: int = 30) -> list[dict[str, Any]]:
+        # WP-D：与 calls/detail 同闸——本人归属不能代替 trace.view 动作授权
+        if actor.role != "super_admin" and not (
+            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
+        ):
+            raise ForbiddenError("缺少权限: trace.view")
         return self.repo.daily_totals(owner_id=actor.user_id, days=days, today_utc=self._clock())
 
     def cleanup_old_calls(self, actor: Principal, *, days: int) -> int:

@@ -208,17 +208,16 @@ class SkillService:
     # ---- pin / 归档 --------------------------------------------------------------
 
     def set_pinned(self, actor: Principal, skill_id: str, pinned: bool) -> SkillView:
+        # WP-D：撤权后 owner 不得继续 pin——与其他写动作同闸（动作权限+范围）
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        if skill.owner_id != principal.user_id and not self._can(principal, "skill.manage"):
-            raise ForbiddenError("只有所有者或有 skill.manage 权限者可以设置 pin")
+        self._require_write(principal, skill)
         return self.repo.set_pinned(skill_id, bool(pinned))
 
     def set_archived(self, actor: Principal, skill_id: str, archived: bool) -> SkillView:
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        if skill.owner_id != principal.user_id and not self._can(principal, "skill.manage"):
-            raise ForbiddenError("只有所有者或有 skill.manage 权限者可以归档技能")
+        self._require_write(principal, skill)
         return self.repo.set_archived(skill_id, bool(archived))
 
     def archive(self, actor: Principal, skill_id: str) -> SkillView:

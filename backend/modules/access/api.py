@@ -423,6 +423,10 @@ class AccessService:
                 module["read"] = True
         # Partial legacy grants must describe the actual memory read check.
         modules["memory"]["read"] = "memory.view" in perms
+        # WP-D：superagent 的查看闸是真实入口 require_permission("superagent.view")
+        # （list_tasks/_task_for）。create/manage 不折算成 read——capabilities
+        # 必须与菜单/任务列表行为一致，否则仅 create 用户会看到入口却 403。
+        modules["superagent"]["read"] = "superagent.view" in perms
         return {
             "modules": modules,
             "tools": list(self.hermes_toolsets(principal.user_id)),

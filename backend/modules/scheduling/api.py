@@ -159,22 +159,26 @@ class SchedulingService:
             return duplicate
         return self.repo.create(spec)
 
-    def get(self, actor, schedule_id: str) -> ScheduleView:
+    def _require_schedule_access(self, actor, schedule_id: str):
+        """WP-D：提醒的建立与管理同属"建立与管理本人提醒"（cron.create）——
+        owner 归属本身不能代替动作授权；跨 owner 仍需 system.manage。"""
         principal = self.access.validate_principal(actor)
+        self.access.require_permission(principal, "cron.create")
         schedule = self.repo.get(schedule_id)
         if schedule.owner_id != principal.user_id:
             self.access.require_permission(principal, "system.manage")
         return schedule
 
+    def get(self, actor, schedule_id: str) -> ScheduleView:
+        return self._require_schedule_access(actor, schedule_id)
+
     def list(self, actor, limit: int = 50) -> list[ScheduleView]:
         principal = self.access.validate_principal(actor)
+        self.access.require_permission(principal, "cron.create")
         return self.repo.list_for_owner(principal.user_id, limit=limit)
 
     def set_enabled(self, actor, schedule_id: str, enabled: bool) -> ScheduleView:
-        principal = self.access.validate_principal(actor)
-        schedule = self.repo.get(schedule_id)
-        if schedule.owner_id != principal.user_id:
-            self.access.require_permission(principal, "system.manage")
+        self._require_schedule_access(actor, schedule_id)
         self.repo.set_enabled(schedule_id, enabled)
         return self.repo.get(schedule_id)
 
@@ -182,17 +186,11 @@ class SchedulingService:
         return self.set_enabled(actor, schedule_id, False)
 
     def remove(self, actor, schedule_id: str) -> None:
-        principal = self.access.validate_principal(actor)
-        schedule = self.repo.get(schedule_id)
-        if schedule.owner_id != principal.user_id:
-            self.access.require_permission(principal, "system.manage")
+        self._require_schedule_access(actor, schedule_id)
         self.repo.delete(schedule_id)
 
     def occurrences(self, actor, schedule_id: str, limit: int = 20) -> list[OccurrenceView]:
-        principal = self.access.validate_principal(actor)
-        schedule = self.repo.get(schedule_id)
-        if schedule.owner_id != principal.user_id:
-            self.access.require_permission(principal, "system.manage")
+        self._require_schedule_access(actor, schedule_id)
         return self.repo.occurrences(schedule_id, limit=limit)
 
     def upcoming(
