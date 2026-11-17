@@ -1,0 +1,15 @@
+接管 E:\PythonCode\EasyChat，按以下计划修复并验收本轮反馈。
+先读取 AGENTS.md、CLAUDE.md 和
+E:\PythonCode\EasyChat\docs\superpowers\plans\2026-11-17-permissions-channels-chat-ledger-remediation.md。
+记录实际HEAD、已有dirty改动和进程版本，保留其他工作。本轮审查基线579db03，使用当前代码复核。
+
+工作包A　修复共享账单摘要解析，把“385笔 23708.48元”等笔数与金额分开；CSV/XLSX真实入口补失败回归。修正前端mismatches/detail契约与差异确认交互。未提交旧批次通过已有parse接口重核验，保持真实金额差异守卫和幂等。
+工作包B　核对运行实例hermes/wechat开关、加密secret是否存在和装配条件。配置页显示渠道关闭/依赖缺失/初始化失败的真实原因及恢复步骤，保留默认关闭。readyz和认证成功不能当模块可用证据。
+工作包C　让实际聊天流HTTP失败与error.message可见。修复恢复流程互斥、旧连接关闭、晚到回调和所有终态关闭。保持原client_msg_id、续传游标和一次性ticket，不重复模型执行或计费。保留HTTP409/422/503等原因。
+工作包D　补撤权后技能pin/archive、提醒停启等管理、本人用量calls/detail/daily的HTTP回归，按动作权限+owner统一现有服务检查。建立22项active权限的入口/动作/数据范围/撤权矩阵，覆盖HTTP、微信、工具与后台入口。编码代理view/create/manage八种组合与capabilities、菜单、任务列表一致，保留原子授权和历史角色，不自动扩大授权。
+工作包E　角色编辑只保留分组权限复选框及独立工具复选框，删除重复预设下拉和专用同步逻辑。ledger.manage回到账单组。修复权限模板升级面板内边距、换行、键盘展开与窄屏布局。提供同场景Before/After。
+
+先复现并保存失败证据，再做最小实现，每包定向回归与代码评审。运行计划的后端测试、前端test/type-check/build，完成浏览器真实交互。
+protected paths按AGENTS交付草稿与升级简报并等待人工续作授权，可独立安全工作继续完成。保持WAL守卫、追加迁移、事务内无外呼、ToolContext可信身份和加密凭据。
+不要把合成复现当成用户现场已验证；当前真实SSE状态、渠道进程开关、真实原账单仍需各自确认。现有通过测试没有覆盖本轮缺陷，必须补行为回归。
+最后交付逐包修改与依据、命令退出码、权限矩阵、UI对照、评审与复验、真实外部测试和未完成项。受保护草稿列明具体文件、停因、证据及续作步骤。
