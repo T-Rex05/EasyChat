@@ -175,6 +175,7 @@ def write_wechat_xlsx(
     sheet_name: str = "Sheet1",
     extra_sheets: Mapping[str, Sequence[BillRow]] | None = None,
     control_totals: Mapping[str, Any] | None = None,
+    summary_lines: Sequence[str] | None = None,
     preamble: bool = True,
 ) -> Path:
     """写一个合成微信 XLSX；header_row 从 1 开始，说明行数量可变。"""
@@ -209,7 +210,11 @@ def write_wechat_xlsx(
         "expense_minor": sum(_to_minor(r.amount) for r in rows if r.direction == "支出"),
         "neutral_minor": sum(_to_minor(r.amount) for r in rows if r.direction not in ("收入", "支出")),
     }
-    if totals:
+    if summary_lines is not None:
+        # 用户同款自由文本摘要（WP-A）：逐行写入，交给真实解析入口处理
+        for offset, line in enumerate(summary_lines):
+            ws.cell(row=current + offset, column=1, value=line)
+    elif totals:
         ws.cell(row=current, column=1, value=f"共{totals.get('count', 0)}笔记录")
         ws.cell(row=current + 1, column=1,
                 value=f"收入：{_minor_text(totals.get('income_minor', 0))}元")
@@ -246,6 +251,7 @@ def write_wechat_csv(
     encoding: str = "utf-8-sig",
     delimiter: str = ",",
     preamble: bool = True,
+    summary_lines: Sequence[str] | None = None,
 ) -> Path:
     import csv
 
@@ -259,9 +265,13 @@ def write_wechat_csv(
         writer.writerow(WECHAT_COLUMNS)
         for row in rows:
             writer.writerow([row.as_dict()[name] for name in WECHAT_COLUMNS])
-        writer.writerow([f"共{len(rows)}笔记录"])
-        writer.writerow([f"收入：{_minor_text(sum(_to_minor(r.amount) for r in rows if r.direction == '收入'))}元"])
-        writer.writerow([f"支出：{_minor_text(sum(_to_minor(r.amount) for r in rows if r.direction == '支出'))}元"])
+        if summary_lines is not None:
+            for line in summary_lines:
+                writer.writerow([line])
+        else:
+            writer.writerow([f"共{len(rows)}笔记录"])
+            writer.writerow([f"收入：{_minor_text(sum(_to_minor(r.amount) for r in rows if r.direction == '收入'))}元"])
+            writer.writerow([f"支出：{_minor_text(sum(_to_minor(r.amount) for r in rows if r.direction == '支出'))}元"])
     return path
 
 

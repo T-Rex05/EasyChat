@@ -7,7 +7,11 @@ from __future__ import annotations
 import pytest
 
 from backend.modules.ledger.contracts import ColumnMapping
-from backend.modules.ledger.parsers import BillParseError, ParseOptions, detect_format, parse_saved_file
+from backend.modules.ledger.parsers import (
+    BillParseError, ParseOptions, detect_format, parse_saved_file,
+)
+from backend.modules.ledger.parsers.wechat_csv import parse_wechat_csv
+from backend.modules.ledger.parsers.wechat_xlsx import parse_wechat_xlsx
 from tests.support.ledger_fixtures import (
     BillRow,
     LONG_TX_ID,
@@ -26,6 +30,10 @@ def _parse(path, *, name=None, mapping=None, max_rows=100_000):
         path, file_name=name or path.name, mime="",
         options=ParseOptions(max_rows=max_rows, mapping=mapping),
     )
+
+
+def _options():
+    return ParseOptions(max_rows=100_000)
 
 
 @pytest.mark.parametrize("header_row", [3, 7, 12])
@@ -228,3 +236,76 @@ def test_column_names_tolerate_fullwidth_and_amount_suffix(tmp_path):
     statement = _parse(path)
     assert len(statement.rows) == 1
     assert statement.rows[0].amount_minor == 990
+
+
+# ---- WP-A：用户同款"笔数+金额"摘要（此前把首数字当金额，精准产生错总额） ----
+
+USER_SUMMARY = (
+    "共4笔记录",
+    "收入：1笔 10410.86元",
+    "支出：1笔 23708.48元",
+    "中性交易：2笔 9518.11元",
+)
+
+
+def _user_summary_rows():
+    from tests.support.ledger_fixtures import BillRow
+
+    return [
+        BillRow(occurred="2026-10-01 09:00:00", type="商户消费", direction="支出",
+                product="消费A", amount="23708.48", status="支付成功"),
+        BillRow(occurred="2026-10-02 09:00:00", type="退款", direction="收入",
+                product="退款B", amount="10410.86", status="已到账"),
+        BillRow(occurred="2026-10-03 09:00:00", type="零钱充值", direction="中性",
+                product="充值C", amount="4759.05", status="已到账"),
+        BillRow(occurred="2026-10-04 09:00:00", type="零钱提现", direction="中性",
+                product="提现D", amount="4759.06", status="已到账"),
+    ]
+
+
+def test_user_style_summary_csv_amounts_accurate(tmp_path):
+    """WP-A 真实入口：'支出：385笔 23708.48元' 形态——金额必须是 2370848 分而非 38500。"""
+    path = write_wechat_csv(tmp_path / "微信支付账单.csv", _user_summary_rows(),
+                            summary_lines=USER_SUMMARY)
+    statement = parse_wechat_csv(path, _options())
+    totals = statement.control_totals
+    assert totals.count == 4
+    assert totals.expense_minor == 2370848, f"实际 {totals.expense_minor}（缺陷值 38500）"
+    assert totals.income_minor == 1041086
+    assert totals.neutral_minor == 951811
+    assert statement.warnings == () or all("控制" not in w for w in statement.warnings)
+
+
+def test_user_style_summary_xlsx_amounts_accurate(tmp_path):
+    path = write_wechat_xlsx(tmp_path / "微信支付账单.xlsx", _user_summary_rows(),
+                             summary_lines=USER_SUMMARY)
+    statement = parse_wechat_xlsx(path, _options())
+    totals = statement.control_totals
+    assert totals.expense_minor == 2370848
+    assert totals.income_minor == 1041086
+    assert totals.neutral_minor == 951811
+    assert totals.count == 4
+
+
+def test_control_totals_text_variants():
+    """文本变体矩阵：分类后可选笔数再金额/直接金额/千分位/零值/仅笔数。"""
+    from backend.modules.ledger.normalization import parse_control_totals
+
+    # 逗号连接变体：不得把金额 23708.48 当成总笔数
+    t = parse_control_totals(["支出：385笔，共23708.48元"])
+    assert t.expense_minor == 2370848
+    assert t.count is None, "分类行的'385笔'不是总笔数"
+
+    # 直接金额（旧格式）
+    assert parse_control_totals(["支出合计：23708.48元"]).expense_minor == 2370848
+    # 千分位
+    assert parse_control_totals(["收入：33笔 1,041.08元"]).income_minor == 104108
+    # 零值
+    assert parse_control_totals(["支出：0笔 0.00元"]).expense_minor == 0
+    # 只有笔数：金额保持 None（不得让首数字抢占）
+    only_count = parse_control_totals(["支出：385笔"])
+    assert only_count.expense_minor is None
+    # 空摘要
+    empty = parse_control_totals([])
+    assert empty.expense_minor is None and empty.income_minor is None
+    assert empty.count is None and empty.neutral_minor is None

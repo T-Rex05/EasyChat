@@ -539,3 +539,57 @@ async def test_supported_csv_still_registers(tmp_path):
         assert view.state == "saved"
     finally:
         await rig.aclose()
+
+
+async def test_reparse_refreshes_candidates_and_owner_guard(tmp_path):
+    """WP-A：未提交旧批次经已有 parse 接口重核验——候选重建幂等、owner 边界拒绝。"""
+    rig, principal = make_ledger_rig(tmp_path)
+    other = rig.seed_user(grants=("ledger.import", "ledger.view"), username="reparse_other")
+    try:
+        rows = [_row_expense(0), _row_income(1)]
+        summary = [
+            "共2笔记录",
+            "收入：1笔 10.00元",
+            "支出：1笔 20.00元",
+        ]
+        path = write_wechat_csv(tmp_path / "bills" / "旧批次.csv", rows, summary_lines=summary)
+        view, _saved = await import_bill(rig, principal, path, parse=False)
+
+        first = await rig.ledger.parse_import(view.import_id)
+        assert first.row_counts["rows"] == 2
+        assert first.quality["control"]["ok"] is True, first.quality["control"]
+        first_rows = rig.ledger.list_source_rows(principal, view.import_id)
+
+        second = await rig.ledger.parse_import(view.import_id)
+        assert second.row_counts["rows"] == 2
+        second_rows = rig.ledger.list_source_rows(principal, view.import_id)
+        assert [r["external_id"] for r in second_rows] ==             [r["external_id"] for r in first_rows], (
+            "重解析幂等：候选行重建不产生重复"
+        )
+
+        from backend.shared.errors import NotFoundError
+
+        with pytest.raises(NotFoundError):
+            rig.ledger.get_import(other, view.import_id)
+        # 撤权后 parse 同样拒绝（动作权限 + owner 双闸）
+        from backend.shared.errors import ForbiddenError
+
+        revoked = rig.seed_user(username="reparse_revoked", revokes=("ledger.import",))
+        with pytest.raises((ForbiddenError, NotFoundError)):
+            rig.ledger.get_import(revoked, view.import_id)
+    finally:
+        await rig.aclose()
+
+
+def _row_expense(index: int):
+    from tests.support.ledger_fixtures import BillRow
+
+    return BillRow(occurred=f"2026-10-01 0{index}:00:00", type="商户消费", direction="支出",
+                   product=f"消费{index}", amount="20.00", status="支付成功")
+
+
+def _row_income(index: int):
+    from tests.support.ledger_fixtures import BillRow
+
+    return BillRow(occurred=f"2026-10-02 0{index}:00:00", type="退款", direction="收入",
+                   product=f"退款{index}", amount="10.00", status="已到账")

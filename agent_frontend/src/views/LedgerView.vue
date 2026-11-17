@@ -53,8 +53,10 @@
         控制总额：<strong :class="summary.control.ok ? 'ok' : 'bad'">
           {{ summary.control.ok ? '一致' : '不一致' }}
         </strong>
-        <span v-if="!summary.control.ok" class="muted">
-          差异：{{ JSON.stringify(summary.control.differences || {}) }}；确认无误后可再次提交并允许差异。
+        <span v-if="!summary.control.ok" class="muted mismatch-box">
+          <div v-for="m in summary.control.mismatches" :key="m">{{ m }}</div>
+          <div v-if="!summary.control.mismatches.length">存在未说明的差异</div>
+          <div class="muted">明细实际汇总：{{ formatDetail(summary.control.detail) }}</div>
         </span>
       </p>
       <p class="muted">行数 {{ summary.rows }}；提示：{{ summary.warnings.join('；') || '无' }}</p>
@@ -65,6 +67,13 @@
           </tr>
         </tbody>
       </table>
+      <!-- WP-A：真实金额差异默认阻止提交；确认放行必须是独立显式动作 -->
+      <div v-if="!summary.control.ok && summaryId" class="detail-actions">
+        <button class="btn btn-secondary" :disabled="committing === summaryId"
+                @click="commitAllowingMismatch">
+          确认差异并提交（{{ summaryId }}）
+        </button>
+      </div>
     </section>
 
     <section class="card">
@@ -251,6 +260,23 @@ const categories = ref<Category[]>([])
 const refunds = ref<RefundSuggestion[]>([])
 const analysis = ref<AnalysisResult | null>(null)
 const summary = ref<ImportSummary | null>(null)
+const summaryId = ref('')
+
+function formatDetail(detail: Record<string, number>): string {
+  const names: Record<string, string> = {
+    count: '笔数', expense_minor: '支出', income_minor: '收入', neutral_minor: '中性',
+  }
+  return Object.entries(detail || {}).map(([k, v]) => {
+    const label = names[k] || k
+    return k.endsWith('_minor') ? `${label} ${(v / 100).toFixed(2)}元` : `${label} ${v}`
+  }).join('，') || '—'
+}
+
+async function commitAllowingMismatch() {
+  if (!summaryId.value) return
+  if (!confirm('账单摘要与明细存在差异。确认你已核对差异清单并要按明细数据入账？')) return
+  await commit(summaryId.value, true)
+}
 const candidate = ref<ImageCandidate | null>(null)
 const drafts = reactive<Record<string, { category_id: string; note: string }>>({})
 
@@ -344,17 +370,18 @@ async function parse(importId: string) {
 async function preview(importId: string) {
   try {
     summary.value = await importSummary(importId)
+    summaryId.value = importId
     await refreshImports()
   } catch (err) {
     fail(err)
   }
 }
 
-async function commit(importId: string) {
+async function commit(importId: string, allowMismatch = false) {
   if (committing.value) return
   committing.value = importId
   try {
-    const result = await commitImport(importId)
+    const result = await commitImport(importId, allowMismatch)
     notice.value = `已提交：新增 ${result.inserted}，更新 ${result.updated}，未变 ${result.unchanged}`
     await refreshImports()
     await refreshTransactions()

@@ -294,12 +294,47 @@ def amount_to_minor(text: object, *, default_currency: str = "CNY") -> int | Non
 
 # ---- 控制总额 -------------------------------------------------------------------
 
-_CONTROL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("count", re.compile(r"(?:笔数|交易笔数|总笔数|共)[^\d]{0,6}(\d{1,7})\s*笔?")),
-    ("expense", re.compile(r"(?:支出|总支出|支出合计)[^\d]{0,8}([-\d.,]+)")),
-    ("income", re.compile(r"(?:收入|总收入|收入合计)[^\d]{0,8}([-\d.,]+)")),
-    ("neutral", re.compile(r"(?:中性|不计收支|其他)[^\d]{0,8}([-\d.,]+)")),
+# 总笔数：仅独立"共N笔/笔数N"形态；分类行的"N笔"是分类笔数，不当总笔数。
+_COUNT_PATTERN = re.compile(r"(?:共|笔数|交易笔数|总笔数)\s*(\d{1,7})\s*笔")
+
+# 分类标签 → 控制字段。金额在标签后文本中解析（两段式，见 _split_count_amount）。
+_AMOUNT_LABELS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("expense", re.compile(r"支出")),
+    ("income", re.compile(r"收入")),
+    ("neutral", re.compile(r"(?:中性|不计收支|其他)")),
 )
+
+_COUNT_SUFFIX = re.compile(r"(\d{1,7})\s*笔")
+# 金额：可选千分位/小数；"元"后缀或小数点增强可信度，裸整数仅在剥除笔数后仍成立时接受。
+_AMOUNT_TOKEN = re.compile(r"(-?\d[\d,，]*(?:\.\d+)?)")
+
+
+def _split_count_amount(text: str) -> tuple[int | None, int | None]:
+    """从分类标签后的文本分离 (笔数, 金额)。
+
+    支持三种形态："N笔 金额元"、"金额元"（旧直接格式）、仅"N笔"（金额 None）。
+    笔数永远不当金额——用户账单"支出：385笔 23708.48元"曾把 385 解析成
+    38500 分的支出总额（WP-A 缺陷）。
+    """
+    count_match = _COUNT_SUFFIX.search(text)
+    if count_match is None:
+        # 旧直接金额格式："23708.48元"
+        amount_match = _AMOUNT_TOKEN.search(text)
+        if amount_match is None:
+            return None, None
+        minor, _currency, error = parse_money(amount_match.group(1))
+        if error is not None or minor is None:
+            return None, None
+        return None, abs(minor)
+    count = int(count_match.group(1))
+    rest = text[count_match.end():]
+    amount_match = _AMOUNT_TOKEN.search(rest)
+    if amount_match is None:
+        return count, None  # 仅笔数：金额缺失，不让首数字抢占
+    minor, _currency, error = parse_money(amount_match.group(1))
+    if error is not None or minor is None:
+        return count, None
+    return count, abs(minor)
 
 
 def parse_control_totals(lines: object) -> ControlTotals:
@@ -313,19 +348,20 @@ def parse_control_totals(lines: object) -> ControlTotals:
     raw_lines: list[str] = []
     for line in candidates:
         hit = False
-        for name, pattern in _CONTROL_PATTERNS:
+        count_match = _COUNT_PATTERN.search(line)
+        if count_match is not None and found["count"] is None:
+            found["count"] = int(count_match.group(1))
+            hit = True
+        for name, label in _AMOUNT_LABELS:
             if found[name] is not None:
                 continue
-            match = pattern.search(line)
-            if not match:
+            label_match = label.search(line)
+            if label_match is None:
                 continue
-            if name == "count":
-                found[name] = int(match.group(1))
-            else:
-                minor, _currency, error = parse_money(match.group(1))
-                if error is None and minor is not None:
-                    found[name] = abs(minor)
-            hit = True
+            _count, minor = _split_count_amount(line[label_match.end():])
+            if minor is not None:
+                found[name] = minor
+                hit = True
         if hit:
             raw_lines.append(line.strip())
     return ControlTotals(

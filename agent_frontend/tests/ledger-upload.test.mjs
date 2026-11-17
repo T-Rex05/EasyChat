@@ -70,3 +70,21 @@ test('looksLikeImageFile：MIME 与扩展名双判定（绕过 accept 也算）'
   assert.equal(looksLikeImageFile({ name: 'bill.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), false)
   assert.equal(looksLikeImageFile({ name: 'report.pdf', type: 'application/pdf' }), false)
 })
+
+test('WP-A：ImportSummary.control 对齐后端 mismatches/detail 契约', () => {
+  const api = readFileSync(new URL('../src/api/ledger.ts', import.meta.url), 'utf8')
+  assert.match(api, /mismatches: string\[\]/)
+  assert.match(api, /detail: Record<string, number>/)
+  assert.doesNotMatch(api, /differences\?/)
+})
+
+test('WP-A：差异确认是独立显式动作，普通提交不默认放行', () => {
+  const view = readFileSync(new URL('../src/views/LedgerView.vue', import.meta.url), 'utf8')
+  assert.match(view, /确认差异并提交/)
+  assert.match(view, /commitAllowingMismatch/)
+  assert.match(view, /confirm\('账单摘要与明细存在差异/)
+  assert.match(view, /commitImport\(importId, allowMismatch\)/)
+  // 展示真实差异清单而非 JSON.stringify 空对象
+  assert.match(view, /v-for="m in summary\.control\.mismatches"/)
+  assert.doesNotMatch(view, /JSON\.stringify\(summary\.control/)
+})

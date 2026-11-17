@@ -43,7 +43,13 @@ function normalizeImport(view: ImportPayload): ImportView {
 
 export interface ImportSummary {
   totals: Record<string, number>
-  control: { ok: boolean; differences?: Record<string, number> }
+  // WP-A 对齐后端 quality.control 契约：可读差异清单 + 实际明细汇总
+  control: {
+    ok: boolean
+    checked: boolean
+    mismatches: string[]
+    detail: Record<string, number>
+  }
   warnings: string[]
   rows: number
 }
