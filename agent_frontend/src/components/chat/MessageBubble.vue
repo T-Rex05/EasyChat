@@ -10,32 +10,12 @@
       <span class="timestamp">{{ message.timestamp }}</span>
     </div>
 
-    <!-- 思考过程（可折叠） -->
-    <!-- 非受控折叠：用本地 isOpen 管理，用户手动 toggle 后不再被 message.content 变化覆盖 -->
-    <div
-      v-if="message.role === 'assistant' && message.thinkingProcesses?.length"
-      class="thinking-processes"
-    >
-      <details :open="isOpen" @toggle="onToggle" ref="thinkingDetailsRef">
-        <summary class="thinking-summary">
-          🧠 思考过程（{{ message.thinkingProcesses.length }} 步）
-        </summary>
-        <div
-          v-for="(tp, i) in message.thinkingProcesses"
-          :key="i"
-          class="thinking-step"
-        >
-          <div class="thinking-step-header">步骤 {{ i + 1 }}</div>
-          <div
-            class="thinking-step-content markdown-body"
-            v-html="renderTPContent(tp.content)"
-          ></div>
-        </div>
-        <div class="thinking-collapse-bar" @click="collapseThinking">
-          ▲ 收起思考过程
-        </div>
-      </details>
-    </div>
+    <details v-if="message.role === 'assistant' && message.toolNames?.length" class="tool-activity">
+      <summary>工具调用（{{ message.toolNames.length }} 次）</summary>
+      <ol>
+        <li v-for="(name, i) in message.toolNames" :key="i">{{ name }}</li>
+      </ol>
+    </details>
 
     <!-- P0: 子 Agent 委派面板 -->
     <SubagentPanel
@@ -236,41 +216,6 @@ function formatCitationTime(dateStr: string): string {
 const auth = useAuthStore()
 const canViewMemory = computed(() => memoryAccess(auth.permissions, auth.capabilities?.modules?.memory, auth.userRole === 'super_admin').view)
 
-// ── 思考过程折叠状态（非受控） ──
-// 默认：无正文时展开（思考/流式阶段），有正文时折叠（给出答案后）。
-// 用户手动 toggle 后置 userToggled=true，之后 message.content 的更新不再覆盖用户展开状态。
-const isOpen = ref<boolean>(!props.message.content)
-const userToggled = ref<boolean>(false)
-const thinkingDetailsRef = ref<HTMLDetailsElement | null>(null)
-
-// 底部收起按钮
-function collapseThinking(e: MouseEvent) {
-  e.preventDefault()
-  if (thinkingDetailsRef.value) {
-    thinkingDetailsRef.value.open = false
-    isOpen.value = false
-    userToggled.value = true
-  }
-}
-
-// 用户点击 summary 时同步真实开合状态（浏览器实际 open）
-function onToggle(e: Event) {
-  const el = e.target as HTMLDetailsElement
-  isOpen.value = el.open
-  userToggled.value = true
-}
-
-// 流式阶段：新一轮思考会更新 message.content（清空→再填充）。
-// 仅在用户未手动干预时，自动跟随"有内容则折叠、无内容则展开"。
-watch(
-  () => props.message.content,
-  (val) => {
-    if (!userToggled.value) {
-      isOpen.value = !val
-    }
-  },
-)
-
 // ── 流式渲染节流：用 requestAnimationFrame 减少 Markdown 重渲染频率 ──
 // 流式阶段每个 token 都会更新 content，但 Markdown 解析开销大，
 // 通过 RAF 合并同一帧内的多次更新，每帧最多渲染一次。
@@ -298,20 +243,14 @@ const renderedContent = computed(() => {
   return renderMarkdown(sanitized)
 })
 
-// 判断是否在思考中（助手消息，无内容，无思考过程）
+// 首段正文或工具活动到达前显示等待状态。
 const isThinking = computed(() => {
   return (
     props.message.role === 'assistant' &&
     !props.message.content &&
-    (!props.message.thinkingProcesses || props.message.thinkingProcesses.length === 0)
+    !props.message.toolNames?.length
   )
 })
-
-// 渲染思考过程内容
-function renderTPContent(content: string): string {
-  const sanitized = sanitizeModelOutput(content)
-  return renderMarkdown(sanitized)
-}
 
 // 复制消息
 const copied = ref(false)
@@ -502,8 +441,9 @@ function formatFileSize(size: number): string {
   border-radius: 8px;
   font-weight: 500;
 }
-.source-wechat, .source-weixin { background: #e8f5e9; color: #2e7d32; }
-.source-feishu { background: #e3f2fd; color: #1565c0; }
+/* 芯片底色用 color-mix 半透明:深浅主题下都由底层背景自动适配 */
+.source-wechat, .source-weixin { --chip: #22c55e; background: color-mix(in srgb, var(--chip) 15%, transparent); color: var(--text-success); }
+.source-feishu { --chip: #3b82f6; background: color-mix(in srgb, var(--chip) 15%, transparent); color: var(--text-brand); }
 
 .message-content {
   font-size: 14px;
@@ -687,78 +627,14 @@ function formatFileSize(size: number): string {
   color: var(--success-color, #16a34a);
 }
 
-/* 思考过程折叠块 */
-.thinking-processes {
+.tool-activity {
   margin-bottom: 12px;
-  position: relative;
-}
-
-/* 思考过程和回答之间的分隔 */
-.thinking-processes::after {
-  content: '';
-  display: block;
-  margin-top: 10px;
-  border-bottom: 1px dashed var(--border-secondary);
-}
-
-.thinking-processes details {
-  border: 1px solid var(--border-primary);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.thinking-summary {
-  padding: 8px 12px;
-  cursor: pointer;
   font-size: 13px;
   color: var(--text-secondary);
-  background: var(--bg-secondary);
-  user-select: none;
-  transition: background 0.2s;
 }
 
-.thinking-summary:hover {
-  background: var(--bg-hover);
-}
-
-.thinking-step {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-primary);
-}
-
-.thinking-step-header {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-bottom: 4px;
-  font-weight: 500;
-}
-
-.thinking-step-content {
-  font-size: 13px;
-  line-height: 1.5;
-  opacity: 0.85;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.thinking-collapse-bar {
-  padding: 8px 12px;
-  text-align: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+.tool-activity summary {
   cursor: pointer;
-  border-top: 2px solid var(--brand-light);
-  background: linear-gradient(to bottom, var(--bg-secondary), var(--bg-primary));
-  transition: all 0.2s;
-  user-select: none;
-  letter-spacing: 1px;
-}
-
-.thinking-collapse-bar:hover {
-  background: var(--brand-light);
-  color: var(--brand);
-  border-top-color: var(--brand);
 }
 
 @keyframes fadeIn {
@@ -1012,28 +888,33 @@ function formatFileSize(size: number): string {
 }
 
 .citation-type.type-fact {
-  background: #e3f2fd;
-  color: #1565c0;
+  --chip: #3b82f6;
+  background: color-mix(in srgb, var(--chip) 15%, transparent);
+  color: var(--text-brand);
 }
 
 .citation-type.type-preference {
-  background: #f3e5f5;
-  color: #7b1fa2;
+  --chip: #a855f7;
+  background: color-mix(in srgb, var(--chip) 15%, transparent);
+  color: color-mix(in srgb, var(--chip) 80%, var(--text-primary));
 }
 
 .citation-type.type-event {
-  background: #e8f5e9;
-  color: #2e7d32;
+  --chip: #22c55e;
+  background: color-mix(in srgb, var(--chip) 15%, transparent);
+  color: var(--text-success);
 }
 
 .citation-type.type-task_state {
-  background: #fff3e0;
-  color: #e65100;
+  --chip: #f97316;
+  background: color-mix(in srgb, var(--chip) 15%, transparent);
+  color: var(--text-warning);
 }
 
 .citation-type.type-skill {
-  background: #fce4ec;
-  color: #c62828;
+  --chip: #ec4899;
+  background: color-mix(in srgb, var(--chip) 15%, transparent);
+  color: var(--text-danger);
 }
 
 .citation-content {

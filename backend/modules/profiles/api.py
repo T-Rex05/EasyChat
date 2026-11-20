@@ -94,6 +94,7 @@ class ProfilesService:
 
     def get(self, actor: Principal) -> ProfileView:
         principal = self.access.validate_principal(actor)
+        self.access.require_permission(principal, "chat.use")
         return self._ensure(principal.user_id)
 
     def get_by_owner(self, owner_id: int) -> ProfileView:
@@ -108,6 +109,7 @@ class ProfilesService:
 
     def update(self, actor: Principal, **fields: Any) -> ProfileView:
         principal = self.access.validate_principal(actor)
+        self.access.require_permission(principal, "chat.use")
         self._ensure(principal.user_id)
         clean = _validate_update(fields)
         profile = self.repo.update(principal.user_id, clean)

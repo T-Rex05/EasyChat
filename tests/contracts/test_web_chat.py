@@ -178,6 +178,28 @@ async def test_run_memory_follows_role_and_current_sharing(rig):
     assert [item["memory_id"] for item in second["items"]] == [shared.memory_id]
 
 
+async def test_chat_permission_revocation_closes_history_and_new_session_entry(rig):
+    user = rig.seed_user(role="user", username="web_revoked")
+    session = await rig.assistant.create_session(user, title="保存的对话")
+    headers = _auth_headers(rig, user)
+    async with _client(rig) as client:
+        assert (await client.get("/api/history", headers=headers)).status_code == 200
+        assert (await client.get(f"/api/history/{session}", headers=headers)).status_code == 200
+        admin = rig.seed_user(role="super_admin", username="web_revoke_admin")
+        rig.access.set_user_permission(admin, user.user_id, "chat.use", False)
+        for method, target, extra in (
+            ("GET", "/api/history", {}),
+            ("GET", f"/api/history/{session}", {}),
+            ("PUT", f"/api/history/{session}", {"json": {"title": "更名"}}),
+            ("DELETE", f"/api/history/{session}", {}),
+            ("POST", "/chat/stream", {"json": {"thread_id": f"{user.user_id}_716", "message": "你好"}}),
+        ):
+            response = await client.request(method, target, headers=headers, **extra)
+            assert response.status_code == 403, (method, target, response.status_code)
+    sessions = rig.assistant.repo.list_sessions(user.user_id)
+    assert [(s["id"], s["title"], s["active"]) for s in sessions] == [(session, "保存的对话", 1)]
+
+
 async def test_stream_legacy_thread_id_full_flow(rig):
     user = rig.seed_user(role="user", grants=("chat.use",), username="web_flow")
     rig.runtime.script_events([
@@ -242,11 +264,14 @@ async def test_history_endpoints(rig):
     user = rig.seed_user(role="user", grants=("chat.use",), username="hist")
     token = _token(rig, user)
     session = await rig.assistant.create_session(user, external_chat_id=f"{user.user_id}_h", title="标题")
+    wechat_session = await rig.assistant.create_session(user, source="wechat", title="标题")
     async with _client(rig) as client:
         headers = {"Authorization": f"Bearer {token}"}
         lst = await client.get("/api/history", headers=headers)
         assert lst.status_code == 200
-        assert "sessions" in lst.json() and len(lst.json()["sessions"]) >= 1
+        sources = {row["session_id"]: row["source"] for row in lst.json()["sessions"]}
+        assert sources[session] == "web"
+        assert sources[wechat_session] == "wechat"
 
         renamed = await client.put(f"/api/history/{session}", json={"title": "新标题"}, headers=headers)
         assert renamed.status_code == 200
@@ -339,3 +364,28 @@ async def test_stream_reconnect_resumes_last_seq_without_rerun(rig):
         # 已收的 seq=1 帧（甲）不回放；仅续传其后内容。run 已 completed，
         # 完成帧无 id，续传以持久终态呈现（幂等，不重复执行）。
         assert ("\"content\": \"甲\"" not in body2)
+
+async def test_reasoning_stays_private_while_tools_and_reply_are_streamed(rig):
+    user = rig.seed_user(role="user", grants=("chat.use",), username="web_private")
+    session = await rig.seed_session(user)
+    rig.runtime.script_events([
+        _e("thinking", {"text": "private-fragment"}),
+        _e("tool_started", {"iteration": 1, "tools": ["previous_turn"]}),
+        _e("tool_started", {"tools": []}),
+        _e("tool_started", {"tools": ["search", "lookup"], "arguments": "private-input"}),
+        _e("token", {"text": "你好"}),
+        _e("completed", {"result": {"final_response": "你好"}}),
+    ])
+    async with _client(rig) as client:
+        headers = _auth_headers(rig, user)
+        status, body = await _read_sse(rig, client, {
+            "thread_id": session, "message": "hello", "client_msg_id": "private",
+        }, headers=headers)
+        history = await client.get(f"/api/history/{session}", headers=headers)
+    assert status == history.status_code == 200
+    assert "private-fragment" not in body and "private-input" not in body
+    assert '"type": "thinking_step"' not in body
+    assert body.count('"type": "tool_activity"') == 1
+    assert '"tools": ["search", "lookup"]' in body
+    assert '"final_content": "你好"' in body
+    assert [m["content"] for m in history.json()["messages"]] == ["hello", "你好"]

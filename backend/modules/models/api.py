@@ -7,13 +7,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from time import monotonic
 from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
 
 from backend.modules.models.contracts import ModelProfile, ModelSelection
 from backend.modules.models.repository import ModelsRepository
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
 from backend.shared.errors import ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.model_endpoint import model_base_url
 
 
 class ModelsService:
@@ -62,6 +67,57 @@ class ModelsService:
     def set_active(self, actor: Principal, config_id: int) -> None:
         self._require(actor, "system.config")
         self.repo.set_active(config_id)
+
+    async def test_connection(
+        self, actor: Principal, config_id: int, *, transport: httpx.AsyncBaseTransport | None = None,
+    ) -> dict[str, Any]:
+        self._require(actor, "system.config")
+        profile = self.repo.get_config(config_id)
+        if profile is None:
+            raise NotFoundError("模型配置不存在")
+        try:
+            base = model_base_url(profile.base_url, profile.provider)
+            parsed = urlsplit(base)
+            endpoint = httpx.URL(base)
+        except (httpx.InvalidURL, ValueError) as exc:
+            raise InvalidInputError("模型 API 基础地址格式无效") from exc
+        if (endpoint.scheme not in ("http", "https") or not endpoint.host
+                or parsed.username is not None or parsed.query or parsed.fragment):
+            raise InvalidInputError("请填写 HTTP(S) 模型 API 基础地址，密钥请填在 API Key 栏")
+        key = self.resolve_api_key(config_id)
+        anthropic = "anthropic" in profile.provider.lower() or "anthropic" in base.lower()
+        headers = {}
+        if anthropic:
+            headers["anthropic-version"] = "2023-06-01"
+            if key:
+                headers["x-api-key"] = key
+            url = base.removesuffix("/v1") + "/v1/messages"
+        else:
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            url = base + "/chat/completions"
+        payload = {"model": profile.model, "max_tokens": 512, "messages": [{"role": "user", "content": "Reply OK."}]}
+        start = monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=False, transport=transport) as client:
+                response = await client.post(url, json=payload, headers=headers)
+        except httpx.TimeoutException:
+            return {"ok": False, "message": "模型服务响应超时"}
+        except httpx.RequestError:
+            return {"ok": False, "message": "无法连接模型服务，请检查基础地址、网络和代理"}
+        result = {"status_code": response.status_code, "latency_ms": round((monotonic() - start) * 1000)}
+        if not response.is_success:
+            hint = {401: "请检查 API Key", 403: "请检查密钥权限和订阅端点", 404: "请检查基础地址和模型名",
+                    429: "请检查额度或稍后重试"}.get(response.status_code, "请检查服务状态和模型配置")
+            return {**result, "ok": False, "message": f"模型服务返回 HTTP {response.status_code}，{hint}"}
+        try:
+            data = response.json()
+            blocks = data["content"] if anthropic else [data["choices"][0]["message"]]
+            field = "text" if anthropic else "content"
+            has_text = any(isinstance(b.get(field), str) and b[field].strip() for b in blocks)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            has_text = False
+        return {**result, "ok": has_text, "message": "模型已返回文本回复" if has_text else "服务已响应，但未返回文本回复"}
 
     def delete_config(self, actor: Principal, config_id: int) -> None:
         self._require(actor, "system.config")

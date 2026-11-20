@@ -298,46 +298,47 @@ class SuperagentRepository:
 
     def list_for_owner(
         self, owner_id: int, limit: int = 50, *,
-        cursor_created_at: str = "", cursor_id: str = "",
+        cursor_created_at: str = "", cursor_id: str = "", status: str = "",
     ) -> list[SuperagentTask]:
-        conn = self.db.connect()
-        try:
-            if cursor_created_at:
-                rows = conn.execute(
-                    "SELECT * FROM superagent_tasks WHERE owner_id=? AND status<>? "
-                    "AND (created_at < ? OR (created_at = ? AND id < ?)) "
-                    "ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (int(owner_id), "cancelled_hidden", cursor_created_at, cursor_created_at,
-                     cursor_id, int(limit)),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM superagent_tasks WHERE owner_id=? AND status<>? "
-                    "ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (int(owner_id), "cancelled_hidden", int(limit)),
-                ).fetchall()
-        finally:
-            conn.close()
-        return [_task(r) for r in rows]
+        return self._list_tasks(
+            limit, owner_id=owner_id, status=status, exclude_hidden=True,
+            cursor_created_at=cursor_created_at, cursor_id=cursor_id,
+        )
 
     def list_all(
         self, limit: int = 100, *,
-        cursor_created_at: str = "", cursor_id: str = "",
+        cursor_created_at: str = "", cursor_id: str = "", owner_id: int | None = None, status: str = "",
     ) -> list[SuperagentTask]:
+        return self._list_tasks(
+            limit, owner_id=owner_id, status=status, exclude_hidden=False,
+            cursor_created_at=cursor_created_at, cursor_id=cursor_id,
+        )
+
+    def _list_tasks(
+        self, limit: int, *, owner_id: int | None, status: str, exclude_hidden: bool,
+        cursor_created_at: str, cursor_id: str,
+    ) -> list[SuperagentTask]:
+        conditions: list[str] = []
+        parameters: list[str | int] = []
+        if owner_id is not None:
+            conditions.append("owner_id = ?")
+            parameters.append(int(owner_id))
+        if exclude_hidden:
+            conditions.append("status <> ?")
+            parameters.append("cancelled_hidden")
+        if status:
+            conditions.append("status = ?")
+            parameters.append(status)
+        if cursor_created_at:
+            conditions.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            parameters.extend((cursor_created_at, cursor_created_at, cursor_id))
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
         conn = self.db.connect()
         try:
-            if cursor_created_at:
-                rows = conn.execute(
-                    "SELECT * FROM superagent_tasks "
-                    "WHERE (created_at < ? OR (created_at = ? AND id < ?)) "
-                    "ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (cursor_created_at, cursor_created_at, cursor_id, int(limit)),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM superagent_tasks ORDER BY created_at DESC, id DESC LIMIT ?",
-                    (int(limit),),
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM superagent_tasks{where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                (*parameters, int(limit)),
+            ).fetchall()
         finally:
             conn.close()
         return [_task(r) for r in rows]

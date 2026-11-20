@@ -48,13 +48,22 @@ from backend.modules.channels.contracts import (
     QrSessionView,
 )
 from backend.modules.channels.repository import ChannelRepository
-from backend.modules.channels.wechat.account import AiohttpTransport, QrLoginManager
-from backend.modules.channels.wechat.listener import WeChatListener
+from backend.modules.channels.wechat.account import AiohttpTransport, QrLoginManager, TransportError, send_text
+from backend.modules.channels.wechat.listener import DISABLED_USER_NOTICE, WeChatListener
 from backend.modules.channels.wechat.media import MediaFetchError, MediaFetcher
+from backend.modules.memory.api import is_preference_request
 from backend.platform.sqlite import Database, utc_now_iso
 from backend.shared.context import Principal
 from backend.shared.crypto import decrypt_secret, encrypt_secret
-from backend.shared.errors import AppError, BusyError, ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.errors import (
+    AppError,
+    BusyError,
+    CapabilityUnavailableError,
+    ConflictError,
+    ForbiddenError,
+    InvalidInputError,
+    NotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +88,25 @@ _WECHAT_COMMANDS_HELP = (
 
 def _is_private_memory_command(message: InboundMessage) -> bool:
     parts = message.text.strip().split(maxsplit=1)
-    return bool(parts) and parts[0].lower() in {"/记忆", "/memory", "/纠正", "/correct", "/本轮记忆"}
+    return bool(parts) and (
+        parts[0].lower() in {"/记忆", "/memory", "/纠正", "/correct", "/本轮记忆"}
+        or (not message.media and is_preference_request(message.text))
+    )
+
+
+def _event_origin(message: InboundMessage) -> tuple[str, str, str, str, str, str]:
+    return (
+        message.account_pk, message.platform, message.external_account_id,
+        message.external_user_id, message.external_chat_id, message.external_event_id,
+    )
+
+
+def _cached_event_reply(event: dict[str, Any]) -> str:
+    try:
+        payload = json.loads(event.get("payload") or "{}")
+    except (TypeError, ValueError):
+        return ""
+    return str(payload.get("reply_text") or "") if isinstance(payload, dict) else ""
 
 
 class ChannelService:
@@ -209,16 +236,19 @@ class ChannelService:
 
     async def start_qr_login(self, actor: Principal) -> QrSessionView:
         self._require_admin(actor)
-        return await self.qr.start()
+        try:
+            return await self.qr.start(actor.user_id)
+        except TransportError as exc:
+            raise CapabilityUnavailableError("暂时无法从微信获取二维码，请稍后重试") from exc
 
     async def poll_qr_login(self, actor: Principal, session_id: str) -> QrSessionView:
         self._require_admin(actor)
-        return await self.qr.poll(session_id)
+        return await self.qr.poll(session_id, actor.user_id)
 
     async def bind_after_qr(self, actor: Principal, session_id: str) -> dict[str, Any]:
         """扫码确认后保存 bot 凭证；把扫码者自己的微信 ID 绑到当前用户。"""
         self._require_admin(actor)
-        credentials = self.qr.take_credentials(session_id)
+        credentials = self.qr.take_credentials(session_id, actor.user_id)
         if credentials is None:
             raise InvalidInputError("二维码尚未确认或已过期，请重新扫码")
         account = self.repo.upsert_account(
@@ -440,8 +470,6 @@ class ChannelService:
         self, *, account_pk: str, external_user_id: str, text: str, context_token: str = ""
     ) -> None:
         """投递模块专用发送入口：凭证解析与协议细节留在 channels。"""
-        from backend.modules.channels.wechat.account import send_text
-
         account, credentials = self.listener_account(account_pk)
         if account is None or account.status != ACCOUNT_ACTIVE:
             raise InvalidInputError("渠道账号不可用")
@@ -463,6 +491,53 @@ class ChannelService:
         )
 
     # ---- 入站处理 ----------------------------------------------------------------
+
+    def is_inbound_sender_disabled(self, message: InboundMessage) -> bool:
+        resolved = self.repo.find_active_binding(
+            message.platform, message.external_account_id, message.external_user_id
+        )
+        return resolved is not None and resolved[1]["status"] == 0
+
+    def _is_original_sender_disabled(self, message: InboundMessage, event: dict[str, Any]) -> bool:
+        resolved = self.repo.find_active_binding(
+            message.platform, message.external_account_id, message.external_user_id
+        )
+        return (
+            resolved is not None and resolved[1]["status"] == 0
+            and event.get("origin_owner_id") == resolved[0].user_id
+        )
+
+    async def send_disabled_user_notice(self, message: InboundMessage, event_id: str) -> None:
+        """只向当前入站账号下仍绑定的禁用发送者发送固定回执。"""
+        account, credentials = self.listener_account(message.account_pk)
+        if (
+            account is None or account.status != ACCOUNT_ACTIVE or account.platform != PLATFORM_WECHAT
+            or message.platform != account.platform or message.external_account_id != account.account_id
+        ):
+            return
+        event = self.repo.get_event(event_id) or {}
+        if _cached_event_reply(event) != DISABLED_USER_NOTICE:
+            return
+        try:
+            original = _message_from_envelope(event)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return
+        if _event_origin(original) != _event_origin(message) or not self._is_original_sender_disabled(original, event):
+            return
+        token = str(credentials.get("token") or "")
+        base_url = (account.base_url or credentials.get("base_url") or "").rstrip("/")
+        if not token or not base_url:
+            return
+        context_token = original.context_token or self.repo.latest_context_token(
+            account.platform, account.account_id, original.external_user_id,
+            external_chat_id=original.external_chat_id,
+        )
+        await send_text(
+            self.transport, base_url=base_url, token=token, to_user_id=original.external_user_id,
+            text=DISABLED_USER_NOTICE, context_token=context_token, account_id=account.id,
+        )
+        # 平台重投只补发尚未送达的禁用回执。
+        self.repo.set_event_reply(event_id, "")
 
     async def handle_inbound(self, message: InboundMessage) -> InboundOutcome:
         """持久 inbox（T5）：先事务保存完整可重放 envelope，再处理。
@@ -496,27 +571,16 @@ class ChannelService:
         if not inserted:
             existing = self.repo.get_event(event_id) or {}
             try:
-                payload = json.loads(existing.get("payload") or "{}")
-            except ValueError:
-                payload = {}
-            try:
                 original = _message_from_envelope(existing)
             except (AttributeError, KeyError, TypeError, ValueError):
-                original = None
+                return InboundOutcome(accepted=False, reason=REASON_INVALID, event_id=event_id)
+            if _event_origin(original) != _event_origin(message):
+                return InboundOutcome(accepted=False, reason=REASON_INVALID, event_id=event_id)
             if str(existing.get("state") or "") == EVENT_RECEIVED:
-                if original is None or (
-                    original.account_pk, original.platform, original.external_account_id,
-                    original.external_user_id, original.external_chat_id, original.external_event_id,
-                ) != (
-                    account.id, message.platform, message.external_account_id,
-                    message.external_user_id, message.external_chat_id, message.external_event_id,
-                ):
-                    return InboundOutcome(accepted=False, reason=REASON_INVALID, event_id=event_id)
                 # 重投沿用首次持久化的正文及发送上下文。
                 try:
                     outcome = await self._process_event(account, original, event_id)
-                    if outcome.reply_text and not _is_private_memory_command(original):
-                        self.repo.set_event_reply(event_id, outcome.reply_text)
+                    self._cache_event_reply(original, outcome, event_id)
                     self.repo.mark_event_processing_done(event_id)
                     return outcome
                 except asyncio.CancelledError:
@@ -526,12 +590,19 @@ class ChannelService:
                     logger.exception("渠道事件重投处理失败 event=%s", event_id)
                     self._mark_replay_failed(event_id, exc)
                     return InboundOutcome(accepted=False, reason=REASON_INTERNAL)
+            cached = _cached_event_reply(existing)
+            if cached == DISABLED_USER_NOTICE and self._is_original_sender_disabled(original, existing):
+                return InboundOutcome(
+                    accepted=False, reason=REASON_DUPLICATE, duplicate=True,
+                    event_id=event_id, reply_text=DISABLED_USER_NOTICE,
+                )
             # 缓存了确认或角色等个人信息的回复，仅向仍绑定原会话 owner 的来源重发。
             original_session = str(existing.get("origin_session_id") or existing.get("session_id") or "")
             route = self.repo.find_session_route(original_session) if original_session else None
             target = self._delivery_target_for_session(int(route["owner_id"]), original_session) if route else None
             same_source = target is not None and target.ref == message.external_user_id and (
                 target.channel_account_id == account.id and route["external_chat_id"] == message.external_chat_id
+                and route["owner_id"] == existing.get("origin_owner_id")
             )
             actor = None
             if same_source:
@@ -540,11 +611,10 @@ class ChannelService:
                     self.access.require_permission(actor, "chat.use")
                 except AppError:
                     actor = None
-            cached = payload.get("reply_text") if isinstance(payload, dict) else None
             reply = ""
-            if actor is not None and original is not None:
+            if actor is not None:
                 if not _is_private_memory_command(original):
-                    reply = str(cached or "")
+                    reply = cached if cached != DISABLED_USER_NOTICE else ""
                 elif self.commands is not None and original.text.strip().split(maxsplit=1)[0].lower() in (
                     "/纠正", "/correct",
                 ):
@@ -568,8 +638,7 @@ class ChannelService:
 
         try:
             outcome = await self._process_event(account, message, event_id)
-            if outcome.reply_text and not _is_private_memory_command(message):
-                self.repo.set_event_reply(event_id, outcome.reply_text)
+            self._cache_event_reply(message, outcome, event_id)
             self.repo.mark_event_processing_done(event_id)
             return outcome
         except asyncio.CancelledError:
@@ -605,8 +674,7 @@ class ChannelService:
                 continue
             try:
                 outcome = await self._process_event(account, message, str(row["id"]))
-                if outcome.reply_text and not _is_private_memory_command(message):
-                    self.repo.set_event_reply(str(row["id"]), outcome.reply_text)
+                self._cache_event_reply(message, outcome, str(row["id"]))
                 self.repo.mark_event_processing_done(str(row["id"]))
                 replayed += 1
             except asyncio.CancelledError:
@@ -614,6 +682,10 @@ class ChannelService:
             except Exception as exc:  # noqa: BLE001
                 self._mark_replay_failed(str(row["id"]), exc)
         return replayed
+
+    def _cache_event_reply(self, message: InboundMessage, outcome: InboundOutcome, event_id: str) -> None:
+        if outcome.reply_text and (outcome.reason == REASON_USER_DISABLED or not _is_private_memory_command(message)):
+            self.repo.set_event_reply(event_id, outcome.reply_text)
 
     def _mark_replay_failed(self, event_id: str, exc: Exception) -> None:
         row = self.repo.get_event(event_id) or {}
@@ -646,25 +718,28 @@ class ChannelService:
         if account.status != ACCOUNT_ACTIVE:
             return self._reject(event_id, REASON_ACCOUNT_DISABLED, "渠道账号已禁用")
 
-        if not message.text.strip() and not message.media:
-            return self._reject(event_id, REASON_EMPTY, "空消息")
-
         resolved = self.repo.find_active_binding(
             message.platform, message.external_account_id, message.external_user_id
         )
+        if not message.text.strip() and not message.media and (resolved is None or resolved[1]["status"] != 0):
+            return self._reject(event_id, REASON_EMPTY, "空消息")
         if resolved is None:
             return self._reject(event_id, REASON_UNBOUND, "微信账号未绑定")
         binding, user_row = resolved
         event = self.repo.get_event(event_id) or {}
         if event.get("origin_owner_id") != binding.user_id:
             return self._reject(event_id, REASON_FORBIDDEN, "入站消息的原始绑定无法验证")
-        if int(user_row.get("status") or 0) != 1:
+        if user_row["status"] == 0:
+            return self._reject_disabled_sender(event_id)
+        if user_row["status"] != 1:
             return self._reject(event_id, REASON_USER_DISABLED, "账号已被禁用", user_id=binding.user_id)
 
         try:
             principal = self.access.snapshot_principal(binding.user_id)
             self.access.require_permission(principal, "chat.use")
         except ForbiddenError as exc:
+            if self._is_original_sender_disabled(message, event):
+                return self._reject_disabled_sender(event_id)
             return self._reject(event_id, REASON_FORBIDDEN, str(exc), user_id=binding.user_id)
 
         try:
@@ -702,6 +777,8 @@ class ChannelService:
         ingested = await self._ingest_media(
             principal, session_id, event_id, message, account_id=account.id
         )
+        if message.media and self._is_original_sender_disabled(message, event):
+            return self._reject_disabled_sender(event_id)
         attachment_ids = ingested.attachment_ids
         # 失败判据是“整条消息只有语音且没有可用文本”，不能看音频是否保存成功；
         # 语音+图片时图片仍应继续处理，语音+文字时按文字处理。
@@ -727,15 +804,19 @@ class ChannelService:
             text = _default_media_text(message)
         from backend.modules.channels.safety import CRISIS_REPLY, detect_crisis
 
+        reply = None
         if detect_crisis(text):
-            # 危机表达立即确定性回复，不进入模型、不写入情绪样本。
+            reply = CRISIS_REPLY
+        elif self.commands is not None and not message.media:
+            reply = self.commands.remember_preference(principal, text, event_id, persona_id=session["persona_id"])
+        if reply is not None:
             self.repo.update_event(
                 event_id, state=EVENT_PROCESSED, session_id=session_id,
                 processed_at=utc_now_iso(),
             )
             return InboundOutcome(
                 accepted=True, reason=REASON_OK, session_id=session_id,
-                event_id=event_id, reply_text=CRISIS_REPLY,
+                event_id=event_id, reply_text=reply,
             )
         from backend.modules.assistant.contracts import RunCommand
 
@@ -1073,13 +1154,16 @@ class ChannelService:
         return attachment_id
 
     def _reject(
-        self, event_id: str, reason: str, error: str, *, user_id: int | None = None
+        self, event_id: str, reason: str, error: str, *, user_id: int | None = None, reply_text: str = ""
     ) -> InboundOutcome:
         self.repo.update_event(
             event_id, state=EVENT_REJECTED, error=f"{reason}: {error}",
             processed_at=utc_now_iso(),
         )
-        return InboundOutcome(accepted=False, reason=reason, event_id=event_id)
+        return InboundOutcome(accepted=False, reason=reason, event_id=event_id, reply_text=reply_text)
+
+    def _reject_disabled_sender(self, event_id: str) -> InboundOutcome:
+        return self._reject(event_id, REASON_USER_DISABLED, "账号已被禁用", reply_text=DISABLED_USER_NOTICE)
 
     def _require_admin(self, actor: Principal) -> Principal:
         principal = self.access.validate_principal(actor)

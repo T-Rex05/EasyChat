@@ -16,7 +16,7 @@ from backend.modules.ledger.contracts import (
 )
 from backend.modules.profiles.contracts import PRESET_NAMES
 from backend.shared.context import Principal
-from backend.shared.errors import AppError
+from backend.shared.errors import AppError, ForbiddenError, NotFoundError
 from backend.shared.identifiers import is_valid_id
 
 TargetResolver = Callable[[int], ChannelTarget | None]
@@ -46,6 +46,9 @@ class MemoryCommands(Protocol):
     def channel_revision_receipt(
         self, actor: Principal, event_id: str, *, persona_id: str | None,
     ) -> tuple[str, int] | None: ...
+    def remember_preference_request(
+        self, actor: Principal, *, text: str, source_ref: str, persona_id: str | None,
+    ) -> MemoryRecord | None: ...
     def forget(
         self, actor: Principal, *, memory_id: str = "", query: str = "",
         reason: str = "", persona_id: str | None = None, all_personas: bool = True,
@@ -90,6 +93,20 @@ class CommandServices:
 class WeChatCommands:
     def __init__(self, services: CommandServices) -> None:
         self.services = services
+
+    def remember_preference(
+        self, principal: Principal, text: str, event_id: str, *, persona_id: str | None,
+    ) -> str | None:
+        memory = self.services.memory
+        if memory is None:
+            return None
+        try:
+            record = memory.remember_preference_request(
+                principal, text=text, source_ref=event_id, persona_id=persona_id,
+            )
+        except (ForbiddenError, NotFoundError) as exc:
+            return f"这条偏好未保存：{exc}"
+        return f"已记住：{record.content}" if record else None
 
     async def handle(
         self, principal: Principal, message: InboundMessage, session_id: str,

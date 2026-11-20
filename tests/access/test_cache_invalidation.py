@@ -85,6 +85,9 @@ async def test_disable_user_blocks_next_operation_even_with_valid_token(rig):
         access.authenticate_token(token)
     with pytest.raises(ForbiddenError):
         access.snapshot_principal(member.user_id)
+    assert not access.has_permission(principal, "chat.use")
+    with pytest.raises(ForbiddenError):
+        access.require_permission(principal, "chat.use")
     await rig.aclose()
 
 

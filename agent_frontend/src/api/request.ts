@@ -76,18 +76,16 @@ request.interceptors.response.use(
 
       // 401 未授权：清除 token 并跳转登录（去重，防止并发请求重复触发）
       if (status === 401 && !_isHandling401) {
-        _isHandling401 = true
         const authStore = useAuthStore()
-        authStore.logout()
-        // 跳转到登录页（如果在路由环境中）
-        const memoryLogin = memoryLoginHash(window.location.hash)
-        if (memoryLogin) {
-          if (authStore.ready) window.location.hash = memoryLogin
-        } else if (window.location.pathname !== '/login') {
-          window.location.href = '/login'
+        // 应用启动时由 App 尝试静默刷新，登录表单的 401 由表单显示。
+        if (authStore.ready && authStore.token) {
+          _isHandling401 = true
+          authStore.logout()
+          const login = memoryLoginHash(window.location.hash) ?? '#/login'
+          if (window.location.hash !== login) window.location.hash = login
+          // 延迟重置标记，避免页面跳转前的其他请求再次触发
+          setTimeout(() => { _isHandling401 = false }, 3000)
         }
-        // 延迟重置标记，避免页面跳转前的其他请求再次触发
-        setTimeout(() => { _isHandling401 = false }, 3000)
       }
 
       // 403 权限不足

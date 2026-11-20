@@ -292,6 +292,7 @@ class AiohttpTransport:
 @dataclass(slots=True)
 class _QrSession:
     id: str
+    owner_id: int
     status: str
     created_at: float
     expires_at: float
@@ -359,12 +360,13 @@ class QrLoginManager:
             raise TransportError("iLink 返回空二维码")
         return value, content
 
-    async def start(self, *, bot_type: str = "3") -> QrSessionView:
-        self._purge()
+    async def start(self, owner_id: int, *, bot_type: str = "3") -> QrSessionView:
         value, content = await self._fetch_qr(self.base_url, bot_type)
+        self._purge()
         now = self.clock()
         session = _QrSession(
             id=uuid.uuid4().hex[:16],
+            owner_id=owner_id,
             status=QR_WAIT,
             created_at=now,
             expires_at=now + self.ttl,
@@ -376,13 +378,19 @@ class QrLoginManager:
         self._sessions[session.id] = session
         return self._view(session)
 
-    async def poll(self, session_id: str) -> QrSessionView:
+    def _active_session(self, session_id: str, owner_id: int) -> _QrSession | None:
         session = self._sessions.get(session_id)
+        if session is None or session.owner_id != owner_id:
+            return None
+        if self.clock() >= session.expires_at:
+            self._sessions.pop(session_id)
+            return None
+        return session
+
+    async def poll(self, session_id: str, owner_id: int) -> QrSessionView:
+        session = self._active_session(session_id, owner_id)
         if session is None:
             return QrSessionView(session_id=session_id, status=QR_EXPIRED)
-        if self.clock() >= session.expires_at and session.status != QR_CONFIRMED:
-            session.status = QR_EXPIRED
-            return self._view(session)
         if session.status in (QR_CONFIRMED, QR_EXPIRED):
             return self._view(session)
 
@@ -438,8 +446,8 @@ class QrLoginManager:
         session.base_url = self.base_url
         session.status = QR_WAIT
 
-    def take_credentials(self, session_id: str) -> dict[str, str] | None:
-        session = self._sessions.get(session_id)
+    def take_credentials(self, session_id: str, owner_id: int) -> dict[str, str] | None:
+        session = self._active_session(session_id, owner_id)
         if session is None or session.status != QR_CONFIRMED or not session.credentials:
             return None
         return dict(session.credentials)
@@ -448,6 +456,8 @@ class QrLoginManager:
         self._sessions.pop(session_id, None)
 
     def _view(self, session: _QrSession) -> QrSessionView:
+        if self._active_session(session.id, session.owner_id) is None:
+            return QrSessionView(session_id=session.id, status=QR_EXPIRED)
         return QrSessionView(
             session_id=session.id,
             status=session.status,

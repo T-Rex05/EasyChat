@@ -40,7 +40,7 @@ function makeMod(fetchImpl, stubs = {}) {
     setItem: (k, v) => { store[k] = String(v) },
     removeItem: (k) => { delete store[k] },
   }
-  const win = { location: { pathname: stubs.pathname || '/chat', href: '' } }
+  const win = { location: { pathname: stubs.pathname || '/chat', href: '', hash: stubs.hash ?? '#/chat' } }
   const exports = {}
   new Function(
     'fetch', 'EventSource', 'localStorage', 'window', 'useAuthStore', 'module', 'exports', EXPORTED,
@@ -104,16 +104,16 @@ test('流请求 409：服务繁忙原因可见且不做无效重试', async () =
   assert.ok(streamCalls <= 2, `409 不得反复重试，实际 ${streamCalls} 次`)
 })
 
-test('流请求 401：走现有登录机制（清 token+跳转）', async () => {
+test('流请求 401：在 /login#/chat 清 token 并返回登录路由', async () => {
   const { exports, local, win } = makeMod(async (url) => {
     if (String(url).includes('auth/me')) return { ok: false, status: 401, json: async () => ({ detail: 'expired' }) }
     return { ok: false, status: 401, json: async () => ({ detail: 'expired' }), body: null }
-  })
+  }, { pathname: '/login' })
   const { callbacks, errors } = cb()
   await exports.sendMessageStream('你好', 'c1', callbacks, 'cm-1')
   await flush()
   assert.equal(local.getItem('authToken'), null)
-  assert.equal(win.location.href, '/login')
+  assert.equal(win.location.hash, '#/login')
   assert.match(errors[0], /登录/)
 })
 
@@ -274,4 +274,25 @@ test('重连 URL 保留 Authorization 不落 ticket/token 于查询串', async (
       assert.doesNotMatch(u, /ticket=|token=/, '长效凭据不得进 URL（审计 #3）')
     }
   }
+})
+
+test('旧服务的推理帧被忽略，工具名称和最终回复按序可见', async () => {
+  const { exports } = makeMod(async (url) => {
+    if (String(url).includes('auth/me')) return AUTH_OK
+    return { ok: true, status: 200, body: okStream([
+      { id: 1, data: { type: 'thinking_step', content: 'private' } },
+      { id: 2, data: { type: 'tool_activity', tools: ['search', 'lookup'] } },
+      { id: 3, data: { type: 'token', content: '你好' } },
+      { data: { type: 'chat_complete', final_content: '你好！' } },
+    ]) }
+  })
+  const events = []
+  await exports.sendMessageStream('hello', 'c1', {
+    onThinkingStep: (text) => events.push(text),
+    onToolCall: (name) => events.push(name),
+    onChunk: (_chunk, full) => events.push(full),
+    onComplete: (data) => events.push(data.final_content),
+  }, 'cm-1')
+  await flush()
+  assert.deepEqual(events, ['search', 'lookup', '你好', '你好！'])
 })

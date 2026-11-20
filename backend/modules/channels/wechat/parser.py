@@ -114,15 +114,17 @@ def parse_inbound(
     *,
     now: float,
     fingerprint_window: float = DEFAULT_FINGERPRINT_WINDOW_SECONDS,
+    include_unhandled: bool = False,
 ) -> InboundMessage | None:
-    """解析一条 getupdates 消息；机器人自身回声、空消息返回 None。"""
+    """归一化客户端消息；监听器可识别没有可处理内容的消息以回执。"""
     from_user_id = str(msg.get("from_user_id") or "").strip()
-    if not from_user_id or from_user_id == account.account_id:
+    if not from_user_id or from_user_id == account.account_id or str(msg.get("message_type")) == "2":
         return None
 
     text_parts: list[str] = []
     media: list[MediaRef] = []
     seen: set[tuple[str, str, str, str, int]] = set()
+    first_item_type = 0
     for item in msg.get("item_list") or []:
         if not isinstance(item, Mapping):
             continue
@@ -130,6 +132,8 @@ def parse_inbound(
             item_type = int(item.get("type") or 0)
         except (TypeError, ValueError):
             continue
+        if not first_item_type and item_type > 0:
+            first_item_type = item_type
         if item_type == ITEM_TEXT:
             text_item = item.get("text_item") or {}
             if isinstance(text_item, Mapping):
@@ -153,14 +157,18 @@ def parse_inbound(
         media.append(ref)
 
     text = "".join(text_parts).strip()
-    if not text and not media:
+    if not text and not media and (not include_unhandled or not first_item_type):
         return None
 
     chat_id = str(msg.get("chat_id") or msg.get("room_id") or from_user_id)
+    context_token = str(msg.get("context_token") or "")
     media_tuple = tuple(media)
     fingerprint = fingerprint_of(
         external_user_id=from_user_id, external_chat_id=chat_id, text=text, media=media_tuple,
     )
+    if not text and not media:
+        identity = f"{fingerprint}:{first_item_type}:{context_token}"
+        fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     raw_message_id = str(msg.get("message_id") or msg.get("msg_id") or "").strip()
     if raw_message_id:
         # 平台消息 ID 的作用域未被文档保证为全局；带上发送者，避免两个用户
@@ -182,7 +190,7 @@ def parse_inbound(
         external_event_id=external_event_id,
         text=text,
         media=media_tuple,
-        context_token=str(msg.get("context_token") or ""),
+        context_token=context_token,
         received_at=now,
         fingerprint=fingerprint,
         fingerprint_window=fingerprint_window,

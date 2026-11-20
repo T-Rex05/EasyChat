@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -288,3 +290,92 @@ def test_usage_bridge_records_delta_once(tmp_path):
     assert row["prompt_tokens"] == 100
     assert row["completion_tokens"] == 50
     db.close()
+
+
+def test_easychat_prompt_isolation_and_coding_workspace(tmp_path, monkeypatch):
+    from agent.coding_context import coding_system_prompt_parts
+    from agent.conversation_loop import _stored_prompt_matches_runtime
+    from agent.system_prompt import build_system_prompt
+    from agent.runtime_cwd import resolve_context_cwd
+    from backend.runtime.hermes.agent_factory import build_agent
+    import run_agent
+    import hermes_state
+
+    server = tmp_path / "server"
+    work = tmp_path / "task"
+    for path in (server, work):
+        path.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", f"{path.name}-branch", str(path)], check=True)
+        (path / "AGENTS.md").write_text(f"private instructions of {path.name}", encoding="utf-8")
+    monkeypatch.chdir(server)
+    monkeypatch.setenv("TERMINAL_CWD", str(server))
+    monkeypatch.setenv("HERMES_HOME", str(server / "hermes"))
+    monkeypatch.setattr(hermes_state, "SessionDB", lambda: None)
+    monkeypatch.setattr(run_agent, "AIAgent", lambda **kw: SimpleNamespace(
+        **kw, valid_tool_names={"lookup"}, _tool_use_enforcement=False,
+        model="local-test", provider="test", load_soul_identity=False,
+        _memory_store=None, _memory_manager=None, pass_session_id=False,
+        _emit_status=lambda message: None,
+    ))
+    adapter = HermesRuntimeAdapter(hermes_home=server / "hermes")
+    chat_req = _req()
+    code_req = _req(ctx=_ctx(source="superagent"))
+    adapter.prepare_session_workspace(code_req.context.session_id, str(work))
+    try:
+        observed = []
+
+        def probe(agent, text, **kwargs):
+            observed.append((agent.platform, agent.skip_context_files, resolve_context_cwd(), kwargs,
+                             build_system_prompt(agent)))
+            return {}
+
+        run = adapter._default_runner(probe)
+        for req in (chat_req, code_req, chat_req):
+            agent = build_agent(req, {}, hermes_home=adapter.hermes_home)
+            run(agent, req, None, None, None)
+        ordinary, coding, again = observed
+        assert ordinary == again
+        assert "server-branch" not in ordinary[4]
+        assert "task-branch" in coding[4]
+        assert str(server) not in ordinary[4]
+        assert "private instructions of server" not in ordinary[4]
+        assert "private instructions of task" in coding[4]
+        assert "private instructions of server" not in coding[4]
+        assert ordinary[0:2] == ("easychat", True)
+        assert coding[:3] == ("easychat-coding", False, work)
+        assert coding[3]["task_id"] == code_req.context.session_id
+        assert adapter._cache_key(chat_req) != adapter._cache_key(code_req)
+        for mode in ("auto", "on"):
+            assert not any(coding_system_prompt_parts(
+                platform=ordinary[0], cwd=server, config={"agent": {"coding_context": mode}},
+            ))
+        assert any(coding_system_prompt_parts(platform=coding[0], cwd=work))
+        assert not _stored_prompt_matches_runtime(
+            SimpleNamespace(platform=ordinary[0]), "legacy project instructions without platform marker",
+        )
+    finally:
+        adapter.release_session_workspace(code_req.context.session_id)
+
+
+def test_adopting_legacy_compression_child_preserves_history_and_rejects_host_prompt():
+    from agent.conversation_compression import _adopt_live_compression_child
+
+    history = [{"role": "user", "content": "我叫小明"}, {"role": "assistant", "content": "你好，小明"}]
+
+    class ChildSessions:
+        def find_live_compression_child(self, parent_id):
+            return {"id": "child", "system_prompt": "Legacy server checkout and branch"}
+
+        def get_messages_as_conversation(self, session_id):
+            return list(history)
+
+    agent = SimpleNamespace(
+        platform="easychat", context_compressor=None, _memory_manager=None,
+        _cached_system_prompt="old parent", _cached_system_prompt_static="old prefix",
+    )
+    recovered = contextvars.copy_context().run(
+        _adopt_live_compression_child, agent, ChildSessions(), "parent",
+    )
+    assert recovered == history
+    assert agent.session_id == "child"
+    assert agent._cached_system_prompt is None and agent._cached_system_prompt_static is None

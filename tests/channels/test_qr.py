@@ -28,7 +28,7 @@ class FakeTransport:
 async def test_qr_start_returns_png_data_url() -> None:
     pytest.importorskip("qrcode")
     manager = QrLoginManager(FakeTransport(), clock=lambda: 1793865600.0)
-    view = await manager.start()
+    view = await manager.start(owner_id=1)
     assert view.status == "wait"
     assert view.qr_content == "https://liteapp.weixin.qq.com/q/demo"
     assert view.qr_image.startswith("data:image/png;base64,")
@@ -46,8 +46,8 @@ class PollTimeoutTransport(FakeTransport):
 async def test_qr_poll_timeout_keeps_waiting_instead_of_500() -> None:
     pytest.importorskip("qrcode")
     manager = QrLoginManager(PollTimeoutTransport(), clock=lambda: 1793865600.0)
-    started = await manager.start()
-    view = await manager.poll(started.session_id)
+    started = await manager.start(owner_id=1)
+    view = await manager.poll(started.session_id, owner_id=1)
     assert view.status == "wait"
     assert view.qr_image.startswith("data:image/png;base64,")
 

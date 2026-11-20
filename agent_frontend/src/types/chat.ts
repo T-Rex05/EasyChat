@@ -1,11 +1,5 @@
 // 聊天相关类型定义
 
-/** 单步思考过程（每次 stream_reset 保存为一步） */
-export interface ThinkingProcess {
-  content: string
-  timestamp?: string
-}
-
 /** 子 Agent 工具调用记录 */
 export interface SubagentToolCall {
   tool_name: string
@@ -78,8 +72,7 @@ export interface Message {
   json_data?: any
   rag_trace_ids?: string[]
   rag_decomposed?: boolean
-  /** 思考过程列表（工具调用前的推理步骤，折叠展示） */
-  thinkingProcesses?: ThinkingProcess[]
+  toolNames?: string[]
   /** 记忆引用列表（LLM 回答中标注的 [M1] 等引用的记忆详情） */
   memoryCitations?: MemoryCitation[]
   /** 图片附件（仅用户消息） */
@@ -148,9 +141,7 @@ export interface ChatCallbacks {
   onStatus: (text: string) => void
   onToolCall: (toolName: string) => void
   onToolOutput: (data: any) => void
-  onStreamReset: (resetContent?: string) => void
-  /** 流式思考过程（工具调用前的推理步骤，实时推送） */
-  onThinkingStep?: (content: string) => void
+  onStreamReset: () => void
   onExecApprovalRequest: (data: any) => void
   onDbWriteApprovalRequest: (data: any) => void
   onComplete: (data: any) => void

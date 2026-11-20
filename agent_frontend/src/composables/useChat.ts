@@ -4,46 +4,11 @@ import { ref, computed } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { sendMessageStream, sendMessageStreamPost, uploadChatImages, uploadChatFiles, cancelStream, getChatMessages, resolveExecApproval, type UploadedFile } from '@/api/chat'
 import { generateUUID } from '@/utils/uuid'
-import type { Message, ChatCallbacks, ChatImage, ThinkingProcess, SubagentTask } from '@/types/chat'
-
-/** 将后端 process_log JSON 字符串解析为 ThinkingProcess 数组 */
-export function parseProcessLog(processLog?: string): { content: string; timestamp: string }[] {
-  if (!processLog) return []
-  try {
-    const items = JSON.parse(processLog)
-    if (!Array.isArray(items)) return []
-    // 后端返回的是简单的字符串列表，直接转换为 ThinkingProcess
-    return items
-      .filter((item: any) => typeof item === 'string' && item.trim())
-      .map((note: string) => ({
-        content: note.trim(),
-        timestamp: new Date().toISOString()
-      }))
-  } catch {
-    return []
-  }
-}
+import type { Message, ChatCallbacks, ChatImage, SubagentTask } from '@/types/chat'
 
 export function truncate(s: any, maxLen: number): string {
   const str = typeof s === 'string' ? s : JSON.stringify(s || '')
   return str.length > maxLen ? str.slice(0, maxLen) + '...' : str
-}
-
-/** 合并已有流式思考步骤和后端补全步骤，按内容去重 */
-export function mergeThinkingSteps(
-  existing: ThinkingProcess[],
-  backend: ThinkingProcess[],
-): ThinkingProcess[] {
-  const seen = new Set(existing.map((s) => s.content.trim()))
-  const merged = [...existing]
-  for (const s of backend) {
-    const key = s.content.trim()
-    if (key && !seen.has(key)) {
-      seen.add(key)
-      merged.push(s)
-    }
-  }
-  return merged
 }
 
 export function useChat(chatMode: string = 'normal') {
@@ -262,7 +227,7 @@ export function useChat(chatMode: string = 'normal') {
       },
 
       onToolCall: (toolName) => {
-        console.log('工具调用:', toolName)
+        chatStore.appendToolName(toolName, cid)
         chatStore.updateStreamingSession(cid, {
           lastActivityAt: Date.now(),
         })
@@ -275,18 +240,8 @@ export function useChat(chatMode: string = 'normal') {
         })
       },
 
-      onStreamReset: (resetContent?: string) => {
-        if (resetContent && resetContent.trim()) {
-          chatStore.appendThinkingProcess(resetContent.trim(), cid)
-        }
+      onStreamReset: () => {
         chatStore.updateLastAssistantMessage('', undefined, cid)
-      },
-
-      onThinkingStep: (content: string) => {
-        // 流式思考过程：直接保存，无需等待 stream_reset
-        if (content && content.trim()) {
-          chatStore.appendThinkingProcess(content.trim(), cid)
-        }
       },
 
       onExecApprovalRequest: (data) => {
@@ -305,8 +260,6 @@ export function useChat(chatMode: string = 'normal') {
         console.log('完成:', data)
         const finalContent = data.final_content || data.content || ''
         if (finalContent) {
-          // 思考过程只使用流式推送的内容，不再合并 process_log
-          // （避免重复：流式已经推送过的，后端 process_log 可能也有）
           const metadata: any = {
             conversation_id: data.conversation_id,
             run_id: streamState.conversationId || data.conversation_id,
@@ -315,12 +268,6 @@ export function useChat(chatMode: string = 'normal') {
           // 记忆引用
           if (data.memory_citations?.length) {
             metadata.memoryCitations = data.memory_citations
-          }
-          // 不再合并 process_log，保留流式推送的思考过程
-          const chatMsgs = chatStore.getMessages(cid)
-          const existingTPs = chatMsgs[chatMsgs.length - 1]?.thinkingProcesses || []
-          if (existingTPs.length > 0) {
-            metadata.thinkingProcesses = existingTPs
           }
           chatStore.updateLastAssistantMessage(finalContent, metadata, cid)
         }

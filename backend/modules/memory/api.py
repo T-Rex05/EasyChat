@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from backend.modules.memory import retrieval
+from backend.modules.memory.capture import explicit_candidate, preference_request_content
 from backend.modules.memory.contracts import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_TOKEN_BUDGET,
@@ -40,6 +41,11 @@ from backend.shared.errors import AppError, InvalidInputError
 
 logger = logging.getLogger(__name__)
 _MEMORY_ID_PREFIX = re.compile(r"mem_[0-9a-f]{4,32}")
+
+
+def is_preference_request(text: str) -> bool:
+    """判断独立偏好陈述，供渠道在缓存回复前识别私有内容。"""
+    return bool(preference_request_content(text))
 
 
 def _memory_id_prefix(value: str) -> str:
@@ -122,6 +128,16 @@ class MemoryService:
             scope="user",
         )
         return self.remember(actor, confirmed, persona_id=persona_id)
+
+    def remember_preference_request(
+        self, actor: Principal, *, text: str, source_ref: str, persona_id: str | None,
+    ) -> MemoryRecord | None:
+        content = preference_request_content(text)
+        if not content:
+            return None
+        return self.remember_explicit(actor, explicit_candidate(
+            kind="preference", content=content, text=text, source_ref=source_ref,
+        ), persona_id=persona_id)
 
     def revise(
         self,

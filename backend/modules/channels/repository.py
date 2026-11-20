@@ -536,16 +536,21 @@ class ChannelRepository:
             return True
 
     def latest_context_token(
-        self, platform: str, account_id: str, external_user_id: str
+        self, platform: str, account_id: str, external_user_id: str, *, external_chat_id: str | None = None,
     ) -> str:
         """主动推送前取最近一次被动消息留下的 context_token。"""
+        params = [platform, account_id, external_user_id]
+        chat_filter = ""
+        if external_chat_id is not None:
+            chat_filter = "AND external_chat_id=? "
+            params.append(external_chat_id)
         conn = self.db.connect()
         try:
             row = conn.execute(
                 "SELECT context_token FROM channel_session_cursors "
                 "WHERE platform=? AND account_id=? AND external_user_id=? "
-                "AND context_token<>'' ORDER BY updated_at DESC LIMIT 1",
-                (platform, account_id, external_user_id),
+                f"AND context_token<>'' {chat_filter}ORDER BY updated_at DESC LIMIT 1",
+                params,
             ).fetchone()
             return str(row["context_token"]) if row else ""
         finally:

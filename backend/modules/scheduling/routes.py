@@ -1,7 +1,7 @@
 """提醒 HTTP 路由：薄适配；目标默认取用户有效微信绑定，也可显式邮箱。"""
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Header
 from pydantic import BaseModel
@@ -26,8 +26,18 @@ class ScheduleCreateBody(BaseModel):
     target_ref: str = ""
 
 
-class ScheduleStatusBody(BaseModel):
-    enabled: bool
+class ScheduleUpdateBody(BaseModel):
+    title: str | None = None
+    text: str | None = None
+    at: str | None = None
+    every_seconds: int | None = None
+    daily_at: str | None = None
+    weekly_at: str | None = None
+    weekday: int | None = None
+    timezone: str | None = None
+    enabled: bool | None = None
+    target_kind: Literal["wechat", "email"] | None = None
+    target_ref: str | None = None
 
 
 def _schedule_dict(schedule) -> dict[str, Any]:
@@ -59,13 +69,13 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
             raise UnauthenticatedError("请先登录")
         return authenticate(token)
 
-    def _target(principal, kind: str, ref: str) -> DeliveryTarget:
+    def _target(owner_id: int, kind: str, ref: str) -> DeliveryTarget:
         if kind and ref:
             return DeliveryTarget(kind=kind, ref=ref)
         if kind == "email" or ref:
             raise InvalidInputError("邮箱目标需要同时提供 target_kind=email 与 target_ref")
         resolved = (
-            channels.delivery_target_for_owner(principal.user_id)
+            channels.delivery_target_for_owner(owner_id)
             if channels is not None else None
         )
         if not resolved:
@@ -85,7 +95,7 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
         principal = _principal(authorization)
         schedule = service.create(
             principal, title=body.title, text=body.text,
-            target=_target(principal, body.target_kind, body.target_ref),
+            target=_target(principal.user_id, body.target_kind, body.target_ref),
             at=body.at, every_seconds=body.every_seconds, daily_at=body.daily_at,
             weekly_at=body.weekly_at, weekday=body.weekday, timezone=body.timezone,
             content_kind=body.content_kind, briefing_kind=body.briefing_kind,
@@ -93,10 +103,18 @@ def build_scheduling_router(service: SchedulingService, channels: Any, authentic
         return {"schedule": _schedule_dict(schedule)}
 
     @router.patch("/{schedule_id}")
-    async def set_schedule(schedule_id: str, body: ScheduleStatusBody,
-                           authorization: Annotated[str | None, Header()] = None):
+    async def update_schedule(schedule_id: str, body: ScheduleUpdateBody,
+                              authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)
-        return {"schedule": _schedule_dict(service.set_enabled(principal, schedule_id, body.enabled))}
+        changes = body.model_dump(exclude_none=True, exclude={"target_kind", "target_ref"})
+        if body.target_kind is not None or body.target_ref is not None:
+            schedule = service.get(principal, schedule_id)
+            if body.target_kind == "wechat" and body.target_ref:
+                raise InvalidInputError("微信目标需要使用用户已绑定的账号")
+            changes["target"] = _target(schedule.owner_id, body.target_kind or "", (body.target_ref or "").strip())
+        if not changes:
+            raise InvalidInputError("请提供要更新的提醒设置")
+        return {"schedule": _schedule_dict(service.update(principal, schedule_id, **changes))}
 
     @router.delete("/{schedule_id}")
     async def cancel_schedule(schedule_id: str,

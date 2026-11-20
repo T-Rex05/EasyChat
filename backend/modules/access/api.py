@@ -38,7 +38,7 @@ from backend.modules.access.repository import (
 )
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
-from backend.shared.errors import ConflictError, ForbiddenError, InvalidInputError, UnauthenticatedError
+from backend.shared.errors import ForbiddenError, InvalidInputError, UnauthenticatedError
 
 # 弱密钥拒绝（沿用旧 auth_service 规则）；必须包含仓库模板曾发布过的全部占位值，
 # 使"照抄快速上手"在启动期失败而不是带着公开密钥上线。
@@ -251,15 +251,16 @@ class AccessService:
     # ---- 注册 / 登录 ---------------------------------------------------------------
 
     def register(self, username: str, password: str, email: str = "") -> dict[str, Any]:
+        user_id = self._create_user(username, password, email)
+        token = self.create_token(user_id, username, "user")
+        return {"user_id": user_id, "username": username, "token": token}
+
+    def _create_user(self, username: str, password: str, email: str) -> int:
         if len(username) < 2:
             raise InvalidInputError("用户名至少 2 个字符")
         if len(password) < 6:
             raise InvalidInputError("密码至少 6 个字符")
-        if self.repo.get_user_by_username(username) is not None:
-            raise ConflictError(f"用户名 '{username}' 已存在")
-        user_id = self.repo.create_user(username, hash_password(password), email)
-        token = self.create_token(user_id, username, "user")
-        return {"user_id": user_id, "username": username, "token": token}
+        return self.repo.create_user(username, hash_password(password), email)
 
     def login(self, username: str, password: str) -> dict[str, Any]:
         row = self.repo.get_user_auth_row(username)
@@ -334,8 +335,11 @@ class AccessService:
         return perms.get(role_name, frozenset())
 
     def has_permission(self, principal: Principal, permission: str) -> bool:
-        """权限校验以 DB 实时角色为准（principal 只携带 user_id/角色快照）。"""
-        return permission in self.effective_permissions(principal.user_id)
+        """以当前账号状态、角色和授权为准，禁用账号的旧身份快照也无法授权。"""
+        return (
+            self._user(principal.user_id).status == 1
+            and permission in self.effective_permissions(principal.user_id)
+        )
 
     def require_permission(self, principal: Principal, permission: str) -> None:
         if not self.has_permission(principal, permission):
@@ -434,6 +438,10 @@ class AccessService:
             "permissions": sorted(perms),
         }
 
+    def create_user(self, actor: Principal, username: str, password: str, email: str = "") -> int:
+        self.require_permission(actor, "system.manage")
+        return self._create_user(username, password, email)
+
     def set_user_role(self, actor: Principal, user_id: int, role: str) -> None:
         self.require_permission(actor, "system.manage")
         if self.repo.get_role_id_by_name(role) is None:
@@ -469,6 +477,17 @@ class AccessService:
     def list_users(self, actor: Principal) -> list[dict[str, Any]]:
         self.require_permission(actor, "system.manage")
         return self.repo.list_users()
+
+    def list_users_with_permission(
+        self, actor: Principal, *, permission: str, manage_permission: str,
+    ) -> list[dict[str, int | str]]:
+        """为模块管理者提供可按权限使用的用户选项，仅返回活动账号的标识。"""
+        self.require_permission(actor, manage_permission)
+        return [
+            {"user_id": user["id"], "username": user["username"]}
+            for user in self.repo.list_users()
+            if user["status"] == 1 and permission in self.effective_permissions(user["id"])
+        ]
 
     def get_user_detail(self, actor: Principal, user_id: int) -> UserSnapshot:
         """本人可查自己；他人需要 system.manage。"""

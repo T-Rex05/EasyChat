@@ -32,6 +32,7 @@ from backend.shared.errors import (
     ConflictError,
     ForbiddenError,
     InvalidInputError,
+    NotFoundError,
     StorageUnavailableError,
 )
 from backend.shared.identifiers import new_skill_version_id
@@ -93,17 +94,17 @@ class SkillService:
     def _can(self, principal: Principal, permission: str) -> bool:
         return self.access.has_permission(principal, permission)
 
-    def _require_write(self, principal: Principal, skill: SkillView) -> None:
-        if skill.owner_id == principal.user_id:
-            if not (self._can(principal, "skill.create")
-                    or self._can(principal, "skill.manage")):
-                raise ForbiddenError("缺少权限: skill.create")
-            return
-        if not self._can(principal, "skill.manage"):
-            raise ForbiddenError("无权操作其他用户的技能")
+    def _can_use_skills(self, principal: Principal) -> bool:
+        return self._can(principal, "skill.create") or self._can(principal, "skill.manage")
 
-    def _require_view(self, principal: Principal, skill: SkillView) -> None:
-        if skill.owner_id != principal.user_id and not self._can(principal, "skill.manage"):
+    def _require_use(self, principal: Principal) -> None:
+        if not self._can_use_skills(principal):
+            raise ForbiddenError("缺少权限: skill.create")
+
+    def _require_skill_access(self, principal: Principal, skill: SkillView) -> None:
+        if skill.owner_id == principal.user_id:
+            self._require_use(principal)
+        elif not self._can(principal, "skill.manage"):
             raise ForbiddenError("无权访问该技能")
 
     # ---- 候选版本 ----------------------------------------------------------------
@@ -120,31 +121,28 @@ class SkillService:
         """提出候选版本：文件先写不可变路径，再提交元数据。
 
         `source=background/evolution` 时不得修改 pinned 技能；用户显式写入
-        （user/web）不受 pin 限制。跨 owner 只有 skill.manage 可以操作。
+        （user/web）不受 pin 限制。候选版本始终属于当前用户。
         """
         principal = self._principal(actor)
+        self._require_use(principal)
         validate_skill_name(name)
         validate_content(content)
         validate_source(source)
-        if not (self._can(principal, "skill.create")
-                or self._can(principal, "skill.manage")):
-            raise ForbiddenError("缺少权限: skill.create")
-
         skill = self.repo.find_skill(principal.user_id, name)
-        if skill is not None:
-            self._require_write(principal, skill)
-            if source in AUTOMATED_SOURCES and skill.pinned:
-                raise ForbiddenError("已固定（pin）的技能不接受后台/进化写入")
-        else:
-            skill = self.repo.ensure_skill(
-                owner_id=principal.user_id, name=name, origin=source,
-            )
+        if skill is not None and source in AUTOMATED_SOURCES and skill.pinned:
+            raise ForbiddenError("已固定（pin）的技能不接受后台/进化写入")
 
         if parent_version_id:
+            if skill is None:
+                raise InvalidInputError("父版本不属于该技能")
             parent = self.repo.get_version(parent_version_id)
             if parent.skill_id != skill.skill_id:
                 raise InvalidInputError("父版本不属于该技能")
-            parent_version_id = parent.version_id
+
+        if skill is None:
+            skill = self.repo.ensure_skill(
+                owner_id=principal.user_id, name=name, origin=source,
+            )
 
         version_id = new_skill_version_id()
         content_path, content_hash = self.store.write(
@@ -174,7 +172,7 @@ class SkillService:
         """条件切换激活指针；校验版本归属与内容指纹后才 compare-and-swap。"""
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_write(principal, skill)
+        self._require_skill_access(principal, skill)
         version = self.repo.get_version(version_id)
         if version.skill_id != skill.skill_id:
             raise InvalidInputError("版本不属于该技能")
@@ -200,7 +198,7 @@ class SkillService:
         """回退到目标版本：以读取到的当前 active 作为比较交换的期望值。"""
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_write(principal, skill)
+        self._require_skill_access(principal, skill)
         return self.activate(
             principal, skill_id, target_version_id, skill.active_version_id,
         )
@@ -211,13 +209,13 @@ class SkillService:
         # WP-D：撤权后 owner 不得继续 pin——与其他写动作同闸（动作权限+范围）
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_write(principal, skill)
+        self._require_skill_access(principal, skill)
         return self.repo.set_pinned(skill_id, bool(pinned))
 
     def set_archived(self, actor: Principal, skill_id: str, archived: bool) -> SkillView:
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_write(principal, skill)
+        self._require_skill_access(principal, skill)
         return self.repo.set_archived(skill_id, bool(archived))
 
     def archive(self, actor: Principal, skill_id: str) -> SkillView:
@@ -229,7 +227,8 @@ class SkillService:
     # ---- 内置模板导入（P3） ------------------------------------------------------
 
     def import_template(
-        self, actor: Principal, key: str, *, name: str | None = None
+        self, actor: Principal, key: str, *, name: str | None = None,
+        require_inactive: bool = False,
     ) -> SkillVersionView:
         """把内置示例模板导入为本人技能候选版本（默认不激活）。
 
@@ -238,12 +237,15 @@ class SkillService:
         """
         from backend.modules.skills.templates import load_template_content, template_meta
 
+        principal = self._principal(actor)
+        self._require_use(principal)
         meta = template_meta(key)
         target = validate_skill_name(name or meta["name"])
         content = load_template_content(key)
-        principal = self._principal(actor)
         skill = self.repo.find_skill(principal.user_id, target)
         if skill is not None and skill.active_version_id:
+            if require_inactive:
+                raise ConflictError("同名技能已有激活版本，请在个人技能中管理")
             active = self.repo.get_version(skill.active_version_id)
             try:
                 if self._read_version_text(active) == content:
@@ -266,6 +268,7 @@ class SkillService:
             if not self._can(principal, "skill.manage"):
                 raise ForbiddenError("缺少权限: skill.manage")
             return tuple(self.repo.list_all(include_archived=include_archived))
+        self._require_use(principal)
         return tuple(
             self.repo.list_by_owner(
                 principal.user_id, include_archived=include_archived,
@@ -275,38 +278,48 @@ class SkillService:
     def get(self, actor: Principal, skill_id: str) -> SkillView:
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_view(principal, skill)
+        self._require_skill_access(principal, skill)
         return skill
 
     def list_versions(self, actor: Principal, skill_id: str) -> tuple[SkillVersionView, ...]:
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_view(principal, skill)
+        self._require_skill_access(principal, skill)
         return tuple(self.repo.list_versions(skill_id))
 
     def read_active_content(self, actor: Principal, skill_id: str) -> str:
         """读取当前激活版本内容；文件缺失/指纹不符显式失败。"""
         principal = self._principal(actor)
         skill = self.repo.get_skill(skill_id)
-        self._require_view(principal, skill)
+        self._require_skill_access(principal, skill)
         return self._read_version_text(self._active_version(skill))
 
-    def get_version(self, actor: Principal, version_id: str) -> SkillVersionView:
+    def get_version(
+        self, actor: Principal, version_id: str, *, skill_id: str | None = None,
+    ) -> SkillVersionView:
         principal = self._principal(actor)
+        if skill_id is not None:
+            self._require_skill_access(principal, self.repo.get_skill(skill_id))
+            version = self.repo.get_version(version_id)
+            if version.skill_id != skill_id:
+                raise NotFoundError("该技能不存在此版本")
+            return version
         version = self.repo.get_version(version_id)
-        self._require_view(principal, self.repo.get_skill(version.skill_id))
+        self._require_skill_access(principal, self.repo.get_skill(version.skill_id))
         return version
 
-    def read_version_content(self, actor: Principal, version_id: str) -> str:
+    def read_version_content(
+        self, actor: Principal, version_id: str, *, skill_id: str | None = None,
+    ) -> str:
         """读取任意版本内容（验证回放用）；仍校验归属与 sha256。"""
-        principal = self._principal(actor)
-        version = self.repo.get_version(version_id)
-        self._require_view(principal, self.repo.get_skill(version.skill_id))
+        version = self.get_version(actor, version_id, skill_id=skill_id)
         return self._read_version_text(version)
 
     def list_for_runtime(self, actor: Principal) -> tuple[SkillSnapshot, ...]:
         """运行时有效技能：只含 owner 自己的未归档技能，固定版本+内容快照。"""
         principal = self._principal(actor)
+        if not self._can_use_skills(principal):
+            return ()
         snapshots: list[SkillSnapshot] = []
         for skill in self.repo.list_by_owner(principal.user_id, include_archived=False):
             if not skill.active_version_id:

@@ -69,7 +69,7 @@ CODING_TOOLSET = "coding"
 # Surfaces where a coding posture makes sense under ``auto``. Messaging
 # platforms (telegram, discord, slack, …) are intentionally absent — a chat bot
 # in a group is not pair-programming.
-INTERACTIVE_CODING_PLATFORMS = {"cli", "tui", "acp", "desktop", ""}
+INTERACTIVE_CODING_PLATFORMS = {"cli", "tui", "acp", "desktop", "easychat-coding", ""}
 
 # Project-root signals that mark a directory as a code workspace even when it
 # isn't (yet) a git repo. Cheap filename checks — no parsing.
@@ -447,7 +447,9 @@ def _detect_profile_name(mode: str, platform: str, cwd_str: str) -> str:
     risk a stale posture if a long-lived process (gateway/TUI) serves sessions
     from different working directories.
     """
-    if mode == "off":
+    # EasyChat's ordinary conversations have no developer workspace. The
+    # host's CLI coding preference must not expose its checkout to chat.
+    if platform == "easychat" or mode == "off":
         return GENERAL_PROFILE.name
     if mode == "on":
         return CODING_PROFILE.name

@@ -2,23 +2,27 @@
   <div class="page-container superagent-page">
     <header class="page-header">
       <div>
-        <h2>超级代理</h2>
-        <p class="hint">在微信里描述需求（或用 /开发 命令），后台代理在独立工作区完成编码并自动创建 Draft PR，结果回信给你。</p>
+        <h1>超级代理</h1>
+        <p class="hint">提交编码需求、查看执行轨迹和 Draft PR。</p>
       </div>
       <div class="header-actions">
-        <button v-if="caps.manage" class="btn btn-secondary" @click="toggleOps">
-          {{ showOps ? '收起运维' : '运维面板' }}
+        <button v-if="caps.manage" class="btn btn-secondary" :aria-expanded="showOps" @click="toggleOps">
+          运维面板
         </button>
-        <button v-if="caps.manage" class="btn btn-secondary" @click="showSettings = !showSettings">
-          {{ showSettings ? '收起配置' : '仓库配置' }}
+        <button v-if="caps.manage" class="btn btn-secondary" :aria-expanded="showSettings" @click="toggleSettings">
+          仓库配置
         </button>
+        <button v-if="caps.create" type="button" class="btn btn-primary" @click="taskDialog?.showModal()">新建任务</button>
       </div>
     </header>
 
-    <!-- 受理状态提示（capabilities 驱动，普通用户也能看到准确原因） -->
-    <div v-if="caps.view && gateReasons.length" class="notice-banner">
-      当前暂不能受理新任务：{{ gateReasons.join('；') }}
-    </div>
+    <section v-if="caps.view && caps.create" class="agent-status" aria-label="任务受理状态">
+      <span class="badge" :class="gateReasons.length ? 'badge-warning' : 'badge-success'">
+        {{ gateReasons.length ? '暂不可受理' : '可受理任务' }}
+      </span>
+      <span v-if="gateReasons.length" class="status-copy">{{ gateReasons.join(' · ') }}</span>
+      <span v-else-if="caps.repo_url" class="status-copy">{{ caps.repo_url }}</span>
+    </section>
 
     <!-- 运维面板（仅 manage） -->
     <div v-if="showOps && caps.manage" class="card ops-card">
@@ -101,62 +105,95 @@
     </form>
 
     <!-- 新建任务（create 权限 + gate 可用才可提交；不可用时按钮置灰并给原因） -->
-    <form v-if="caps.create" class="card create-card" @submit.prevent="createTask">
-      <div class="form-group">
-        <label class="form-label">任务标题</label>
-        <input v-model="draft.title" class="input" placeholder="例如：给导出功能增加 CSV 格式" maxlength="120" required />
-      </div>
-      <div class="form-group">
-        <label class="form-label">需求描述（要自包含：目标、验收标准、涉及范围）</label>
-        <textarea v-model="draft.requirement" class="textarea" rows="4" placeholder="代理会独立工作，写清楚它需要知道的一切；信息不足时它会追问而非猜测。" required></textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label">补充上下文（可选）</label>
-        <textarea v-model="draft.context_extra" class="textarea" rows="2" placeholder="相关链接、已知结论、约束条件…"></textarea>
-      </div>
-      <div class="actions">
-        <span v-if="gateReasons.length" class="muted">{{ gateReasons.join('；') }}</span>
-        <button class="btn btn-primary" type="submit" :disabled="creating || gateReasons.length > 0">提交任务</button>
-      </div>
-    </form>
+    <dialog v-if="caps.create" ref="taskDialog" class="task-dialog" aria-labelledby="new-agent-task" @cancel="guardTaskClose">
+      <form class="create-card" @submit.prevent="createTask">
+        <div class="dialog-heading">
+          <h2 id="new-agent-task">新建编码任务</h2>
+          <button type="button" class="btn btn-sm btn-secondary" :disabled="creating" @click="taskDialog?.close()">关闭</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agent-task-title">任务标题</label>
+          <input id="agent-task-title" v-model="draft.title" class="input" placeholder="给导出功能增加 CSV 格式" maxlength="120" required autofocus />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agent-task-requirement">需求描述</label>
+          <textarea id="agent-task-requirement" v-model="draft.requirement" class="textarea" rows="5" placeholder="写清目标、涉及范围和验收标准" required></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="agent-task-context">补充上下文（可选）</label>
+          <textarea id="agent-task-context" v-model="draft.context_extra" class="textarea" rows="2" placeholder="相关链接、已知结论、约束条件…"></textarea>
+        </div>
+        <p v-if="createError" class="error-banner" role="alert">{{ createError }}</p>
+        <div class="actions">
+          <span v-if="gateReasons.length" class="muted">{{ gateReasons.join('；') }}</span>
+          <button class="btn btn-primary" type="submit" :disabled="creating || gateReasons.length > 0">
+            {{ creating ? '正在提交…' : '提交任务' }}
+          </button>
+        </div>
+      </form>
+    </dialog>
 
-    <div v-if="error" class="error-banner">{{ error }}</div>
-    <div v-if="loading" class="empty">加载中...</div>
+    <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
+    <div class="task-list-heading">
+      <h2 class="task-list-title">任务记录</h2>
+      <div v-if="caps.view && caps.manage" class="task-user-filter">
+        <label class="form-label" for="agent-task-user">任务用户</label>
+        <select id="agent-task-user" v-model="taskOwnerId" class="input" :disabled="loadingTaskUsers" @change="changeTaskOwner">
+          <option value="">全部用户</option>
+          <option v-for="user in taskUsers" :key="user.user_id" :value="user.user_id">{{ user.username }}</option>
+        </select>
+        <p v-if="taskUsersError" class="muted" role="alert">
+          用户选项加载失败 <button type="button" class="link-btn" @click="loadTaskUsers">重试</button>
+        </p>
+      </div>
+    </div>
+    <div v-if="loading && !tasks.length" class="empty" role="status">加载中…</div>
     <div v-else-if="tasks.length === 0" class="empty">
-      还没有编码任务。在微信里发「/开发 <需求>」，或在这里提交。
+      <strong>暂无编码任务</strong>
+      <p v-if="caps.create" class="hint">点击「新建任务」，或在微信发送 /开发 后附上需求。</p>
     </div>
 
     <div v-else class="list">
       <article v-for="t in tasks" :key="t.task_id" class="card item">
         <div class="item-head">
-          <strong>{{ t.title }}</strong>
-          <span class="badge" :class="statusBadge(t)">{{ statusText(t) }}</span>
-          <span v-if="t.phase" class="badge badge-info">{{ phaseText(t.phase) }}</span>
-          <span class="badge badge-info">{{ sourceText(t.source) }}</span>
-          <a v-if="t.pr_url" class="link-btn" :href="t.pr_url" target="_blank" rel="noopener">
-            Draft PR #{{ t.pr_number }}{{ prStateSuffix(t.pr_state) }}
-          </a>
-          <button
-            v-if="canCancel(t)"
-            class="btn btn-sm btn-danger"
-            @click="cancel(t)"
-          >{{ t.status === 'cancel_requested' ? '取消中…' : '取消' }}</button>
-          <button
-            v-if="canRetry(t)"
-            class="btn btn-sm btn-secondary"
-            @click="retry(t)"
-          >重试</button>
+          <div class="task-heading">
+            <h3>{{ t.title }}</h3>
+            <div class="task-meta">
+              <span class="badge" :class="statusBadge(t)">{{ statusText(t) }}</span>
+              <span v-if="t.phase">{{ phaseText(t.phase) }}</span>
+              <SessionChannelBadge v-if="t.source === 'web' || t.source === 'wechat'" :channel="t.source" />
+              <span v-else>{{ sourceText(t.source) }}</span>
+              <time :datetime="t.created_at">{{ shortTime(t.created_at) }}</time>
+            </div>
+          </div>
+          <div class="task-actions">
+            <a v-if="t.pr_url" class="link-btn" :href="t.pr_url" target="_blank" rel="noopener">
+              Draft PR #{{ t.pr_number }}{{ prStateSuffix(t.pr_state) }}
+            </a>
+            <button
+              v-if="canCancel(t)"
+              class="btn btn-sm btn-danger"
+              @click="cancel(t)"
+            >{{ t.status === 'cancel_requested' ? '取消中…' : '取消' }}</button>
+            <button
+              v-if="canRetry(t)"
+              class="btn btn-sm btn-secondary"
+              @click="retry(t)"
+            >重试</button>
+          </div>
         </div>
         <p class="content req">{{ t.requirement }}</p>
         <p v-if="t.result_summary" class="content summary">{{ t.result_summary }}</p>
         <p v-if="t.error" class="content err">{{ t.error }}</p>
         <p class="muted">
-          分支 {{ t.branch }} · 第 {{ t.attempts }} 次执行 · 创建 {{ shortTime(t.created_at) }}
+          <template v-if="t.branch">分支 {{ t.branch }} · </template>{{ t.attempts }} 次执行
           <template v-if="t.finished_at"> · 结束 {{ shortTime(t.finished_at) }}</template>
         </p>
-        <button class="link-btn" @click="toggleDetail(t)">{{ expanded === t.task_id ? '收起轨迹' : '执行轨迹' }}</button>
+        <button class="link-btn task-details" :aria-expanded="expanded === t.task_id" @click="toggleDetail(t)">{{ expanded === t.task_id ? '收起轨迹' : '执行轨迹' }}</button>
         <div v-if="expanded === t.task_id" class="events">
-          <div v-if="detailEvents.length === 0" class="muted">暂无事件</div>
+          <p v-if="detailError" class="muted" role="alert">{{ detailError }} <button type="button" class="link-btn" @click="refreshDetail(t.task_id)">重试</button></p>
+          <div v-else-if="detailInFlight && !detailEvents.length" class="muted" role="status">正在加载轨迹…</div>
+          <div v-else-if="detailEvents.length === 0" class="muted">暂无事件</div>
           <div v-for="e in detailEvents" :key="e.event_id" class="event">
             <span class="event-kind" :class="`k-${e.kind}`">{{ eventText(e.kind) }}</span>
             <span class="event-detail">{{ e.detail }}</span>
@@ -174,7 +211,7 @@
             <strong>逐项验收</strong>
             <span v-if="latestRound(t.task_id)" class="muted">
               第 {{ latestRound(t.task_id)!.round_no }} 轮 · 结论 {{ latestRound(t.task_id)!.verdict }}
-              · {{ latestRound(t.task_id)!.created_at?.slice(0, 16).replace('T', ' ') }}
+              · {{ shortTime(latestRound(t.task_id)!.created_at) }}
             </span>
             <span v-else-if="!acceptanceLoading" class="muted">尚无验收轮次（由验收工具或人工提交）</span>
             <span v-else class="muted">加载中…</span>
@@ -187,9 +224,9 @@
                 <span v-if="c.decision === 'accepted'" class="acc-decision ok">已接受</span>
                 <span v-else-if="c.decision === 'rejected'" class="acc-decision bad">已打回</span>
                 <span class="acc-actions">
-                  <a v-for="(ev, i) in c.evidence" :key="i" class="link-btn"
+                  <button v-for="(ev, i) in c.evidence" :key="i" class="link-btn" type="button"
                      :title="ev.description"
-                     @click.prevent="previewEvidence(t, round.id, c.item_id, i)">证据{{ c.evidence.length > 1 ? i + 1 : '' }}</a>
+                     @click="previewEvidence(t, round.id, c.item_id, i)">证据{{ c.evidence.length > 1 ? i + 1 : '' }}</button>
                   <button v-if="!c.decision" class="btn btn-sm btn-secondary"
                           @click="decide(t, c.id, 'accepted')">接受</button>
                   <button v-if="!c.decision" class="btn btn-sm btn-danger"
@@ -217,6 +254,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import SessionChannelBadge from '@/components/SessionChannelBadge.vue'
+import { formatDateTime } from '@/utils/dateTime'
 import {
   appendSuperagentTaskInput,
   cancelSuperagentTask,
@@ -229,6 +268,7 @@ import {
   listAcceptanceRounds,
   listSuperagentEvents,
   listSuperagentTasks,
+  listSuperagentTaskUsers,
   retrySuperagentTask,
   updateSuperagentSettings,
   type AcceptanceRound,
@@ -237,6 +277,7 @@ import {
   type SuperagentOpsMetrics,
   type SuperagentSettings,
   type SuperagentTask,
+  type SuperagentTaskUser,
 } from '@/api/superagent'
 
 const caps = ref<SuperagentCapabilities>({
@@ -257,13 +298,22 @@ const savingSettings = ref(false)
 
 const tasks = ref<SuperagentTask[]>([])
 const nextCursor = ref('')
+const taskOwnerId = ref<number | ''>('')
+const taskUsers = ref<SuperagentTaskUser[]>([])
+const loadingTaskUsers = ref(false)
+const taskUsersError = ref(false)
 const expanded = ref('')
 const detailEvents = ref<SuperagentEvent[]>([])
 const detailAfterId = ref(0)
+const detailError = ref('')
+const detailInFlight = ref(false)
+let detailVersion = 0
 const supplementText = ref('')
 const supplementing = ref(false)
 const loading = ref(false)
 const creating = ref(false)
+const taskDialog = ref<HTMLDialogElement | null>(null)
+const createError = ref('')
 const error = ref('')
 
 // ---- 逐项验收（工作包四） ----
@@ -316,7 +366,7 @@ async function previewEvidence(t: SuperagentTask, roundId: string, itemId: strin
 let pollTimer: number | null = null
 let activeTimer: number | null = null
 let listInFlight = false
-let detailInFlight = false
+let listVersion = 0
 
 const draft = reactive({ title: '', requirement: '', context_extra: '' })
 let createSeq = 0
@@ -337,6 +387,7 @@ async function loadCapabilities() {
 
 async function toggleOps() {
   showOps.value = !showOps.value
+  if (showOps.value) showSettings.value = false
   if (showOps.value && !opsMetrics.value) {
     try {
       opsMetrics.value = await getSuperagentOpsMetrics()
@@ -344,6 +395,11 @@ async function toggleOps() {
       // 权限瞬变忽略
     }
   }
+}
+
+function toggleSettings() {
+  showSettings.value = !showSettings.value
+  if (showSettings.value) showOps.value = false
 }
 
 async function loadSettings() {
@@ -385,11 +441,17 @@ async function saveSettings() {
 
 async function load(loadMoreMode = false) {
   if (listInFlight) return // 防竞态：同类请求只有一个在途
+  const version = ++listVersion
   listInFlight = true
   if (!loadMoreMode) loading.value = true
   error.value = ''
   try {
-    const page = await listSuperagentTasks({ limit: 20, cursor: loadMoreMode ? nextCursor.value : '' })
+    const page = await listSuperagentTasks({
+      limit: 20,
+      cursor: loadMoreMode ? nextCursor.value : '',
+      owner_id: taskOwnerId.value === '' ? undefined : taskOwnerId.value,
+    })
+    if (version !== listVersion) return
     if (loadMoreMode) {
       const known = new Set(tasks.value.map((t) => t.task_id))
       tasks.value = [...tasks.value, ...page.tasks.filter((t) => !known.has(t.task_id))]
@@ -398,11 +460,40 @@ async function load(loadMoreMode = false) {
     }
     nextCursor.value = page.next_cursor
   } catch (e: any) {
+    if (version !== listVersion) return
+    if (e?.response?.status === 403) {
+      tasks.value = []
+      nextCursor.value = ''
+    }
     error.value = errMsg(e)
   } finally {
-    listInFlight = false
-    loading.value = false
+    if (version === listVersion) {
+      listInFlight = false
+      loading.value = false
+    }
   }
+}
+
+async function loadTaskUsers() {
+  if (!caps.value.view || !caps.value.manage || loadingTaskUsers.value) return
+  loadingTaskUsers.value = true
+  taskUsersError.value = false
+  try {
+    taskUsers.value = await listSuperagentTaskUsers()
+  } catch {
+    taskUsersError.value = true
+  } finally {
+    loadingTaskUsers.value = false
+  }
+}
+
+function changeTaskOwner() {
+  tasks.value = []
+  nextCursor.value = ''
+  expanded.value = ''
+  detailVersion++
+  listInFlight = false
+  void load()
 }
 
 async function loadMore() {
@@ -410,9 +501,10 @@ async function loadMore() {
 }
 
 async function createTask() {
+  if (creating.value || gateReasons.value.length || !caps.value.create) return
   const seq = ++createSeq
   creating.value = true
-  error.value = ''
+  createError.value = ''
   try {
     await createSuperagentTask(
       draft.title, draft.requirement, draft.context_extra,
@@ -421,12 +513,17 @@ async function createTask() {
     draft.title = ''
     draft.requirement = ''
     draft.context_extra = ''
+    taskDialog.value?.close()
     await load()
   } catch (e: any) {
-    error.value = errMsg(e)
+    createError.value = errMsg(e)
   } finally {
     creating.value = false
   }
+}
+
+function guardTaskClose(event: Event) {
+  if (creating.value) event.preventDefault()
 }
 
 async function cancel(t: SuperagentTask) {
@@ -451,6 +548,9 @@ async function retry(t: SuperagentTask) {
 }
 
 async function toggleDetail(t: SuperagentTask) {
+  detailVersion++
+  detailInFlight.value = false
+  detailError.value = ''
   if (expanded.value === t.task_id) {
     expanded.value = ''
     detailEvents.value = []
@@ -467,17 +567,19 @@ async function toggleDetail(t: SuperagentTask) {
 }
 
 async function refreshDetail(taskId: string) {
-  if (detailInFlight) return
-  detailInFlight = true
+  if (detailInFlight.value || expanded.value !== taskId) return
+  const version = detailVersion
+  detailInFlight.value = true
+  detailError.value = ''
   try {
     const page = await listSuperagentEvents(taskId, detailAfterId.value)
-    if (expanded.value !== taskId) return // 旧响应丢弃
+    if (version !== detailVersion) return
     detailEvents.value = [...detailEvents.value, ...page.events]
     detailAfterId.value = page.next_after_id
-  } catch {
-    // 详情刷新失败不打断页面
+  } catch (e) {
+    if (version === detailVersion) detailError.value = errMsg(e)
   } finally {
-    detailInFlight = false
+    if (version === detailVersion) detailInFlight.value = false
   }
 }
 
@@ -540,7 +642,7 @@ function phaseText(phase: string): string {
 }
 
 function prStateSuffix(state: string): string {
-  const map: Record<string, string> = { open: '（open）', merged: '（已合并）', closed: '（已关闭）' }
+  const map: Record<string, string> = { open: '（待审阅）', merged: '（已合并）', closed: '（已关闭）' }
   return map[state] || ''
 }
 
@@ -561,13 +663,13 @@ function eventText(kind: string): string {
 }
 
 function shortTime(iso: string): string {
-  if (!iso) return '—'
-  return iso.replace('T', ' ').slice(0, 19)
+  return formatDateTime(iso)
 }
 
 onMounted(async () => {
   await loadCapabilities()
   loadSettings()
+  void loadTaskUsers()
   await load()
   // 增量轮询：有活跃任务时 4s 刷新列表与展开详情；否则 15s 低频（微信新建任务也能出现）
   pollTimer = window.setInterval(async () => {
@@ -605,7 +707,9 @@ onUnmounted(() => {
 .superagent-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+  max-width: 1120px;
+  margin-inline: auto;
   overflow-y: auto;
 }
 
@@ -614,10 +718,13 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
-.page-header h2 {
+.page-header h1 {
   margin: 0 0 4px;
+  font-size: clamp(23px, 3vw, 31px);
+  letter-spacing: -0.02em;
 }
 
 .hint {
@@ -626,21 +733,27 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.notice-banner {
-  background: rgba(240, 173, 78, 0.12);
-  border: 1px solid rgba(240, 173, 78, 0.4);
-  color: #b8860b;
+.agent-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-size: 13px;
 }
+
+.status-copy { color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .header-actions {
   display: flex;
   gap: 8px;
-  flex-shrink: 0;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
+
+.header-actions .btn { width: auto; white-space: nowrap; }
 
 .superagent-page > .card,
 .superagent-page .list > .card {
@@ -664,7 +777,7 @@ onUnmounted(() => {
 
 .ops-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 10px;
 }
 
@@ -686,6 +799,24 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 12px;
 }
+
+.task-dialog {
+  width: min(640px, calc(100% - 28px));
+  max-height: calc(100dvh - 36px);
+  margin: auto;
+  box-sizing: border-box;
+  padding: clamp(16px, 4vw, 26px);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 14px;
+}
+
+.task-dialog:modal, .task-dialog::backdrop { overscroll-behavior: contain; }
+.task-dialog::backdrop { background: rgb(17 24 39 / 45%); }
+.dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dialog-heading h2 { margin: 0; font-size: 20px; }
+.create-card .error-banner { margin: 0; }
 
 .form-row {
   display: flex;
@@ -722,16 +853,37 @@ onUnmounted(() => {
   gap: 12px;
 }
 
+.task-list-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: end;
+  gap: 12px;
+}
+
+.task-list-title { margin: 0; font-size: 18px; }
+
+.task-user-filter {
+  display: grid;
+  gap: 4px;
+  min-width: min(100%, 180px);
+}
+
+.task-user-filter p { margin: 0; }
+
 .item-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px 16px;
   flex-wrap: wrap;
 }
 
-.item-head strong {
-  margin-right: auto;
-}
+.task-heading { flex: 1 1 230px; min-width: 0; }
+.task-heading h3 { margin: 0 0 7px; font-size: 17px; overflow-wrap: anywhere; }
+.task-meta, .task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.task-meta { color: var(--text-secondary); font-size: 12px; }
+.task-details { margin-top: 12px; }
 
 .link-btn {
   background: none;
@@ -835,9 +987,14 @@ onUnmounted(() => {
 .empty {
   text-align: center;
   color: var(--text-tertiary);
-  padding: 32px 0;
+  padding: 42px 12px;
+  background: var(--bg-primary);
+  border: 1px dashed var(--border-primary);
+  border-radius: 12px;
 }
 
+.empty strong { color: var(--text-primary); }
+.empty .hint { margin-top: 5px; }
 .error-banner {
   background: rgba(217, 83, 79, 0.1);
   border: 1px solid rgba(217, 83, 79, 0.4);
@@ -852,10 +1009,6 @@ onUnmounted(() => {
   .superagent-page > .card, .superagent-page .list > .card { padding: 16px; }
   .page-header, .form-row, .actions { flex-direction: column; align-items: stretch; }
   .header-actions { flex-wrap: wrap; }
-  .item-head strong {
-    flex-basis: 100%;
-  }
-
   .supplement {
     flex-direction: column;
     align-items: stretch;
@@ -868,7 +1021,7 @@ onUnmounted(() => {
   border-top: 1px dashed var(--border-primary, #d8dbe2);
   padding-top: 8px;
 }
-.acc-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.acc-head { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: baseline; margin-bottom: 6px; }
 .acc-round { display: flex; flex-direction: column; gap: 4px; }
 .acc-check {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
@@ -886,7 +1039,7 @@ onUnmounted(() => {
 .acc-decision { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
 .acc-decision.ok { background: #e6f6ea; color: #1d7f3c; }
 .acc-decision.bad { background: #fdeaea; color: #b42318; }
-.acc-actions { display: flex; gap: 6px; align-items: center; }
+.acc-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .acc-reject-form {
   display: flex; gap: 6px; width: 100%; padding: 4px 6px;
   background: var(--bg-secondary, #f5f6f8); border-radius: 6px;

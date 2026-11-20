@@ -158,12 +158,10 @@ router.beforeEach(async (to, _from, next) => {
         const level = to.meta.capLevel as 'read' | 'use' | 'manage'
         hasPerm = level === 'read' ? mod.read : level === 'use' ? mod.use : mod.manage
       } else {
-        hasPerm = permissions.includes(perm)
+        hasPerm = permissions.includes(perm) ||
+          (perm === 'skill.create' && permissions.includes('skill.manage')) ||
+          (perm === 'trace.view' && permissions.includes('trace.manage'))
       }
-    } else if (perm === 'trace.view') {
-      hasPerm = permissions.includes('trace.view') || permissions.includes('trace.manage')
-    } else if (perm === 'skill.create') {
-      hasPerm = permissions.includes('skill.create') || permissions.includes('skill.manage')
     } else {
       hasPerm = permissions.includes(perm)
     }

@@ -106,7 +106,7 @@ export interface TestResult {
   message: string
 }
 
-/** 测试模型连接性 — 发 GET /v1/models */
+/** 使用已保存的配置发送短文本请求，验证所选模型。 */
 export async function testModelConfig(id: number): Promise<TestResult> {
   const res = await request.post(`/api/model-configs/${id}/test`)
   return res.data

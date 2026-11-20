@@ -251,3 +251,50 @@ def test_user_options_minimal_and_gated(usage):
 
     sup = Principal(user_id=1, role="super_admin", permission_revision=0)
     assert svc.user_options(sup)["total"] == 2
+
+
+def test_call_detail_pairs_visible_messages_for_same_owner_session_and_run(usage):
+    svc, db, *_ = usage
+    owner = Principal(user_id=7, role="user", permission_revision=0)
+    call_id = svc.begin_call(owner_id=7, source="chat", provider="p", model="m",
+                             session_id="session", run_id="run")
+    with db.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO conversations(owner_id,session_id,run_id,role,content,status,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,'2026-11-19','2026-11-19')",
+            [(7, "session", "run", "user", "question", 1),
+             (7, "session", "run", "assistant", "answer", 1),
+             (8, "session", "run", "user", "other owner", 1),
+             (7, "other", "run", "assistant", "other session", 1),
+             (7, "session", "other", "user", "other run", 1),
+             (7, "session", "run", "assistant", "hidden", 0)],
+        )
+        # The memory worker can append a confirmation after the model answered.
+        conn.execute(
+            "INSERT INTO conversations(owner_id,session_id,run_id,role,content,source,seq,created_at,updated_at) "
+            "VALUES(7,'session','run','assistant','memory receipt','system',1,'2026-11-19','2026-11-19')"
+        )
+    detail = svc.get_call(owner, call_id)
+    assert (detail["prompt_text"], detail["completion_text"]) == ("question", "answer")
+    assert "prompt_text" not in svc.list_calls(owner)[0]
+    admin = Principal(user_id=1, role="super_admin", permission_revision=0)
+    assert svc.get_call(admin, call_id)["completion_text"] == "answer"
+    ordinary = Principal(user_id=8, role="user", permission_revision=0)
+    with pytest.raises(ForbiddenError):
+        svc.get_call(ordinary, call_id)
+    svc._effective_permissions = lambda actor: frozenset({"trace.manage"})
+    assert svc.get_call(ordinary, call_id)["prompt_text"] == "question"
+    svc._effective_permissions = lambda actor: frozenset({"trace.view"})
+    with pytest.raises(ForbiddenError):
+        svc.get_call(ordinary, call_id)
+    svc._effective_permissions = lambda actor: frozenset()
+    with pytest.raises(ForbiddenError):
+        svc.get_call(owner, call_id)
+
+
+def test_call_without_conversation_keeps_empty_detail(usage):
+    svc, db, *_ = usage
+    owner = Principal(user_id=7, role="user", permission_revision=0)
+    call_id = svc.begin_call(owner_id=7, source="schedule", provider="p", model="m")
+    detail = svc.get_call(owner, call_id)
+    assert detail["prompt_text"] is None and detail["completion_text"] is None

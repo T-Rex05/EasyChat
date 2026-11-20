@@ -18,11 +18,6 @@ export function isStaleResponse(currentToken: number, requestToken: number): boo
   return requestToken !== currentToken
 }
 
-/** 下一页可用性：本页装满即可能有下一页；不满即为真实末尾。不再展示伪总数。 */
-export function canGoNext(rowsLength: number, pageSize: number = GLOBAL_PAGE_SIZE): boolean {
-  return rowsLength >= pageSize
-}
-
 /** 本人区归属：身份未就绪或非法时必须拒绝发起"本人调用"请求（防全量泄漏）。 */
 export function resolveMyUid(userId: string | number | null | undefined): number {
   const n = Number(userId)

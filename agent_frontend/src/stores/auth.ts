@@ -3,7 +3,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { User, UserCapabilities } from '@/types/auth'
-import { login as apiLogin, register as apiRegister, verifyToken, refreshToken } from '@/api/auth'
+import { login as apiLogin, verifyToken, refreshToken } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
 
 export const useAuthStore = defineStore(
@@ -68,31 +68,6 @@ export const useAuthStore = defineStore(
         console.error('Error response:', error.response?.data)
         console.error('Error status:', error.response?.status)
         throw new Error(error.response?.data?.detail || '登录失败')
-      }
-    }
-
-    async function register(user: string, pass: string) {
-      try {
-        const response = await apiRegister({ username: user, password: pass })
-        token.value = response.token
-        userRole.value = response.role || ''
-        username.value = response.username || ''
-        permissions.value = response.permissions || []
-        capabilities.value = (response as any).capabilities || null
-        persistCapabilities(capabilities.value)
-
-        localStorage.setItem('authToken', response.token)
-        localStorage.setItem('userRole', response.role || '')
-        localStorage.setItem('username', response.username || '')
-        localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-        const uid = String(response.user_id || '')
-        localStorage.setItem('chatUserId', uid)
-        sessionStorage.setItem('chatUserId', uid)
-
-        return true
-      } catch (error) {
-        console.error('注册失败:', error)
-        throw error
       }
     }
 
@@ -211,7 +186,6 @@ export const useAuthStore = defineStore(
       isAuthenticated,
       userId,
       login,
-      register,
       verify,
       tryRefresh,
       logout,

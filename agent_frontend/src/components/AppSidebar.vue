@@ -6,8 +6,8 @@
         <svg viewBox="0 0 36 36" width="36" height="36">
           <defs>
             <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#4e6ef2" />
-              <stop offset="100%" stop-color="#6b83f5" />
+              <stop offset="0%" style="stop-color: var(--brand)" />
+              <stop offset="100%" style="stop-color: var(--brand-2)" />
             </linearGradient>
           </defs>
           <rect width="36" height="36" rx="10" fill="url(#brandGrad)" />
@@ -31,6 +31,7 @@
           v-for="item in group.items"
           :key="item.path"
           :to="item.path"
+          @click="mobileExpanded = false"
           class="nav-item"
           :class="{ active: $route.path === item.path }"
           :title="item.title"
@@ -49,8 +50,8 @@
       </div>
       <!-- 折叠态只保留展开按钮，避免 3 个按钮在 64px 宽度内互相覆盖 -->
       <template v-if="!collapsed">
-        <button class="sidebar-btn" @click="toggleTheme" :title="isDark ? '亮色模式' : '暗色模式'">
-          <svg v-if="!isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <button class="sidebar-btn" @click="toggleTheme" :title="theme === 'dark' ? '切换为亮色' : '切换为暗色'">
+          <svg v-if="theme !== 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
         </button>
         <button class="sidebar-btn" @click="handleLogout" title="退出登录">
@@ -72,20 +73,22 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { memoryAccess } from '@/utils/memoryView'
+import { useTheme } from '@/composables/useTheme'
 import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
-const props = defineProps<{ compactOnMobile?: boolean }>()
 const desktopCollapsed = ref(false)
 const mobileExpanded = ref(false)
-const media = window.matchMedia('(max-width: 700px)')
-const narrow = ref(media.matches)
-const compact = computed(() => props.compactOnMobile && narrow.value)
+const media = window.matchMedia('(max-width: 850px)')
+const compact = ref(media.matches)
 const collapsed = computed(() => compact.value ? !mobileExpanded.value : desktopCollapsed.value)
 
-function updateWidth(event: MediaQueryListEvent) { narrow.value = event.matches }
+function updateWidth(event: MediaQueryListEvent) {
+  compact.value = event.matches
+  mobileExpanded.value = false
+}
 function toggleCollapsed() {
   if (compact.value) mobileExpanded.value = !mobileExpanded.value
   else desktopCollapsed.value = !desktopCollapsed.value
@@ -106,7 +109,8 @@ function onPanelResize(width: number) {
   localStorage.setItem(NAV_WIDTH_KEY, String(width))
 }
 
-const isDark = ref(false)
+// 主题:持久化 + 跟随系统 + 跨页签同步(见 composables/useTheme.ts)
+const { theme, toggle: toggleTheme } = useTheme()
 
 const userRoleText = computed(() => {
   const role = authStore.userRole
@@ -200,6 +204,13 @@ const menuItems = computed(() => {
   const caps = authStore.capabilities?.modules
   const hasCap = (module: string, level: 'read' | 'use' | 'manage') => {
     const m = caps?.[module]
+    if (!m && module === 'skills') {
+      return permissions.value.includes('skill.manage') ||
+        (level !== 'manage' && permissions.value.includes('skill.create'))
+    }
+    if (!m && module === 'trace') {
+      return permissions.value.includes('trace.view') || permissions.value.includes('trace.manage')
+    }
     if (!m) return permissions.value.includes(itemPermOf(module))
     return level === 'read' ? m.read : level === 'use' ? m.use : m.manage
   }
@@ -208,16 +219,12 @@ const menuItems = computed(() => {
       case 'memory': return memoryAccess(permissions.value, caps?.memory).view
       case 'skills': return hasCap('skills', 'use') || hasCap('skills', 'manage')
       case 'trace': return hasCap('trace', 'read')          // trace.manage 同样可见
-            case 'superagent': return hasCap('superagent', 'read')
+      case 'superagent': return hasCap('superagent', 'read')
       case 'schedule': return hasCap('schedule', 'use')
       case 'ledger': return hasCap('ledger', 'read')
       case 'identity': return hasCap('identity', 'manage')
       case 'config': return hasCap('config', 'manage')
       default: break
-    }
-    // 兜底（capabilities 未就绪）
-    if (item.perm === 'trace.view') {
-      return permissions.value.includes('trace.view') || permissions.value.includes('trace.manage')
     }
     return permissions.value.includes(item.perm)
   })
@@ -243,11 +250,6 @@ const menuGroups = computed(() => {
   }
   return groups.filter(g => g.items.length > 0)
 })
-
-function toggleTheme() {
-  isDark.value = !isDark.value
-  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light')
-}
 
 function handleLogout() {
   if (confirm('确定要退出登录吗？')) {

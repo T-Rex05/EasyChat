@@ -17,6 +17,7 @@ from backend.modules.channels.contracts import (
     LISTENER_RUNNING,
     LISTENER_STARTING,
     LISTENER_STOPPED,
+    REASON_DUPLICATE,
     ListenerState,
 )
 from backend.modules.channels.wechat.account import (
@@ -39,6 +40,7 @@ DEFAULT_BACKOFF = (2.0, 5.0, 15.0, 30.0)
 DEFAULT_POLL_INTERVAL = 0.05
 # 官方 session-guard：凭据失效（-14）暂停窗口 1 小时，与账号 guard 对齐。
 THROTTLE_SLEEP_SECONDS = 3600.0
+DISABLED_USER_NOTICE = "账号被禁用，请找伟大的啊嘟嘟大人解封！"
 
 
 class ListenerThrottled(RuntimeError):
@@ -206,12 +208,19 @@ class WeChatListener:
             message = parse_inbound(
                 account, raw, now=self.clock(),
                 fingerprint_window=float(getattr(self.service, "fingerprint_window", 5.0)),
+                include_unhandled=True,
             )
             if message is None:
                 continue
+            if not message.text and not message.media and not self.service.is_inbound_sender_disabled(message):
+                continue
             outcome = await self.service.handle_inbound(message)
             processed += 1
-            if outcome.reply_text:
+            if outcome.reply_text == DISABLED_USER_NOTICE:
+                await self.service.send_disabled_user_notice(message, outcome.event_id)
+            elif outcome.reply_text:
+                if outcome.reason == REASON_DUPLICATE and self.service.is_inbound_sender_disabled(message):
+                    continue
                 await send_text(
                     self.transport,
                     base_url=base_url,

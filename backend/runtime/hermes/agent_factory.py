@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.shared.model_endpoint import model_base_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,8 @@ def build_agent(request: Any, profile: dict[str, Any], *, hermes_home: Any, mode
     kwargs: dict[str, Any] = {
         "session_id": ctx.session_id,
         "thread_id": ctx.run_id,
+        "platform": "easychat-coding" if ctx.source == "superagent" else "easychat",
+        "skip_context_files": ctx.source != "superagent",
         "user_id": ctx.principal.user_id,
         "session_db": SessionDB(),  # 不传等于静默关闭持久化
         "skip_memory": True,  # 记忆走 EasyChat memory 模块（Task 9 桥接）
@@ -36,7 +40,7 @@ def build_agent(request: Any, profile: dict[str, Any], *, hermes_home: Any, mode
         # 压缩由内核配置默认开启（agent_init: compression.enabled，非构造参数）
     }
     if profile.get("base_url"):
-        kwargs["base_url"] = _normalize_base_url(str(profile["base_url"]), str(profile.get("provider", "")))
+        kwargs["base_url"] = model_base_url(str(profile["base_url"]), str(profile.get("provider", "")))
     if api_key:
         kwargs["api_key"] = api_key
     if profile.get("model"):
@@ -52,7 +56,7 @@ def build_agent(request: Any, profile: dict[str, Any], *, hermes_home: Any, mode
     if fallback:
         fb_key = _resolve_api_key(fallback, models)
         kwargs["fallback_model"] = {
-            "base_url": _normalize_base_url(str(fallback.get("base_url", "")), str(fallback.get("provider", ""))),
+            "base_url": model_base_url(str(fallback.get("base_url", "")), str(fallback.get("provider", ""))),
             "api_key": fb_key,
             "model": _strip_model_suffix(str(fallback.get("model", ""))),
             "provider": str(fallback.get("provider", "")),
@@ -66,18 +70,6 @@ def build_agent(request: Any, profile: dict[str, Any], *, hermes_home: Any, mode
         except Exception:  # noqa: BLE001
             logger.warning("无法关闭 %s（旧版内核）", attr)
     return agent
-
-
-def _normalize_base_url(base_url: str, provider: str) -> str:
-    if not base_url:
-        return base_url
-    if "anthropic" in provider.lower() or "anthropic" in base_url.lower():
-        return base_url
-    if "/v1" in base_url or base_url.rstrip("/").endswith("/v1"):
-        return base_url
-    if "ollama" in provider.lower():
-        return base_url.rstrip("/") + "/v1"
-    return base_url.rstrip("/") + "/v1"
 
 
 def _strip_model_suffix(model: str) -> str:

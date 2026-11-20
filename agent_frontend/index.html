@@ -3,7 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- 声明支持深浅两套主题,让浏览器在首帧渲染前就知道配色(防 FOUC) -->
+  <meta name="color-scheme" content="light dark" />
   <title>AgentForge</title>
+  <script>
+    // 首帧前应用主题:优先 localStorage 显式选择,否则跟随系统偏好。
+    // .dark 类是 Element Plus 深色变量的开关;data-theme 是设计系统 token 开关。
+    try {
+      var t = localStorage.getItem('af-theme');
+      if (t !== 'light' && t !== 'dark') {
+        t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.dataset.theme = t;
+      document.documentElement.classList.toggle('dark', t === 'dark');
+    } catch (e) { /* localStorage 被禁用时按亮色渲染 */ }
+  </script>
 </head>
 <body>
   <div id="app"></div>

@@ -219,9 +219,11 @@ class RunDispatcher:
                 if run_id in self._cancel_flags:
                     await self.request_cancel(run_id)  # 确保runtime已收到取消
                 if event.kind == "token":
-                    self.events.publish(run_id, "token", dict(event.payload))
-                elif event.kind == "thinking":
-                    self.events.publish(run_id, "thinking", dict(event.payload))
+                    # A null delta closes the current text segment before a tool call.
+                    if event.payload.get("text") is None:
+                        self.events.flush_token(run_id)
+                    else:
+                        self.events.publish(run_id, "token", dict(event.payload))
                 elif event.kind == "tool_started":
                     self.events.publish(run_id, "tool_started", dict(event.payload))
                 elif event.kind == "tool_finished":

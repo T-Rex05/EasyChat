@@ -193,14 +193,14 @@
             <p class="section-tip">
               {{ modelCategory === 'chat' ? '用于智能对话与 RAG 评测裁判，每类可保存多条配置，点击「设为当前」切换。' : modelCategory === 'embedding' ? '用于知识库向量化与语义检索（含 RAG 评测 AnswerRelevancy），配置后无需改后端 .env。' : '用于 RAG 检索精排（如 DashScope gte-rerank-v2），配置后自动启用检索精排。' }}
             </p>
-            <div v-if="filteredConfigs.length === 0" class="empty-state">暂无{{ modelCategories[modelCategory] }}配置，请在右侧新增</div>
+            <div v-if="filteredConfigs.length === 0" class="empty-state">暂无{{ modelCategories[modelCategory] }}配置，可在「新增配置」中添加</div>
             <div v-else class="config-mini-list">
               <div v-for="cfg in filteredConfigs" :key="cfg.id" class="mini-item" :class="{ active: cfg.is_current, editing: editingId === cfg.id }">
                 <template v-if="editingId === cfg.id">
                   <div class="mini-edit">
                     <input v-model="editForm.config_name" class="input input-sm" placeholder="名称" />
                     <input v-model="editForm.model_name" class="input input-sm" placeholder="模型" />
-                    <input v-model="editForm.api_url" class="input input-sm" placeholder="API URL" />
+                    <input v-model="editForm.api_url" class="input input-sm" type="url" autocomplete="url" placeholder="API URL" />
                     <p class="input-hint" style="font-size:10px;">⚠️ 不填 <code>/v1</code> 等后缀，系统自动补全</p>
                     <select v-model="editForm.provider" class="select select-sm">
                       <option value="">自动检测</option>
@@ -238,7 +238,7 @@
                       </div>
                       <p class="input-hint" style="font-size:10px;color:#d97706;">⚠️ 切换维度需清空向量库重新向量化</p>
                     </template>
-                    <input v-model="editForm.api_key" class="input input-sm" type="password" placeholder="Key（留空不修改）" />
+                    <input v-model="editForm.api_key" class="input input-sm" type="password" autocomplete="new-password" placeholder="Key（留空不修改）" />
                     <div class="mini-edit-actions">
                       <button class="btn btn-primary btn-sm" @click="saveEdit(cfg.id)">保存</button>
                       <button class="btn btn-secondary btn-sm" @click="cancelEdit">取消</button>
@@ -248,7 +248,10 @@
                 <template v-else>
                   <div class="mini-main">
                     <div class="mini-name">{{ cfg.config_name }} <span v-if="cfg.is_current" class="badge badge-success">当前</span><span v-if="cfg.is_multimodal" class="badge badge-multimodal" title="支持图片识别">🖼️ 多模态</span><span v-if="cfg.reasoning_effort" class="badge badge-effort" :title="'推理深度: ' + cfg.reasoning_effort">🧠 {{ effortLabel(cfg.reasoning_effort) }}</span><span v-if="cfg.category === 'embedding' && cfg.dimension" class="badge" style="background:#e0f2fe;color:#0369a1;font-size:11px;" :title="'向量维度: ' + cfg.dimension + (cfg.send_dimensions ? '（已启用）' : '（未发送）')">{{ cfg.dimension }}d{{ cfg.send_dimensions ? '' : '?' }}</span></div>
-                    <div class="mini-meta">{{ cfg.model_name }}<template v-if="cfg.provider"> · {{ cfg.provider }}</template> · {{ cfg.api_url }}</div>
+                    <div class="mini-meta">
+                      <span>{{ cfg.model_name }}<template v-if="cfg.provider"> · {{ cfg.provider }}</template></span>
+                      <span v-if="cfg.api_url" class="mini-endpoint">{{ cfg.api_url }}</span>
+                    </div>
                     <div v-if="cfg.category === 'chat' && (cfg.cost_per_1k_input || cfg.context_length)" class="mini-capabilities">
                       <span v-if="cfg.cost_per_1k_input || cfg.cost_per_1k_output" class="cap-tag" title="成本">💰 {{ formatCost(cfg.cost_per_1k_input) }}/{{ formatCost(cfg.cost_per_1k_output) }}</span>
                       <span v-if="cfg.context_length" class="cap-tag" title="上下文窗口">📏 {{ formatContext(cfg.context_length) }}</span>
@@ -378,7 +381,7 @@
             </div>
             <div class="form-group">
               <label class="form-label">API Base URL</label>
-              <input v-model="form.api_url" class="input" placeholder="https://api.openai.com/v1" />
+              <input v-model="form.api_url" class="input" type="url" autocomplete="url" placeholder="https://api.openai.com" />
               <p class="input-hint">
                 💡 填 API 根地址即可，<b>无需手动加</b> <code>/v1</code>、<code>/chat/completions</code> 等路径后缀，系统自动补全。<br/>
                 · OpenAI 兼容（GPT/Qwen/GLM 等）：填 <code>https://api.openai.com</code> 或 <code>https://dashscope.aliyuncs.com/compatible-mode</code><br/>
@@ -388,7 +391,7 @@
             </div>
             <div class="form-group">
               <label class="form-label">API Key</label>
-              <input v-model="form.api_key" class="input" type="password" placeholder="sk-..." />
+              <input v-model="form.api_key" class="input" type="password" autocomplete="new-password" placeholder="sk-..." />
             </div>
             <button class="btn btn-primary" @click="create" :disabled="!canCreate || creating" style="width:100%;margin-top:8px;">{{ creating ? '保存中...' : '保存并设为当前' }}</button>
             <p class="config-tips" style="margin-top:8px;font-size:12px;">💡 支持 OpenAI 兼容接口，保存后立即生效（每类模型独立激活）。</p>
@@ -402,19 +405,22 @@
     <!-- ──────────────────────────────────────────── -->
     <div v-show="activeTab === 'channel'" class="tab-content">
       <!-- WP-B：模块装配状态——区分功能关闭/缺密钥/依赖缺失/初始化失败，不再只有无限 loading -->
-      <div v-if="channelModule && channelModule.state !== 'ready'" class="card" style="margin-bottom:16px;border-color:#f0ad4e;">
+      <div v-if="channelModule && !channelReady" class="card" style="margin-bottom:16px;border-color:#f0ad4e;">
         <div class="card-header">⚠️ 渠道模块当前不可用（{{ channelModule.state }}）</div>
         <div class="card-body">
           <p class="section-tip" style="color:var(--text-primary);">{{ channelModule.reason }}</p>
           <button class="btn btn-secondary btn-sm" style="margin-top:8px;" @click="loadChannelModule">重新检测</button>
         </div>
       </div>
-      <div v-if="channelLoadError" class="error-banner">{{ channelLoadError }}</div>
+      <div v-if="channelLoadError" class="error-banner" role="alert">{{ channelLoadError }} <button class="btn btn-secondary btn-sm" @click="loadChannelModule">重新检测</button></div>
+      <p v-if="!channelModule && !channelLoadError" role="status">正在检测渠道模块…</p>
       <!-- 微信 -->
-      <div class="card">
+      <div v-if="channelReady" class="card">
         <div class="card-header">🟢 微信 <span v-if="wechatConfigured" class="badge badge-success">已配置</span></div>
         <div class="card-body">
-          <p class="section-tip">通过扫码或手动填写 Token 绑定微信 Bot，实现 Web 端与微信消息双向互通。</p>
+          <p v-if="!canManageChannel" class="section-tip">请联系渠道管理员绑定微信。你可以在下方查看或解除自己的绑定。</p>
+          <template v-else>
+          <p class="section-tip">通过扫码或手动填写 Token 绑定微信 Bot。</p>
 
           <!-- QR 扫码区域（正在扫码时显示） -->
           <div v-if="qrSessionId" class="qr-scan-area">
@@ -428,10 +434,11 @@
             </div>
             <div class="qr-status-text">
               <template v-if="qrStatus === 'wait' || qrStatus === 'wait_refreshed'">📱 请使用微信扫描上方二维码</template>
-              <template v-else-if="qrStatus === 'scaned'">👆 已扫码，请在微信中点击确认</template>
+              <template v-else-if="qrStatus === 'scanned'">👆 已扫码，请在微信中点击确认</template>
+              <template v-else-if="qrStatus === 'confirmed'">正在保存绑定并启动监听…</template>
               <template v-else-if="qrStatus === 'expired'">❌ 二维码已过期，请重新发起</template>
             </div>
-            <button class="btn btn-secondary btn-sm" @click="cancelQr">取消</button>
+            <button class="btn btn-secondary btn-sm" :disabled="qrStatus === 'confirmed'" @click="cancelQr">{{ qrStatus === 'expired' ? '返回' : '取消' }}</button>
           </div>
 
           <!-- 两种绑定方式 -->
@@ -440,13 +447,13 @@
               <div class="bind-method-icon">📱</div>
               <div class="bind-method-title">扫码绑定</div>
               <div class="bind-method-desc">iLink 扫码自动获取凭证</div>
-              <button class="btn btn-primary btn-sm" @click="startQrBind" :disabled="qrLoading">{{ qrLoading ? '生成中...' : '开始扫码' }}</button>
+              <button class="btn btn-primary btn-sm" @click="startQrBind" :disabled="qrLoading || savingManual">{{ qrLoading ? '生成中...' : '开始扫码' }}</button>
             </div>
             <div class="bind-method-card">
               <div class="bind-method-icon">⌨️</div>
               <div class="bind-method-title">手动绑定</div>
               <div class="bind-method-desc">已有 Token，直接填写</div>
-              <button class="btn btn-secondary btn-sm" @click="showManualBind = !showManualBind">{{ showManualBind ? '收起' : '手动绑定' }}</button>
+              <button class="btn btn-secondary btn-sm" :disabled="qrLoading || savingManual" @click="showManualBind = !showManualBind">{{ showManualBind ? '收起' : '手动绑定' }}</button>
             </div>
           </div>
 
@@ -454,7 +461,7 @@
           <div v-if="showManualBind" class="manual-bind-form">
             <div class="form-group">
               <label class="form-label">Bot Token</label>
-              <input v-model="manualBindForm.token" class="input" type="password" placeholder="iLink Bot Token" />
+              <input v-model="manualBindForm.token" class="input" type="password" autocomplete="new-password" placeholder="iLink Bot Token" />
             </div>
             <div class="form-group">
               <label class="form-label">Account ID</label>
@@ -462,21 +469,24 @@
             </div>
             <div class="form-row">
               <div class="form-group" style="flex:1;">
-                <label class="form-label">微信 ID（可选）</label>
-                <input v-model="manualBindForm.wxid" class="input" placeholder="用于绑定的微信标识" />
+                <label class="form-label">发送消息的微信用户 ID（必填）</label>
+                <input v-model="manualBindForm.wxid" class="input" placeholder="填写实际发送者的微信 ID" />
               </div>
               <div class="form-group" style="flex:1;">
-                <label class="form-label">备注（可选）</label>
-                <input v-model="manualBindForm.nickname" class="input" placeholder="例如: 我的微信" />
+                <label class="form-label">Bot 备注（可选）</label>
+                <input v-model="manualBindForm.nickname" class="input" placeholder="例如：我的微信助手" />
               </div>
             </div>
             <div class="form-actions">
-              <button class="btn btn-primary btn-sm" @click="submitManualBind" :disabled="!manualBindForm.token.trim() || !manualBindForm.account_id.trim() || savingManual">
+              <button class="btn btn-primary btn-sm" @click="submitManualBind" :disabled="!manualFormComplete || savingManual">
                 {{ savingManual ? '保存中...' : '确认绑定' }}
               </button>
-              <span v-if="manualBindMsg" class="status-text" :class="{ ok: manualBindOk }">{{ manualBindMsg }}</span>
             </div>
           </div>
+
+          <p v-if="channelActionMsg" class="status-text" role="status">{{ channelActionMsg }}</p>
+          <button v-if="retryListenerId" class="btn btn-secondary btn-sm" :disabled="savingManual" @click="retryListener">重新启动监听</button>
+          </template>
 
           <!-- 我的绑定状态 -->
           <h4 class="subsection-title" style="margin-top: 20px;">👤 我的绑定</h4>
@@ -490,7 +500,8 @@
             </div>
             <button class="btn btn-danger btn-sm" @click="unbindWechat">解绑</button>
           </div>
-          <div v-else class="binding-empty">
+          <p v-else-if="bindingError" role="alert">{{ bindingError }} <button class="btn btn-secondary btn-sm" @click="loadChannelModule">重新检测</button></p>
+          <div v-else-if="bindingsLoaded" class="binding-empty">
             <span class="muted">尚未绑定微信账号</span>
           </div>
         </div>
@@ -667,14 +678,13 @@ python main.py</pre>
 
 <script setup lang="ts">
 import McpSettingsPanel from '@/components/config/McpSettingsPanel.vue'
-import { getModuleStatus } from '@/api/platform'
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useAuthStore } from '@/stores/auth';
 import { getModelConfigs, createModelConfig, setActiveModelConfig, deleteModelConfig, updateModelConfig, testModelConfig, getEmailConfigs, createEmailConfig, setActiveEmailConfig, deleteEmailConfig, testEmailConfig, getPersonalEmails, addPersonalEmail as apiAddPersonalEmail, setActivePersonalEmail, deletePersonalEmail, getFallbackChain, saveFallbackChain, getSceneRouting, saveSceneRouting, evaluateRoute, getAvailableScenes, type ModelConfig, type TestResult, type EmailConfig, type PersonalEmail, type FallbackChainItem, type SceneRoutingItem, type SceneDefinition, type SceneCategory } from '@/api/config';
-import { getPlatformConfig, savePlatformConfig, getUserBindings, createUserBinding, deleteUserBinding, startWechatQr, checkWechatQrStatus, bindWechatQr } from '@/api/platform';
+import { getModuleStatus, type ModuleStatus, type UserBinding, getPlatformConfig, savePlatformConfig, getUserBindings, createUserBinding, deleteUserBinding, startWechatQr, checkWechatQrStatus, bindWechatQr, startWechatListener } from '@/api/platform';
 
 const authStore = useAuthStore();
-const isSuperAdmin = computed(() => authStore.userRole === 'super_admin');
+
 // 与 :664 的 tab 过滤保持一致：走 hasPerm（super_admin 兜底），
 // 避免 localStorage.userPermissions 过期时连超管都看不到邮箱配置按钮
 const hasSystemConfig = computed(() => authStore.hasPerm('system.config'));
@@ -744,10 +754,11 @@ async function saveEdit(id: number) {
     await loadModelConfigs();
     alert(`✅ 模型配置「${editForm.config_name}」已更新`);
   } catch (e: any) { alert(e?.response?.data?.detail || '更新失败'); }
-}async function testConn(id: number) {
+}
+async function testConn(id: number) {
   testingId.value = id; testResult.value = null;
   try { testResult.value = await testModelConfig(id); }
-  catch (e: any) { testResult.value = { ok: false, message: e?.response?.data?.detail || '测试请求失败' }; }
+  catch (e: any) { testResult.value = { ok: false, message: e?.response?.data?.message || e?.response?.data?.detail || '测试请求失败' }; }
   finally { testingId.value = null; }
 }
 async function loadModelConfigs() {
@@ -792,162 +803,237 @@ async function loadStats() {
 }
 
 // ── 微信配置 ──
-const wechatConfig = reactive({ token: '', account_id: '', base_url: '', bot_user_id: '' });
 const wechatConfigured = ref(false);
-
-const channelModule = ref<{ state: string; reason: string } | null>(null);
+const wechatBinding = ref<UserBinding | null>(null);
+const bindingsLoaded = ref(false);
+const bindingError = ref('');
+const channelModule = ref<ModuleStatus | null>(null);
 const channelLoadError = ref('');
+const channelActionMsg = ref('');
+const ownerId = computed(() => Number(authStore.user?.id || authStore.userId));
+const channelReady = computed(() => authStore.ready && channelModule.value?.assembled && channelModule.value.state === 'ready');
+const channelManager = computed(() => authStore.hasPerm('system.manage'));
+const canManageChannel = computed(() => channelReady.value && channelManager.value);
+let channelVersion = 0;
 
 async function loadChannelModule() {
+  const version = ++channelVersion;
+  cancelQr();
+  savingManual.value = false;
+  showManualBind.value = false;
+  manualBindForm.token = '';
+  retryListenerId.value = '';
+  channelActionMsg.value = '';
+  channelModule.value = null;
   channelLoadError.value = '';
+  wechatConfigured.value = false;
+  wechatBinding.value = null;
+  bindingError.value = '';
+  bindingsLoaded.value = false;
+  if (!authStore.ready) return;
+  if (!ownerId.value) {
+    channelLoadError.value = '无法识别当前用户，请重新登录。';
+    return;
+  }
   try {
-    const status = await getModuleStatus();
-    channelModule.value = { state: status.channels.state, reason: status.channels.reason };
+    const { channels } = await getModuleStatus();
+    if (version !== channelVersion) return;
+    channelModule.value = channels;
+    if (channelReady.value) await refreshChannelDetails(version);
   } catch (e: any) {
-    channelModule.value = null;
-    channelLoadError.value = e?.message || '模块状态加载失败，请稍后重试';
+    if (version === channelVersion) channelLoadError.value = e?.message || '模块状态加载失败';
   }
 }
 
-async function loadWechatConfig() {
+async function refreshChannelDetails(version: number) {
+  await Promise.all([loadWechatBinding(version), loadWechatConfig(version)]);
+}
+
+async function loadWechatConfig(version: number) {
+  if (!canManageChannel.value) return;
   try {
     const data = await getPlatformConfig('wechat');
-    channelLoadError.value = '';
-    if (data.configured) {
-      wechatConfig.account_id = data.raw_config_json?.account_id || '';
-      wechatConfig.bot_user_id = data.raw_config_json?.bot_user_id || '';
-      wechatConfigured.value = true;
-    } else {
-      wechatConfigured.value = false;
+    if (version === channelVersion) {
+      wechatConfigured.value = data.configured;
+      channelLoadError.value = '';
     }
   } catch (e: any) {
-    // WP-B：accounts 请求失败必须可见（503=模块未装配；401/403=权限），不再只 console
-    channelLoadError.value = e?.message || '微信配置加载失败（渠道模块可能未开启）';
-    wechatConfigured.value = false;
+    if (version === channelVersion) channelLoadError.value = e?.message || '微信配置加载失败';
   }
 }
 
-// ── 手动绑定 ──
-const showManualBind = ref(false);
-const savingManual = ref(false);
-const manualBindOk = ref(false);
-const manualBindMsg = ref('');
-const manualBindForm = reactive({ token: '', account_id: '', base_url: '', wxid: '', nickname: '' });
-
-async function submitManualBind() {
-  if (!manualBindForm.token.trim() || !manualBindForm.account_id.trim()) return;
-  savingManual.value = true; manualBindMsg.value = ''; manualBindOk.value = false;
+async function loadWechatBinding(version: number) {
   try {
-    if (isSuperAdmin.value) {
-      await savePlatformConfig('wechat', {
-        config_json: {
-          token: manualBindForm.token.trim(),
-          account_id: manualBindForm.account_id.trim(),
-          base_url: manualBindForm.base_url.trim() || 'https://ilinkai.weixin.qq.com',
-          bot_user_id: manualBindForm.wxid.trim() || manualBindForm.account_id.trim(),
-        },
-        enabled: true,
-      });
-    }
-    const wxid = manualBindForm.wxid.trim() || manualBindForm.account_id.trim();
-    await createUserBinding({
-      platform: 'wechat',
-      account_id: manualBindForm.account_id.trim(),
-      open_id: wxid,
-      nickname: manualBindForm.nickname.trim() || `微信Bot_${manualBindForm.account_id.trim().slice(0, 8)}`,
-    });
-    manualBindOk.value = true;
-    manualBindMsg.value = '✅ 绑定成功';
-    showManualBind.value = false;
-    manualBindForm.token = ''; manualBindForm.account_id = ''; manualBindForm.wxid = ''; manualBindForm.nickname = '';
-    await loadWechatConfig();
-    await loadWechatBinding();
+    const data = await getUserBindings(ownerId.value);
+    if (version !== channelVersion) return;
+    wechatBinding.value = data.bindings.find(b => b.platform === 'wechat') || null;
+    bindingsLoaded.value = true;
+    bindingError.value = '';
   } catch (e: any) {
-    manualBindOk.value = false;
-    manualBindMsg.value = '❌ ' + (e?.response?.data?.detail || '保存失败');
-  } finally { savingManual.value = false; }
+    if (version !== channelVersion) return;
+    wechatBinding.value = null;
+    bindingError.value = e?.message || '微信绑定加载失败';
+  }
 }
 
-// ── 微信扫码绑定（QR） ──
+const showManualBind = ref(false);
+const savingManual = ref(false);
+const manualBindForm = reactive({ token: '', account_id: '', base_url: '', wxid: '', nickname: '' });
+const manualFormComplete = computed(() =>
+  manualBindForm.token.trim() && manualBindForm.account_id.trim() && manualBindForm.wxid.trim());
+const retryListenerId = ref('');
+
+async function submitManualBind() {
+  if (!canManageChannel.value || !manualFormComplete.value || savingManual.value || qrLoading.value || qrSessionId.value) return;
+  const version = channelVersion;
+  const accountId = manualBindForm.account_id.trim();
+  const wxid = manualBindForm.wxid.trim();
+  savingManual.value = true;
+  retryListenerId.value = '';
+  channelActionMsg.value = '';
+  let failure = '账号保存失败';
+  try {
+    const account = await savePlatformConfig('wechat', {
+      config_json: {
+        token: manualBindForm.token.trim(), account_id: accountId,
+        base_url: manualBindForm.base_url.trim(), nickname: manualBindForm.nickname.trim(),
+      },
+      enabled: true,
+    });
+    if (version !== channelVersion) return;
+    failure = '账号已保存，用户绑定失败';
+    await createUserBinding({ platform: 'wechat', account_id: accountId, open_id: wxid, nickname: '' });
+    if (version !== channelVersion) return;
+    manualBindForm.token = '';
+    manualBindForm.account_id = '';
+    manualBindForm.wxid = '';
+    manualBindForm.nickname = '';
+    showManualBind.value = false;
+    retryListenerId.value = account.id;
+    await runListener(version);
+  } catch (e: any) {
+    if (version === channelVersion) channelActionMsg.value = failure + '：' + (e?.message || '请稍后重试');
+  } finally {
+    if (version === channelVersion) await refreshChannelDetails(version);
+    if (version === channelVersion) savingManual.value = false;
+  }
+}
+
+async function runListener(version: number) {
+  try {
+    const listener = await startWechatListener(retryListenerId.value);
+    if (version !== channelVersion) return;
+    const message = listenerMessage(listener);
+    if (message) throw new Error(message);
+    retryListenerId.value = '';
+    channelActionMsg.value = listener.status === 'starting' ? '微信已绑定，监听正在启动。' : '微信已绑定，监听已启动。';
+  } catch (e: any) {
+    if (version === channelVersion) channelActionMsg.value = '微信已绑定，监听启动失败：' + (e?.message || '请重试');
+  }
+}
+
+function listenerMessage(listener: { status: string; last_error?: string }) {
+  if (listener.status === 'starting' || listener.status === 'running') return '';
+  return listener.last_error || '监听状态：' + (listener.status || '未知');
+}
+
+async function retryListener() {
+  if (!canManageChannel.value || savingManual.value || !retryListenerId.value) return;
+  const version = channelVersion;
+  savingManual.value = true;
+  try { await runListener(version); } finally { if (version === channelVersion) savingManual.value = false; }
+}
+
 const qrSessionId = ref('');
 const qrImage = ref('');
 const qrScanData = ref('');
 const qrStatus = ref('');
 const qrLoading = ref(false);
-let qrPollTimer: ReturnType<typeof setInterval> | null = null;
+let qrVersion = 0;
+let qrPollTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function startQrBind() {
+  if (!canManageChannel.value || savingManual.value || qrLoading.value || qrSessionId.value) return;
+  const version = ++qrVersion;
+  showManualBind.value = false;
+  retryListenerId.value = '';
+  channelActionMsg.value = '';
   qrLoading.value = true;
   try {
     const result = await startWechatQr();
+    if (version !== qrVersion) return;
     qrSessionId.value = result.session_id;
     qrImage.value = result.qr_image;
-    qrScanData.value = result.qr_scan_data || '';
+    qrScanData.value = result.qr_scan_data;
     qrStatus.value = 'wait';
-    qrPollTimer = setInterval(pollQrStatus, 2000);
+    scheduleQrPoll(version);
   } catch (e: any) {
-    alert(e?.response?.data?.detail || '生成二维码失败');
-    cancelQr();
-  } finally { qrLoading.value = false; }
+    if (version === qrVersion) channelActionMsg.value = e?.message || '生成二维码失败';
+  } finally {
+    if (version === qrVersion) qrLoading.value = false;
+  }
 }
 
-async function pollQrStatus() {
-  if (!qrSessionId.value) return;
+function scheduleQrPoll(version: number) {
+  qrPollTimer = setTimeout(() => pollQrStatus(version), 2000);
+}
+
+async function pollQrStatus(version: number) {
+  const id = qrSessionId.value;
+  if (!canManageChannel.value || !id || version !== qrVersion) return;
   try {
-    const result = await checkWechatQrStatus(qrSessionId.value);
-    qrStatus.value = result.status;
-    if (result.qr_scan_data) qrScanData.value = result.qr_scan_data;
-    if (result.status === 'wait_refreshed' && result.qr_image) {
-      qrImage.value = result.qr_image;
-      qrStatus.value = 'wait';
-    } else if (result.status === 'confirmed') {
-      clearInterval(qrPollTimer!);
-      qrPollTimer = null;
-      try {
-        await bindWechatQr(qrSessionId.value);
-        await loadWechatConfig();
-        await loadWechatBinding();
-        cancelQr();
-      } catch (e: any) { alert(e?.response?.data?.detail || '绑定失败'); cancelQr(); }
-    } else if (result.status === 'bound') {
-      // 已经绑定过，直接刷新状态
-      clearInterval(qrPollTimer!);
-      qrPollTimer = null;
-      await loadWechatConfig();
-      await loadWechatBinding();
+    const result = await checkWechatQrStatus(id);
+    if (version !== qrVersion) return;
+    if (result.error) throw new Error(result.error);
+    qrStatus.value = result.status === 'scaned' ? 'scanned' : result.status;
+    if (result.qr_image !== undefined) qrImage.value = result.qr_image;
+    if (result.qr_scan_data !== undefined) qrScanData.value = result.qr_scan_data;
+    if (result.status === 'expired') return;
+    if (result.status === 'confirmed' || result.status === 'bound') {
+      if (result.status === 'confirmed') {
+        const bound = await bindWechatQr(id);
+        if (version !== qrVersion) return;
+        if (!bound.bot_configured) throw new Error('微信账号未保存，请重新扫码。');
+        channelActionMsg.value = bound.wechat_user_id ? '微信已绑定。' : '微信账号已保存，但缺少发送者 ID，请手动绑定。';
+        const error = listenerMessage(bound.listener);
+        if (error) {
+          channelActionMsg.value += '监听未启动：' + error;
+          if (bound.wechat_user_id) retryListenerId.value = bound.account_pk;
+        }
+      }
       cancelQr();
-    } else if (result.status === 'expired') {
-      clearInterval(qrPollTimer!);
-      qrPollTimer = null;
+      await refreshChannelDetails(channelVersion);
+      return;
     }
-  } catch (e) { /* 轮询静默失败 */ }
+    scheduleQrPoll(version);
+  } catch (e: any) {
+    if (version !== qrVersion) return;
+    channelActionMsg.value = e?.message || '扫码绑定失败，请重新扫码';
+    cancelQr();
+    await refreshChannelDetails(channelVersion);
+  }
 }
 
 function cancelQr() {
-  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  ++qrVersion;
+  clearTimeout(qrPollTimer);
   qrSessionId.value = '';
   qrImage.value = '';
   qrScanData.value = '';
   qrStatus.value = '';
-}
-
-// ── 微信个人绑定 ──
-const wechatBinding = ref<any>(null);
-
-async function loadWechatBinding() {
-  try {
-    const data = await getUserBindings();
-    wechatBinding.value = data.bindings.find((b: any) => b.platform === 'wechat') || null;
-  } catch (e) { console.error('加载微信绑定失败:', e); }
+  qrLoading.value = false;
 }
 
 async function unbindWechat() {
-  if (!wechatBinding.value || !confirm('确定解绑微信账号吗？')) return;
+  if (!channelReady.value || !wechatBinding.value || !confirm('确定解绑微信账号吗？')) return;
+  const version = channelVersion;
   try {
     await deleteUserBinding(wechatBinding.value.id);
-    wechatBinding.value = null;
-    alert('✅ 微信账号已解绑');
-  } catch (e: any) { alert(e?.response?.data?.detail || '解绑失败'); }
+    if (version !== channelVersion) return;
+    retryListenerId.value = '';
+    channelActionMsg.value = '';
+    await loadWechatBinding(version);
+  } catch (e: any) { if (version === channelVersion) alert(e?.message || '解绑失败'); }
 }
 
 // ── 邮箱多配置 ──
@@ -1298,15 +1384,17 @@ onMounted(() => {
   loadModelConfigs();
   loadFallbackChain();
   loadAvailableScenes();
-  loadChannelModule();
-  loadWechatConfig();
-  loadWechatBinding();
+  watch([() => authStore.ready, ownerId, channelManager], loadChannelModule, { immediate: true });
   loadEmailConfigs();
   loadPersonalEmails();
 });
 
+watch(activeTab, (tab) => {
+  if (tab !== 'channel' && qrStatus.value !== 'confirmed') cancelQr();
+});
 onUnmounted(() => {
-  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+  ++channelVersion;
+  cancelQr();
 });
 </script>
 
@@ -1318,6 +1406,7 @@ onUnmounted(() => {
 /* ── Tab 导航 ── */
 .config-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 20px;
   background: var(--bg-secondary);
@@ -1325,8 +1414,8 @@ onUnmounted(() => {
   padding: 4px;
 }
 .tab-btn {
-  flex: 1;
-  padding: 10px 16px;
+  flex: 1 0 max-content;
+  padding: 10px 12px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -1346,10 +1435,11 @@ onUnmounted(() => {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ── 左右分栏 ── */
-.split-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.split-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; align-items: start; }
+.split-layout > .card { min-width: 0; }
 
 /* ── 模型分类 Tab ── */
-.model-cat-tabs { display: flex; gap: 6px; padding: 10px 14px 0; border-bottom: 1px solid var(--border-primary); }
+.model-cat-tabs { display: flex; flex-wrap: wrap; gap: 2px 6px; padding: 10px 14px 0; border-bottom: 1px solid var(--border-primary); }
 .model-cat-tab {
   background: none; border: none; cursor: pointer;
   padding: 7px 14px; font-size: 13px; color: var(--text-secondary);
@@ -1367,17 +1457,19 @@ onUnmounted(() => {
 /* ── 紧凑配置列表 ── */
 .config-mini-list { display: flex; flex-direction: column; gap: 6px; }
 .mini-item {
-  display: flex; align-items: flex-start; justify-content: space-between;
+  display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; justify-content: space-between;
   padding: 10px 12px; border-radius: var(--radius-md);
   background: var(--bg-secondary); transition: background 0.15s;
 }
 .mini-item.active { background: var(--bg-card); border: 1px solid var(--brand-light, #e0e7ff); }
-.mini-main { flex: 1; min-width: 0; }
-.mini-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
-.mini-meta { font-size: 11px; color: var(--text-tertiary); word-break: break-all; }
-.mini-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: 8px; }
+.mini-main { flex: 1 1 220px; min-width: 0; }
+.mini-name { font-size: 13px; font-weight: 600; margin-bottom: 3px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; overflow-wrap: anywhere; }
+.mini-meta { display: grid; gap: 2px; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.mini-endpoint { color: var(--text-tertiary); }
+.mini-actions { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.mini-actions .btn { width: auto; white-space: nowrap; }
 .mini-edit { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.mini-edit-actions { display: flex; gap: 6px; }
+.mini-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ── 渠道绑定 ── */
 .platform-admin-section {

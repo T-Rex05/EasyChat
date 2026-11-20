@@ -96,47 +96,10 @@ class SchedulingService:
             raise InvalidInputError("提醒目标不能为空")
         tz_name = _validate_timezone(timezone or self.timezone_name)
         now = self.clock()
-        chosen = sum(
-            1 for value in (at, every_seconds, daily_at, weekly_at) if value
+        kind, next_run_at, interval, at_time, weekday_value = _timing(
+            now, tz_name, at, every_seconds, daily_at, weekly_at, weekday,
         )
-        if chosen != 1:
-            raise InvalidInputError(
-                "必须且只能指定 at / every_seconds / daily_at / weekly_at 之一"
-            )
-
-        weekday_value = 0
-        if at:
-            next_run_at = _parse_at(at, tz_name)
-            kind = SCHEDULE_ONCE
-            interval = 0
-            at_time = ""
-        elif every_seconds:
-            interval = int(every_seconds)
-            if interval < MIN_INTERVAL_SECONDS:
-                raise InvalidInputError(f"重复间隔不能小于 {MIN_INTERVAL_SECONDS} 秒")
-            kind = SCHEDULE_INTERVAL
-            next_run_at = now + interval
-            at_time = ""
-        elif daily_at:
-            at_time = _validate_daily(daily_at)
-            kind = SCHEDULE_DAILY
-            interval = 0
-            next_run_at = _next_daily(now, at_time, tz_name)
-        else:
-            if weekday is None:
-                raise InvalidInputError("weekly_at 必须同时给 weekday（0=周一…6=周日）")
-            if not isinstance(weekday, int) or not 0 <= weekday <= 6:
-                raise InvalidInputError("weekday 必须是 0..6（0=周一）")
-            weekday_value = weekday
-            at_time = _validate_daily(weekly_at)
-            kind = SCHEDULE_WEEKLY
-            interval = 0
-            next_run_at = _next_weekly(now, at_time, weekday_value, tz_name)
-
-        if next_run_at <= now:
-            raise InvalidInputError("提醒时间必须在未来")
-        if next_run_at > now + MAX_FUTURE_SECONDS:
-            raise InvalidInputError("提醒时间不能超过 2 年")
+        _validate_next_run(now, next_run_at)
 
         spec = ScheduleSpec(
             owner_id=principal.user_id,
@@ -181,6 +144,71 @@ class SchedulingService:
         self._require_schedule_access(actor, schedule_id)
         self.repo.set_enabled(schedule_id, enabled)
         return self.repo.get(schedule_id)
+
+    def update(
+        self,
+        actor,
+        schedule_id: str,
+        *,
+        title: str | None = None,
+        text: str | None = None,
+        target: DeliveryTarget | None = None,
+        at: str | None = None,
+        every_seconds: int | None = None,
+        daily_at: str | None = None,
+        weekly_at: str | None = None,
+        weekday: int | None = None,
+        timezone: str | None = None,
+        enabled: bool | None = None,
+    ) -> ScheduleView:
+        self._require_schedule_access(actor, schedule_id)
+        with self.db.transaction() as conn:
+            schedule = self.repo.get_tx(conn, schedule_id)
+            if text is not None and schedule.content_kind != CONTENT_BRIEFING and not text.strip():
+                raise InvalidInputError("提醒内容不能为空")
+            if target is not None and not target.ref:
+                raise InvalidInputError("提醒目标不能为空")
+            updated = replace(
+                schedule,
+                title=schedule.title if title is None else title.strip()[:120],
+                text=schedule.text if text is None else text,
+                target=schedule.target if target is None else target,
+                enabled=schedule.enabled if enabled is None else enabled,
+                timezone=schedule.timezone if timezone is None else _validate_timezone(timezone),
+            )
+            timing_supplied = any(value is not None for value in (at, every_seconds, daily_at, weekly_at))
+            if not timing_supplied:
+                if weekday is not None and schedule.kind != SCHEDULE_WEEKLY:
+                    raise InvalidInputError("weekday 仅用于每周提醒")
+                timezone_changed = updated.timezone != schedule.timezone
+                if schedule.kind == SCHEDULE_DAILY and timezone_changed:
+                    daily_at = schedule.at_time
+                if schedule.kind == SCHEDULE_WEEKLY and (timezone_changed or weekday is not None):
+                    weekly_at = schedule.at_time
+                timing_supplied = daily_at is not None or weekly_at is not None
+            if timing_supplied:
+                now = self.clock()
+                if weekday is None and weekly_at and schedule.kind == SCHEDULE_WEEKLY:
+                    weekday = schedule.weekday
+                kind, next_run_at, interval, at_time, weekday_value = _timing(
+                    now, updated.timezone, at or "", every_seconds or 0, daily_at or "", weekly_at or "", weekday,
+                )
+                timing_changed = (kind, interval, at_time, weekday_value) != (
+                    schedule.kind, schedule.interval_seconds, schedule.at_time, schedule.weekday,
+                ) or (
+                    kind == SCHEDULE_ONCE and next_run_at != schedule.next_run_at
+                ) or (
+                    kind in (SCHEDULE_DAILY, SCHEDULE_WEEKLY) and updated.timezone != schedule.timezone
+                )
+                if timing_changed:
+                    _validate_next_run(now, next_run_at)
+                    updated = replace(
+                        updated, kind=kind, next_run_at=next_run_at,
+                        interval_seconds=interval, at_time=at_time, weekday=weekday_value,
+                    )
+            if updated != schedule:
+                self.repo.update_tx(conn, updated)
+            return updated
 
     def cancel(self, actor, schedule_id: str) -> ScheduleView:
         return self.set_enabled(actor, schedule_id, False)
@@ -243,10 +271,14 @@ class SchedulingService:
         """处理到期计划；返回新建的 delivery id 或 briefing job id 列表。"""
         current = self.clock() if now is None else float(now)
         created: list[str] = []
-        for schedule in self.repo.due(current):
-            slot, missed, next_run_at, enabled = _next_slot(schedule, current)
-            scheduled_at = _iso_from_epoch(slot)
+        for candidate in self.repo.due(current):
             with self.db.transaction() as conn:
+                # 编辑、暂停和其他 tick 都可能在读取候选后先提交。
+                schedule = self.repo.get_due_tx(conn, candidate.schedule_id, current)
+                if schedule is None:
+                    continue
+                slot, missed, next_run_at, enabled = _next_slot(schedule, current)
+                scheduled_at = _iso_from_epoch(slot)
                 occurrence_id, inserted = self.repo.insert_occurrence_tx(
                     conn, schedule.schedule_id, scheduled_at, missed=missed,
                 )
@@ -314,6 +346,38 @@ def _validate_timezone(name: str) -> str:
     except Exception as exc:  # noqa: BLE001  ZoneInfoNotFoundError/ValueError
         raise InvalidInputError(f"无效时区: {name}") from exc
     return name
+
+
+def _timing(
+    now: float, timezone: str, at: str, every_seconds: int, daily_at: str, weekly_at: str, weekday: int | None,
+) -> tuple[str, float, int, str, int]:
+    if sum(bool(value) for value in (at, every_seconds, daily_at, weekly_at)) != 1:
+        raise InvalidInputError("必须且只能指定 at / every_seconds / daily_at / weekly_at 之一")
+    if at:
+        return SCHEDULE_ONCE, _parse_at(at, timezone), 0, "", 0
+    if every_seconds:
+        interval = int(every_seconds)
+        if interval < MIN_INTERVAL_SECONDS:
+            raise InvalidInputError(f"重复间隔不能小于 {MIN_INTERVAL_SECONDS} 秒")
+        if interval > MAX_FUTURE_SECONDS:
+            raise InvalidInputError("提醒时间不能超过 2 年")
+        return SCHEDULE_INTERVAL, now + interval, interval, "", 0
+    if daily_at:
+        at_time = _validate_daily(daily_at)
+        return SCHEDULE_DAILY, _next_daily(now, at_time, timezone), 0, at_time, 0
+    if weekday is None:
+        raise InvalidInputError("weekly_at 必须同时给 weekday（0=周一…6=周日）")
+    if not isinstance(weekday, int) or not 0 <= weekday <= 6:
+        raise InvalidInputError("weekday 必须是 0..6（0=周一）")
+    at_time = _validate_daily(weekly_at)
+    return SCHEDULE_WEEKLY, _next_weekly(now, at_time, weekday, timezone), 0, at_time, weekday
+
+
+def _validate_next_run(now: float, next_run_at: float) -> None:
+    if next_run_at <= now:
+        raise InvalidInputError("提醒时间必须在未来")
+    if next_run_at > now + MAX_FUTURE_SECONDS:
+        raise InvalidInputError("提醒时间不能超过 2 年")
 
 
 def _parse_iso_datetime(

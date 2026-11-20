@@ -115,54 +115,16 @@ export const useChatStore = defineStore('chat', () => {
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content = content
       if (metadata) {
-        // 保留已有的 thinkingProcesses（除非 metadata 显式覆盖）
-        if (!metadata.thinkingProcesses && lastMsg.thinkingProcesses?.length) {
-          metadata.thinkingProcesses = lastMsg.thinkingProcesses
-        }
         Object.assign(lastMsg, metadata)
       }
     }
   }
 
-  /** 将当前积累的文本保存为一步思考过程（stream_reset 时调用） */
-  function appendThinkingProcess(content: string, chatId?: string) {
-    if (!content || !content.trim()) return
-    const cid = chatId || currentChatId.value
-    // 如果会话已被 LRU 淘汰，跳过写入
-    const msgs = cid ? messagesByChat[cid] : undefined
-    if (!msgs || msgs.length === 0) return
-    const lastMsg = msgs[msgs.length - 1]
-    if (lastMsg && lastMsg.role === 'assistant') {
-      if (!lastMsg.thinkingProcesses) {
-        lastMsg.thinkingProcesses = []
-      }
-      // 去重：检查是否已存在相似内容（包含关系或高相似度）
-      const trimmedContent = content.trim()
-      const exists = lastMsg.thinkingProcesses.some(tp => {
-        const existing = tp.content.trim()
-        // 完全相同
-        if (existing === trimmedContent) return true
-        // 包含关系
-        if (existing.includes(trimmedContent) || trimmedContent.includes(existing)) return true
-        // 高相似度（去掉标点后比较）
-        const normalize = (s: string) => s.replace(/[，。！？、：；""''（）\s]/g, '')
-        const n1 = normalize(existing)
-        const n2 = normalize(trimmedContent)
-        if (n1 === n2) return true
-        // 相似度 > 80%
-        if (n1.length > 0 && n2.length > 0) {
-          const longer = n1.length > n2.length ? n1 : n2
-          const shorter = n1.length > n2.length ? n2 : n1
-          if (longer.includes(shorter) && shorter.length / longer.length > 0.8) return true
-        }
-        return false
-      })
-      if (!exists) {
-        lastMsg.thinkingProcesses.push({
-          content: trimmedContent,
-          timestamp: new Date().toISOString(),
-        })
-      }
+  function appendToolName(name: string, chatId: string) {
+    const messages = messagesByChat[chatId]
+    const last = messages?.[messages.length - 1]
+    if (last?.role === 'assistant' && name.trim()) {
+      (last.toolNames ??= []).push(name)
     }
   }
 
@@ -370,7 +332,7 @@ export const useChatStore = defineStore('chat', () => {
     setMessages,
     addMessage,
     updateLastAssistantMessage,
-    appendThinkingProcess,
+    appendToolName,
     clearMessages,
     getMessages,
     resetAll,

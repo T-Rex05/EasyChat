@@ -441,7 +441,14 @@ def _adopt_live_compression_child(
 
     agent._session_db_created = True
     if child.get("system_prompt"):
-        agent._cached_system_prompt = child["system_prompt"]
+        prompt = child["system_prompt"]
+        if getattr(agent, "platform", None) in ("easychat", "easychat-coding"):
+            from agent.conversation_loop import _stored_prompt_matches_runtime
+
+            if not _stored_prompt_matches_runtime(agent, prompt):
+                prompt = None
+                agent._cached_system_prompt_static = None
+        agent._cached_system_prompt = prompt
     agent._last_flushed_db_idx = len(recovered)
     agent._flushed_db_message_session_id = child_session_id
     agent._flushed_db_message_ids = {

@@ -1,4 +1,4 @@
-// 认证 API：登录/注册/验证/刷新
+// 认证 API：登录/验证/刷新
 
 import request from './request'
 import type { LoginRequest, LoginResponse, User } from '@/types/auth'
@@ -8,14 +8,6 @@ import type { LoginRequest, LoginResponse, User } from '@/types/auth'
  */
 export async function login(data: LoginRequest): Promise<LoginResponse> {
   const response = await request.post<LoginResponse>('/api/auth/login', data)
-  return response.data
-}
-
-/**
- * 用户注册
- */
-export async function register(data: LoginRequest): Promise<LoginResponse> {
-  const response = await request.post<LoginResponse>('/api/auth/register', data)
   return response.data
 }
 

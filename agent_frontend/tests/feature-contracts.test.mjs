@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { isAxiosError } from 'axios'
 import ts from 'typescript'
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 function readSource(path) {
   return readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8')
@@ -28,9 +29,9 @@ function evaluate(source, bindings, exposed) {
   )
 }
 
-function view(path, request, exposed) {
+function view(path, request, exposed, auth = {}) {
   return evaluate(readSource(`views/${path}.vue`), {
-    request, ref, reactive, computed, onMounted() {},
+    request, ref, reactive, computed, watch, isAxiosError, onMounted() {}, useAuthStore: () => auth,
   }, exposed)
 }
 
@@ -48,10 +49,12 @@ test('manual memory uses a supported, user-confirmed source type', async () => {
   assert.equal(submitted.body.pinned, true)
 })
 
+const skillOwner = { userId: '7', ready: true, permissions: ['skill.create'] }
+
 test('successive skill activations submit the latest expected active version', async () => {
   let active = null
   const activations = []
-  const skill = () => ({ skill_id: 'skill-1', name: 'demo', active_version_id: active })
+  const skill = () => ({ skill_id: 'skill-1', owner_id: 7, name: 'demo', active_version_id: active })
   const skills = view('SkillsView', {
     async post(url, body) {
       activations.push(body)
@@ -62,8 +65,8 @@ test('successive skill activations submit the latest expected active version', a
     async get(url) {
       return { data: url === '/api/skills' ? { skills: [skill()] } : { skill: skill(), versions: [], content: '' } }
     },
-  }, ['activate', 'selected', 'error'])
-  skills.selected.value = skill()
+  }, ['activate', 'openSkill', 'error'], skillOwner)
+  await skills.openSkill('skill-1')
   await skills.activate('v1')
   assert.equal(skills.error.value, '')
   await skills.activate('v2')
@@ -79,11 +82,51 @@ test('stale skill activation keeps the conflict visible and preserves local vers
       assert.equal(body.expected_active_version_id, 'stale-v1')
       throw new Error('技能激活指针已变化')
     },
-  }, ['activate', 'selected', 'error'])
-  skills.selected.value = { skill_id: 'skill-1', active_version_id: 'stale-v1' }
+  }, ['activate', 'selected', 'historyDialog', 'comparisonError'], skillOwner)
+  skills.selected.value = { skill_id: 'skill-1', owner_id: 7, active_version_id: 'stale-v1' }
+  skills.historyDialog.value = { open: true }
   await skills.activate('v2')
-  assert.equal(skills.error.value, '技能激活指针已变化')
+  assert.equal(skills.comparisonError.value, '技能激活指针已变化')
   assert.equal(skills.selected.value.active_version_id, 'stale-v1')
+})
+
+test('revoked skill management clears previously visible foreign content and reloads only personal skills', async () => {
+  const refresh = deferred()
+  const auth = reactive({
+    ...skillOwner,
+    permissions: ['skill.create', 'skill.manage'],
+    async verify() {
+      await refresh.promise
+      auth.permissions = ['skill.create']
+    },
+  })
+  const foreignSkill = { skill_id: 'foreign', owner_id: 12, name: 'other', active_version_id: 'v1' }
+  const requests = []
+  const skills = view('SkillsView', {
+    async get(url, config) {
+      if (url === '/api/skills') {
+        requests.push(config.params.all_owners)
+        return { data: { skills: config.params.all_owners ? [foreignSkill] : [] } }
+      }
+      return { data: { skill: foreignSkill, versions: [], content: '# Private content' } }
+    },
+    async patch() {
+      throw Object.assign(new Error('无权访问该技能'), { isAxiosError: true, response: { status: 403 } })
+    },
+  }, ['changeScope', 'openSkill', 'patch', 'selected', 'persistedContent', 'canManageSkills'], auth)
+  skills.changeScope({ target: { value: 'all' } })
+  await skills.openSkill('foreign')
+  assert.equal(skills.persistedContent.value, '# Private content')
+
+  await skills.patch({ pinned: true })
+  assert.equal(skills.selected.value, null)
+  assert.equal(skills.persistedContent.value, '')
+  assert.equal(skills.canManageSkills.value, false)
+
+  refresh.resolve()
+  await settle()
+  assert.deepEqual(requests, [false, true, false])
+  assert.equal(skills.canManageSkills.value, false)
 })
 
 function platformApi(request) {
@@ -92,7 +135,7 @@ function platformApi(request) {
 
 test('platform configuration preserves the custom service URL', async () => {
   let submitted
-  const api = platformApi({ async post(url, body) { submitted = { url, body } } })
+  const api = platformApi({ async post(url, body) { submitted = { url, body }; return { data: { account: { id: 'pk' } } } } })
   await api.savePlatformConfig('wechat', {
     config_json: { account_id: ' account-1 ', token: ' token ', base_url: ' https://wechat.example/api ' },
     enabled: true,
@@ -114,26 +157,163 @@ test('user binding sends the bot account separately from the external user', asy
   assert.deepEqual(result, { ok: true, id: 'binding-1' })
 })
 
-test('manual WeChat binding passes the entered account through to the binding API', async () => {
-  const posts = []
-  const api = platformApi({
-    async post(url, body) { posts.push({ url, body }); return { data: { binding: { id: 'binding-1' } } } },
-  })
-  const source = readSource('views/ConfigView.vue').match(/<script setup[^>]*>([\s\S]*?)<\/script>/)[1]
-  const parsed = ts.createSourceFile('ConfigView.ts', source, ts.ScriptTarget.Latest, true)
-  const handler = parsed.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === 'submitManualBind')
-  const bindings = {
-    ...api,
-    manualBindForm: { token: ' token ', account_id: ' bot-1 ', base_url: 'https://wechat.example', wxid: ' user-2 ', nickname: '用户' },
-    savingManual: ref(false), manualBindMsg: ref(''), manualBindOk: ref(false), showManualBind: ref(true),
-    isSuperAdmin: ref(true), async loadWechatConfig() {}, async loadWechatBinding() {},
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
+const settle = () => new Promise(resolve => setImmediate(resolve))
+
+function channelView({ manage = true, handle } = {}) {
+  const calls = []
+  async function respond(method, url, body) {
+    calls.push({ method, url, body })
+    const override = await handle?.(method, url, body)
+    if (override !== undefined) return { data: override }
+    if (url === '/api/system/module-status') return { data: { channels: { assembled: true, state: 'ready', reason: '' } } }
+    if (url.endsWith('/accounts') && method === 'POST') return { data: { account: { id: 'pk' } } }
+    if (url.endsWith('/bindings') && method === 'POST') return { data: { binding: { id: 'binding-1' } } }
+    if (url.endsWith('/accounts/pk/start')) return { data: { listener: { status: 'starting' } } }
+    if (url.endsWith('/qr/start')) return { data: { qr: { session_id: 'qr-1', status: 'wait' } } }
+    if (url.endsWith('/accounts')) return { data: { accounts: [] } }
+    if (url.endsWith('/bindings')) return { data: { bindings: [] } }
+    throw new Error('Unexpected request ' + url)
   }
-  const { submitManualBind } = evaluate(handler.getText(parsed), bindings, ['submitManualBind'])
-  await submitManualBind()
-  assert.equal(bindings.manualBindOk.value, true)
+  const request = {
+    get: url => respond('GET', url),
+    post: (url, body) => respond('POST', url, body),
+  }
+  const api = evaluate(readSource('api/platform.ts'), { request }, ['...exports'])
+  const timers = new Set()
+  function schedule(fn, repeat) {
+    const tick = () => {
+      if (!repeat) timers.delete(tick)
+      return fn()
+    }
+    timers.add(tick)
+    return tick
+  }
+  let mounted, unmounted
+  const empty = async () => ({})
+  const ui = evaluate(readSource('views/ConfigView.vue'), {
+    ...api, computed, ref, reactive, watch,
+    onMounted(fn) { mounted = fn }, onUnmounted(fn) { unmounted = fn },
+    useAuthStore: () => ({ ready: true, user: { id: 7 }, userId: '7', hasPerm: perm => manage && perm === 'system.manage' }),
+    getModelConfigs: empty, getFallbackChain: empty, getAvailableScenes: empty, getSceneRouting: empty,
+    getEmailConfigs: empty, getPersonalEmails: empty, fetch: empty,
+    alert() {}, localStorage: { getItem() { return '' } },
+    setInterval: fn => schedule(fn, true), clearInterval: fn => timers.delete(fn),
+    setTimeout: fn => schedule(fn, false), clearTimeout: fn => timers.delete(fn),
+  }, ['manualBindForm', 'submitManualBind', 'retryListener', 'startQrBind', 'qrStatus', 'wechatBinding', 'channelActionMsg'])
+  mounted()
+  return { ui, calls, timers, unmount: () => unmounted() }
+}
+
+test('channel mount waits for module status and disabled actions send no channel requests', async () => {
+  const status = deferred()
+  const { ui, calls } = channelView({ handle: (_, url) => url.endsWith('/module-status') ? status.promise : undefined })
+  await settle()
+  assert.deepEqual(calls.map(c => c.url), ['/api/system/module-status'])
+  status.resolve({ channels: { assembled: false, state: 'disabled', reason: '管理员未开启' } })
+  await settle()
+  Object.assign(ui.manualBindForm, { token: 'token', account_id: 'bot', wxid: 'user' })
+  await ui.submitManualBind()
+  await ui.startQrBind()
+  assert.deepEqual(calls.map(c => c.url), ['/api/system/module-status'])
+})
+
+test('member loads own binding without accessing accounts or management APIs', async () => {
+  const { calls, ui } = channelView({ manage: false, handle: (_, url) => {
+    if (url.endsWith('/bindings')) return { bindings: [{ user_id: 7, id: 'mine', external_user_id: 'self', platform: 'wechat', status: 'active' }] }
+  } })
+  await settle()
+  assert.equal(ui.wechatBinding.value?.open_id, 'self')
+  await ui.startQrBind()
+  assert.deepEqual(calls.map(c => c.url), ['/api/system/module-status', '/api/channels/bindings'])
+})
+
+test('manual binding requires the sender ID, binds that sender, then starts the saved account', async () => {
+  const { calls, ui } = channelView({ handle: (method, url) => {
+    if (url.endsWith('/bindings') && method === 'GET') return { bindings: [{ user_id: 8, external_user_id: 'other-owner', platform: 'wechat', status: 'active' }] }
+  } })
+  await settle()
+  assert.equal(ui.wechatBinding.value, null)
+  Object.assign(ui.manualBindForm, { token: ' token ', account_id: ' bot-1 ', base_url: 'https://wechat.example' })
+  await ui.submitManualBind()
+  assert.equal(calls.filter(c => c.method === 'POST').length, 0)
+  ui.manualBindForm.wxid = ' user-2 '
+  await ui.submitManualBind()
+  const posts = calls.filter(c => c.method === 'POST')
+  assert.deepEqual(posts.map(c => c.url), ['/api/channels/accounts', '/api/channels/bindings', '/api/channels/accounts/pk/start'])
   assert.equal(posts[0].body.base_url, 'https://wechat.example')
   assert.equal(posts[1].body.account_id, 'bot-1')
   assert.equal(posts[1].body.external_user_id, 'user-2')
+})
+
+test('QR polls serially and ignores an in-flight confirmation after leaving the page', async () => {
+  const pending = deferred()
+  const { calls, ui, timers, unmount } = channelView({ handle: (_, url) => url.endsWith('/qr/qr-1') ? pending.promise : undefined })
+  await settle()
+  await ui.startQrBind()
+  assert.equal(timers.size, 1)
+  const tick = [...timers][0]
+  const poll = tick()
+  await settle()
+  assert.equal(timers.size, 0)
+  unmount()
+  pending.resolve({ qr: { status: 'confirmed' } })
+  await poll
+  await settle()
+  assert.ok(!calls.some(c => c.url.endsWith('/bind')))
+  assert.equal(timers.size, 0)
+})
+
+test('listener failure keeps the binding visible and retry only starts the listener', async () => {
+  let starts = 0
+  let bound = false
+  const { calls, ui } = channelView({ handle(method, url) {
+    if (method === 'POST' && url.endsWith('/bindings')) bound = true
+    if (method === 'GET' && url.endsWith('/bindings') && bound) {
+      return { bindings: [{ user_id: 7, external_user_id: 'user', platform: 'wechat', status: 'active' }] }
+    }
+    if (url.endsWith('/pk/start') && ++starts === 1) return { listener: { status: 'error', last_error: '无法建立连接' } }
+  } })
+  await settle()
+  Object.assign(ui.manualBindForm, { token: 'token', account_id: 'bot', wxid: 'user' })
+  await ui.submitManualBind()
+  assert.equal(ui.wechatBinding.value?.open_id, 'user')
+  assert.match(ui.channelActionMsg.value, /无法建立连接/)
+  const count = calls.length
+  await ui.retryListener()
+  assert.deepEqual(calls.slice(count).map(c => c.url), ['/api/channels/accounts/pk/start'])
+})
+
+test('QR displays scanned status and reports a saved bot without a user binding', async () => {
+  let polls = 0
+  const { calls, ui, timers } = channelView({ handle(_, url) {
+    if (url.endsWith('/qr/qr-1')) return { qr: { status: ++polls === 1 ? 'scanned' : 'confirmed' } }
+    if (url.endsWith('/bind')) return { account: { id: 'pk', has_credentials: true }, binding: null, listener: { status: 'running' } }
+  } })
+  await settle()
+  await ui.startQrBind()
+  await [...timers][0]()
+  assert.equal(ui.qrStatus.value, 'scanned')
+  await [...timers][0]()
+  assert.equal(calls.filter(c => c.url.endsWith('/bind')).length, 1)
+  assert.match(ui.channelActionMsg.value, /缺少发送者 ID/)
+  assert.equal(timers.size, 0)
+})
+
+test('QR poll failure stops polling and displays the service error', async () => {
+  const { ui, timers } = channelView({ handle(_, url) {
+    if (url.endsWith('/qr/qr-1')) throw new Error('扫码服务暂时不可用')
+  } })
+  await settle()
+  await ui.startQrBind()
+  await [...timers][0]()
+  assert.match(ui.channelActionMsg.value, /扫码服务暂时不可用/)
+  assert.equal(timers.size, 0)
 })
 
 test('mood opt-in keeps boolean API values consistent with the visible switch', async () => {

@@ -49,7 +49,7 @@ from backend.modules.superagent.verification import MAX_VERIFY_COMMANDS, load_ve
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
 from backend.shared.crypto import decrypt_secret, encrypt_secret
-from backend.shared.errors import ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.errors import ForbiddenError, InvalidInputError, NotFoundError, UnauthenticatedError
 
 logger = logging.getLogger(__name__)
 
@@ -271,21 +271,35 @@ class SuperagentService:
     def list_tasks(
         self, principal: Principal, *, limit: int = 50,
         cursor_created_at: str = "", cursor_id: str = "",
-        status: str = "",
+        status: str = "", owner_id: int | None = None,
     ) -> list[SuperagentTask]:
         self.access.validate_principal(principal)
         self.access.require_permission(principal, "superagent.view")
-        tasks = (
-            self.repo.list_all(limit=limit, cursor_created_at=cursor_created_at, cursor_id=cursor_id)
-            if self._can_manage(principal)
-            else self.repo.list_for_owner(
-                principal.user_id, limit=limit,
+        if self._can_manage(principal):
+            if owner_id is not None:
+                try:
+                    owner = self.access.snapshot_principal(owner_id)
+                except (ForbiddenError, UnauthenticatedError):
+                    raise ForbiddenError("该用户不可用于筛选任务") from None
+                if not self._has(owner, "superagent.view"):
+                    raise ForbiddenError("该用户不可用于筛选任务")
+            return self.repo.list_all(
+                limit=limit, owner_id=owner_id, status=status,
                 cursor_created_at=cursor_created_at, cursor_id=cursor_id,
             )
+        if owner_id is not None and owner_id != principal.user_id:
+            raise ForbiddenError("无权查看其他用户的任务")
+        return self.repo.list_for_owner(
+            principal.user_id, limit=limit, status=status,
+            cursor_created_at=cursor_created_at, cursor_id=cursor_id,
         )
-        if status:
-            tasks = [t for t in tasks if t.status == status]
-        return tasks
+
+    def list_task_users(self, principal: Principal) -> list[dict[str, int | str]]:
+        self.access.validate_principal(principal)
+        self.access.require_permission(principal, "superagent.view")
+        return self.access.list_users_with_permission(
+            principal, permission="superagent.view", manage_permission="superagent.manage",
+        )
 
     def get_task(self, principal: Principal, task_id: str) -> SuperagentTask:
         return self._task_for(principal, task_id)

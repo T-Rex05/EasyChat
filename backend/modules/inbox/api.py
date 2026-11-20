@@ -226,6 +226,7 @@ class InboxService:
         return self.repo.update(owner_id, item_id, **updates)
 
     def _owned(self, principal: Principal, item_id: str) -> InboxItem:
+        self.access.require_permission(principal, "chat.use")
         item = self.repo.get(principal.user_id, item_id)
         if item is None:
             raise NotFoundError("收件箱条目不存在")

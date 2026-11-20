@@ -29,7 +29,7 @@ function makeStore() {
     updateLastAssistantMessage: (content, meta, cid) => {
       const msgs = messagesByChat[cid || store.currentChatId] || []
       const last = msgs[msgs.length - 1]
-      if (last && last.role === 'assistant') last.content = content
+      if (last?.role === 'assistant') Object.assign(last, { content }, meta)
     },
     createStreamingSession: (cid, clientMsgId) => {
       const s = { chatId: cid, clientMsgId, status: 'streaming' }
@@ -123,6 +123,7 @@ test('A 完成只清理自己,不误关 B 的连接(B 流继续)', async () => {
   await send(chat, store, api, '问题 B', 'B')
   assert.equal(api.streams.length, 2)
   assert.equal(api.streams[0].closed, false)
+  api.streams[0].callbacks.onStart('A', 'run-a')
   api.streams[0].callbacks.onComplete({ final_content: 'A 的回答' })
   assert.equal(api.streams[0].closed, true, 'A 完成只关自己的连接')
   assert.equal(api.streams[1].closed, false, 'B 的连接不得被误关(缺陷①)')
@@ -130,6 +131,7 @@ test('A 完成只清理自己,不误关 B 的连接(B 流继续)', async () => {
   api.streams[1].callbacks.onComplete({ final_content: 'B 的回答' })
   assert.equal(api.streams[1].closed, true)
   assert.equal(store.getMessages('A').at(-1)?.content, 'A 的回答', 'A 的结果写入 A 会话')
+  assert.equal(store.getMessages('A').at(-1)?.run_id, 'run-a', '记忆入口归属已完成的运行')
   assert.equal(store.getMessages('B').at(-1)?.content, 'B 的回答', 'B 的结果写入 B 会话')
 })
 

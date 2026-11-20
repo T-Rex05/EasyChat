@@ -129,8 +129,7 @@ def build_models_router(service: ModelsService, authenticate: Any) -> APIRouter:
     @router.post("/api/model-configs/{config_id}/test")
     async def test_config(config_id: int,
                           authorization: Annotated[str | None, Header()] = None):
-        _principal(authorization)
-        raise CapabilityUnavailableError("真实模型连通性测试需要外部网络，离线环境不启用")
+        return await service.test_connection(_principal(authorization), config_id)
 
     @router.get("/api/model-routes/fallback-chain")
     async def get_fallback(authorization: Annotated[str | None, Header()] = None):
