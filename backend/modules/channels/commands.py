@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from backend.modules.channels.contracts import ChannelTarget, InboundMessage
+from backend.modules.memory.contracts import MemoryRecord
 from backend.modules.ledger.contracts import (
     LedgerAlreadyCommitted,
     LedgerControlMismatch,
@@ -32,10 +33,22 @@ class ProfilesCommands(Protocol):
 
 
 class MemoryCommands(Protocol):
-    def list(self, actor: Principal, *, limit: int) -> list[Any]: ...
+    def list(
+        self, actor: Principal, *, limit: int, persona_id: str | None, all_personas: bool,
+    ) -> list[MemoryRecord]: ...
+    def get(
+        self, actor: Principal, memory_id: str, *, persona_id: str | None, all_personas: bool,
+    ) -> MemoryRecord: ...
+    def revise_from_channel(
+        self, actor: Principal, memory_id: str, expected_version: int, *,
+        content: str, event_id: str, persona_id: str | None,
+    ) -> tuple[str, int]: ...
+    def channel_revision_receipt(
+        self, actor: Principal, event_id: str, *, persona_id: str | None,
+    ) -> tuple[str, int] | None: ...
     def forget(
         self, actor: Principal, *, memory_id: str = "", query: str = "",
-        reason: str = "",
+        reason: str = "", persona_id: str | None = None, all_personas: bool = True,
     ) -> Any: ...
 
 
@@ -79,7 +92,8 @@ class WeChatCommands:
         self.services = services
 
     async def handle(
-        self, principal: Principal, message: InboundMessage, session_id: str
+        self, principal: Principal, message: InboundMessage, session_id: str,
+        *, event_id: str = "", persona_id: str | None = None,
     ) -> tuple[str, str] | None:
         text = message.text.strip()
         if not text.startswith("/"):
@@ -96,9 +110,11 @@ class WeChatCommands:
         if command in ("/人设", "/persona"):
             return self._persona(principal, parts), session_id
         if command in ("/记忆", "/memory"):
-            return self._memory_list(principal, parts), session_id
+            return self._memory_list(principal, parts, persona_id=persona_id), session_id
+        if command in ("/纠正", "/correct"):
+            return self._memory_correct(principal, text, event_id, persona_id=persona_id), session_id
         if command in ("/忘掉", "/forget"):
-            return self._memory_forget(principal, parts), session_id
+            return self._memory_forget(principal, parts, persona_id=persona_id), session_id
         if command in ("/简报", "/briefing"):
             return await self._briefing(principal, parts), session_id
         if command in ("/存", "/save"):
@@ -169,11 +185,26 @@ class WeChatCommands:
         except AppError as exc:
             return f"人设设置失败：{exc}"
 
-    def _memory_list(self, principal: Principal, parts: list[str]) -> str:
-        if self.services.memory is None:
+    def _memory_list(self, principal: Principal, parts: list[str], *, persona_id: str | None) -> str:
+        memory = self.services.memory
+        if memory is None:
             return "记忆功能未启用。"
+        if len(parts) > 2:
+            return "用法：/记忆 或 /记忆 <记忆ID>"
         try:
-            records = self.services.memory.list(principal, limit=10)
+            if len(parts) == 2:
+                item = memory.get(principal, parts[1], persona_id=persona_id, all_personas=False)
+                labels = {
+                    "manual": "手动", "user": "手动", "message": "消息",
+                    "channel_event": "微信", "event": "事件", "run": "对话",
+                }
+                sources = "、".join(sorted({labels.get(ref.kind, "其他") for ref in item.source_refs}))
+                return (
+                    f"{item.memory_id[:12]}（版本 {item.version}）\n"
+                    f"{item.content[:240]}\n来源：{sources or '未记录'}，"
+                    f"记录于 {item.recorded_at[:10]}。"
+                )
+            records = memory.list(principal, limit=10, persona_id=persona_id, all_personas=False)
         except AppError as exc:
             return f"读取记忆失败：{exc}"
         if not records:
@@ -181,30 +212,72 @@ class WeChatCommands:
         lines = ["我记住的最近 10 条："]
         for item in records:
             lines.append(
-                f"• [{item.kind}] {item.content[:60]}（{item.recorded_at[:10]}，"
-                f"{item.memory_id[:12]}）"
+                f"• [{item.kind}] {item.content[:45]}（{item.recorded_at[:10]}，"
+                f"{item.memory_id[:12]}@{item.version}）"
             )
         return "\n".join(lines)
 
-    def _memory_forget(self, principal: Principal, parts: list[str]) -> str:
+    def _memory_correct(
+        self, principal: Principal, text: str, event_id: str, *, persona_id: str | None,
+    ) -> str:
+        memory = self.services.memory
+        if memory is None:
+            return "记忆功能未启用。"
+        parts = text.split(maxsplit=2)
+        usage = "用法：/纠正 <记忆ID>@<版本> <新内容>"
+        if len(parts) == 1:
+            return usage
+        prefix, separator, version = parts[1].partition("@")
+        try:
+            if not separator and len(parts) == 2:
+                item = memory.get(principal, prefix, persona_id=persona_id, all_personas=False)
+                # 保留用户输入的长度，避免用更短的 ID 提示时引入歧义。
+                return f"当前版本 {item.version}。发送 /纠正 {prefix}@{item.version} <新内容>"
+            if len(parts) != 3 or not version.isascii() or not version.isdecimal() or len(version) > 19:
+                return usage
+            expected = int(version)
+            if expected < 1 or expected > 2**63 - 1:
+                return usage
+            memory_id, revised_version = memory.revise_from_channel(
+                principal, prefix, expected, content=parts[2], event_id=event_id, persona_id=persona_id,
+            )
+            return self._correction_reply(memory_id, revised_version)
+        except AppError as exc:
+            return f"纠正记忆失败：{exc}"
+
+    def previous_memory_correction(
+        self, principal: Principal, event_id: str, *, persona_id: str | None,
+    ) -> str | None:
+        memory = self.services.memory
+        if memory is None:
+            return None
+        try:
+            receipt = memory.channel_revision_receipt(principal, event_id, persona_id=persona_id)
+        except AppError:
+            return None
+        return self._correction_reply(*receipt) if receipt is not None else None
+
+    @staticmethod
+    def _correction_reply(memory_id: str, version: int) -> str:
+        return f"已纠正 {memory_id[:12]}（版本 {version}）。"
+
+    def _memory_forget(
+        self, principal: Principal, parts: list[str], *, persona_id: str | None,
+    ) -> str:
         memory = self.services.memory
         if memory is None:
             return "记忆功能未启用。"
         query = " ".join(parts[1:]).strip()
         if not query:
             return "用法：/忘掉 <记忆ID前缀或关键词>"
+        target = {"memory_id": query} if query.startswith("mem_") else {"query": query}
         try:
-            if query.startswith("mem_"):
-                records = memory.list(principal, limit=200)
-                matches = [r for r in records if r.memory_id.startswith(query)]
-                if len(matches) != 1:
-                    return f"找到 {len(matches)} 条匹配记忆，请提供更长的 ID 前缀。"
-                result = memory.forget(principal, memory_id=matches[0].memory_id, reason="wechat")
-            else:
-                result = memory.forget(principal, query=query, reason="wechat")
+            result = memory.forget(
+                principal, **target, reason="wechat", persona_id=persona_id, all_personas=False,
+            )
         except AppError as exc:
             return f"删除记忆失败：{exc}"
-        return f"已删除 {result.forgotten} 条相关记忆。"
+        return f"已删除 {result.forgotten} 条相关记忆。聊天原文和备份按各自的保留周期处理。"
 
     async def _briefing(self, principal: Principal, parts: list[str]) -> str:
         scheduling = self.services.scheduling

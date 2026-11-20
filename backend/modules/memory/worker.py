@@ -23,8 +23,11 @@ from backend.modules.memory.capture import (
     should_capture,
     should_extract,
 )
+from backend.modules.memory.contracts import MemoryCandidate
 from backend.modules.memory.extractor import ExtractionError
 from backend.platform.jobs import JobQueue
+from backend.shared.context import Principal
+from backend.shared.errors import ForbiddenError, NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +107,10 @@ class MemoryWorker:
             conn,
             kind=EXTRACT_JOB_KIND,
             dedup_key=f"memory:{run['id']}",
-            payload={"owner_id": int(run["owner_id"]), "run_id": str(run["id"])},
+            payload={
+                "owner_id": int(run["owner_id"]), "run_id": str(run["id"]),
+                "persona_id": run.get("persona_id"),
+            },
             owner_id=int(run["owner_id"]),
         )
 
@@ -200,6 +206,12 @@ class MemoryWorker:
             return None
         user_text, assistant_text = context
         principal = self.service.access.snapshot_principal(owner_id)
+        persona_id = payload.get("persona_id")
+        if persona_id is not None:
+            try:
+                self.service.require_active_persona(principal, persona_id)
+            except NotFoundError:
+                return "persona_inactive"
 
         if should_capture(user_text):
             # 缺陷①：明确"记住…"永远先走可信确定性提取——覆盖辅助模型
@@ -207,10 +219,9 @@ class MemoryWorker:
             candidate = candidate_from_user_message(run_id=run_id, text=user_text)
             if candidate is None:
                 return "no_candidate"
-            if not self._write(principal, candidate, run_id):
-                return "write_failed"
-            self._confirm(owner_id, run_id, candidate.content)
-            return "captured_deterministic"
+            return self._write(
+                principal, candidate, run_id, persona_id=persona_id, success="captured_deterministic",
+            )
 
         if self.generator is None:
             # 自然表达没有模型不可靠入库：fail-closed，状态可诊断。
@@ -252,48 +263,57 @@ class MemoryWorker:
             return "invalid_output"
         if candidate is None:
             return "no_candidate"
-        if not self._write(principal, candidate, run_id):
-            return "write_failed"
-        self._confirm(owner_id, run_id, candidate.content)
-        return "captured_model"
+        return self._write(principal, candidate, run_id, persona_id=persona_id, success="captured_model")
 
-    def _write(self, principal, candidate, run_id: str) -> bool:
-        """记忆写入：权限/fail-closed 校验在 service.remember_explicit 内；
-        失败按写入失败状态上报供重试。成功重放由内容去重保证幂等。"""
+    def _write(
+        self, principal: Principal, candidate: MemoryCandidate, run_id: str,
+        *, persona_id: str | None, success: str,
+    ) -> str:
         try:
-            self.service.remember_explicit(principal, candidate)
-        except Exception:  # noqa: BLE001  存储/校验失败区分状态，交重试
+            record = self.service.remember_explicit(principal, candidate, persona_id=persona_id)
+        except (ForbiddenError, NotFoundError):
+            return "write_rejected"
+        except Exception:  # noqa: BLE001  存储失败交给队列有界重试
             logger.exception("记忆写入失败 run=%s", run_id)
-            return False
-        return True
+            return "write_failed"
+        self._confirm(principal.user_id, run_id, record.memory_id, persona_id)
+        return success
 
-    def _confirm(self, owner_id: int, run_id: str, content: str) -> None:
-        """缺陷④：确认是持久意图（memory.confirm job），不在 extract 内
-        直接触达渠道。入队异常上抛 → extract job 有界重试：记忆写入幂等、
-        确认意图按 run 稳定 dedup 复用，不产生第二条。"""
-        if self.confirm_writer is None or not content:
+    def _confirm(self, owner_id: int, run_id: str, memory_id: str, persona_id: str | None) -> None:
+        """确认任务只存定位信息，消费时再读取当前可见记忆。"""
+        if self.confirm_writer is None:
             return
         self.queue.enqueue(
             kind=CONFIRM_JOB_KIND,
             dedup_key=f"memory-confirm:{run_id}",
             payload={
-                "owner_id": owner_id, "run_id": run_id,
-                "text": f"已记住：{content[:120]}",
+                "owner_id": owner_id, "run_id": run_id, "memory_id": memory_id,
+                "persona_id": persona_id,
             },
             owner_id=owner_id,
         )
 
     def _run_confirm(self, payload: dict) -> None:
-        """消费持久确认意图：会话消息 + 渠道回执由 bootstrap 注入的
-        confirm_writer 完成（其内部为独立小事务；异常上抛交队列重试）。"""
         if self.confirm_writer is None:
             return
         owner_id = int(payload.get("owner_id") or 0)
         run_id = str(payload.get("run_id") or "")
-        text = str(payload.get("text") or "")
-        if owner_id <= 0 or not run_id or not text:
+        if owner_id <= 0 or not run_id:
             return
-        self.confirm_writer(owner_id, run_id, text)
+        memory_id = payload.get("memory_id")
+        if not memory_id:
+            text = str(payload.get("text") or "")  # 旧版待处理确认
+            if text and not self.service.repo.source_is_forgotten(owner_id, run_id):
+                self.confirm_writer(owner_id, run_id, text)
+            return
+        try:
+            principal = self.service.access.snapshot_principal(owner_id)
+            record = self.service.get(
+                principal, memory_id, persona_id=payload.get("persona_id"), all_personas=False,
+            )
+        except (ForbiddenError, NotFoundError):
+            return
+        self.confirm_writer(owner_id, run_id, f"已记住：{record.content[:120]}")
 
     def extraction_status_counts(self) -> dict[str, int]:
         return dict(self._status_counts)

@@ -368,6 +368,7 @@ async def run_startup(registry: ModuleRegistry) -> None:
                     ),
                     voice_echo=registry.settings.voice_echo,
                     commands=WeChatCommands(command_services),
+                    profiles=registry.profiles,
                 )
             else:
                 logger.warning(
@@ -518,7 +519,7 @@ def make_memory_confirm(db, registry=None, target_provider=None):
     """WP-D：memory.confirm job 的执行体——会话内 assistant 消息 + 渠道回执(双通道)。
 
     由记忆 worker 作为持久 job 消费（缺陷④），异常上抛交队列有界重试。
-    缺陷⑤幂等：会话确认按稳定操作身份 (session, run, source='system', content)
+    缺陷⑤幂等：会话确认按稳定操作身份 (session, run, source='system')
     去重——与 memory.confirm dedup(`memory-confirm:{run}`)、delivery run 级
     dedup 同一身份链；租约恢复/重复消费只保留一次逻辑确认。
     渠道回执仅在原会话为 wechat 且绑定仍活跃时发送（真实路由解析，缺陷③）。
@@ -528,7 +529,9 @@ def make_memory_confirm(db, registry=None, target_provider=None):
     def _confirm(owner_id: int, run_id: str, text: str) -> None:
         conn = db.connect()
         try:
-            run_row = conn.execute("SELECT session_id FROM runs WHERE id=?", (run_id,)).fetchone()
+            run_row = conn.execute(
+                "SELECT session_id FROM runs WHERE id=? AND owner_id=?", (run_id, owner_id),
+            ).fetchone()
         finally:
             conn.close()
         if run_row is None:
@@ -536,13 +539,15 @@ def make_memory_confirm(db, registry=None, target_provider=None):
         session_id = str(run_row["session_id"])
         now = utc_now_iso()
         with db.transaction() as tx:
-            # 稳定操作身份：同 run 同文本已存在则整条确认视为已提交（幂等重放）。
+            # 同一 run 的确认重试沿用首次投影，即使记忆已修订。
             done = tx.execute(
-                "SELECT 1 FROM conversations WHERE session_id=? AND run_id=?"
-                " AND role='assistant' AND source='system' AND content=?",
-                (session_id, run_id, text),
+                "SELECT content FROM conversations WHERE session_id=? AND run_id=?"
+                " AND role='assistant' AND source='system' ORDER BY id LIMIT 1",
+                (session_id, run_id),
             ).fetchone()
-            if done is None:
+            if done is not None:
+                text = str(done["content"])
+            else:
                 cur = tx.execute(
                     "SELECT COALESCE(MAX(seq), 0) + 1 FROM conversations"
                     " WHERE session_id=? AND run_id=?",

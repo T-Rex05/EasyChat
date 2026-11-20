@@ -15,6 +15,7 @@ class RecallBody(BaseModel):
     query: str
     top_k: int = 5
     budget: int = 2000
+    persona_id: str | None = None
 
 
 class SourceRefBody(BaseModel):
@@ -34,6 +35,8 @@ class RememberBody(BaseModel):
     tags: list[str] = []
     supersedes: str | None = None
     pinned: bool = False
+    persona_id: str | None = None
+    is_shared: bool = False
 
 
 class ReviseBody(BaseModel):
@@ -41,6 +44,10 @@ class ReviseBody(BaseModel):
     content: str
     reason: str = ""
     source_refs: list[SourceRefBody] = []
+
+
+class SharingBody(BaseModel):
+    is_shared: bool
 
 
 class FeedbackBody(BaseModel):
@@ -64,6 +71,9 @@ def _record(record: MemoryRecord) -> dict[str, Any]:
         "source_refs": [{"kind": r.kind, "ref": r.ref, "quote": r.quote}
                         for r in record.source_refs],
         "scope": record.scope,
+        "persona_id": record.persona_id,
+        "is_shared": record.is_shared,
+        "supersedes": record.supersedes,
         "event_at": record.event_at,
         "recorded_at": record.recorded_at,
         "version": record.version,
@@ -76,7 +86,7 @@ def _record(record: MemoryRecord) -> dict[str, Any]:
 
 
 def _refs(items: list[SourceRefBody]) -> tuple[SourceRef, ...]:
-    return tuple(SourceRef(kind=i.kind, ref=i.ref, quote=i.quote) for i in items if i.ref)
+    return tuple(SourceRef(kind="manual", ref=i.ref, quote=i.quote) for i in items if i.ref)
 
 
 def build_memory_router(service: MemoryService, authenticate: Any) -> APIRouter:
@@ -91,16 +101,39 @@ def build_memory_router(service: MemoryService, authenticate: Any) -> APIRouter:
     @router.get("")
     async def list_memories(
         include_archived: bool = Query(default=False),
+        persona_id: str | None = Query(default=None),
+        query: str = Query(default=""),
+        limit: int = Query(default=50, ge=1, le=200),
         authorization: Annotated[str | None, Header()] = None,
     ):
         principal = _principal(authorization)
-        return {"memories": [_record(m) for m in service.list(principal, include_archived=include_archived)]}
+        records = service.list(
+            principal, include_archived=include_archived,
+            persona_id=None if persona_id in ("default", "shared") else persona_id,
+            all_personas=persona_id is None, shared_only=persona_id == "shared",
+            query=query, limit=limit, exact_scope=True,
+        )
+        return {"memories": [_record(record) for record in records]}
+
+    @router.get("/{memory_id}")
+    async def detail(memory_id: str, authorization: Annotated[str | None, Header()] = None):
+        return {"memory": _record(service.get(_principal(authorization), memory_id))}
+
+    @router.get("/{memory_id}/revisions")
+    async def revisions(
+        memory_id: str, limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0, le=2**63 - 1),
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        return {
+            "revisions": service.revisions(_principal(authorization), memory_id, limit=limit, offset=offset),
+        }
 
     @router.post("/recall")
     async def recall(body: RecallBody, authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)
         result = service.recall(
-            principal, body.query, top_k=body.top_k, token_budget=body.budget,
+            principal, body.query, top_k=body.top_k, token_budget=body.budget, persona_id=body.persona_id,
         )
         return {
             "items": [
@@ -118,6 +151,7 @@ def build_memory_router(service: MemoryService, authenticate: Any) -> APIRouter:
     @router.post("/remember")
     async def remember(body: RememberBody, authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)
+        service.require_view(principal)
         from backend.modules.memory.contracts import MemoryCandidate
 
         record = service.remember(principal, MemoryCandidate(
@@ -125,13 +159,20 @@ def build_memory_router(service: MemoryService, authenticate: Any) -> APIRouter:
             scope=body.scope, event_at=body.event_at, confidence=body.confidence,
             source_type=body.source_type, tags=tuple(body.tags),
             supersedes=body.supersedes, pinned=body.pinned,
-        ))
+        ), persona_id=body.persona_id, is_shared=body.is_shared)
+        return {"memory": _record(record)}
+
+    @router.patch("/{memory_id}/sharing")
+    async def sharing(memory_id: str, body: SharingBody,
+                      authorization: Annotated[str | None, Header()] = None):
+        record = service.set_sharing(_principal(authorization), memory_id, is_shared=body.is_shared)
         return {"memory": _record(record)}
 
     @router.put("/{memory_id}")
     async def revise(memory_id: str, body: ReviseBody,
                      authorization: Annotated[str | None, Header()] = None):
         principal = _principal(authorization)
+        service.require_view(principal)
         record = service.revise(
             principal, memory_id, body.expected_version, content=body.content,
             reason=body.reason, source_refs=_refs(body.source_refs),

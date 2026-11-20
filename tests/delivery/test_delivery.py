@@ -325,3 +325,84 @@ async def test_terminal_state_feedback_without_reply(env) -> None:
         run = conn.execute("SELECT * FROM runs WHERE id='run-term-c'").fetchone()
         on_finish(conn, dict(run))
     assert len([x for x in _texts() if "停止" in x]) == 1  # run 级 dedup 不双发
+
+
+async def test_queued_wechat_delivery_revalidates_owner_after_rebind(tmp_path):
+    from backend.modules.delivery.wechat import WeChatTextSender
+    from tests.support.wechat import make_channel_rig
+
+    rig, transport, _ = make_channel_rig(tmp_path)
+    try:
+        admin = rig.seed_user(role="super_admin")
+        original = _user(rig)
+        successor = _user(rig)
+        account = rig.channels.register_account(
+            admin, account_id="bot", token="synthetic", base_url="https://ilink.test", bot_user_id="bot-user",
+        )
+
+        def bind(actor):
+            rig.channels.bind_user(
+                admin, platform="wechat", account_id="bot", external_user_id="wx_destination",
+                user_id=actor.user_id, account_pk=account.id,
+            )
+
+        bind(original)
+        service = DeliveryService(rig.db, sender=WeChatTextSender(rig.channels))
+        target = DeliveryTarget(
+            kind="wechat", ref="wx_destination", channel_account_id=account.id, context_token="test-context",
+        )
+        old_id = service.enqueue_text(owner_id=original.user_id, target=target, text="原用户内容", dedup_key="old")
+        bind(successor)
+        new_id = service.enqueue_text(owner_id=successor.user_id, target=target, text="现用户内容", dedup_key="new")
+
+        worker = DeliveryWorker(service)
+        await worker.tick()
+        assert service.status(original.user_id, old_id).status == DELIVERY_FAILED
+        assert service.status(successor.user_id, new_id).status == DELIVERY_SENT
+        assert transport.sent == ["现用户内容"]
+    finally:
+        await rig.aclose()
+
+
+async def test_queued_wechat_chat_and_memory_deliveries_revalidate_permissions(tmp_path):
+    from backend.modules.delivery.wechat import WeChatTextSender
+    from tests.support.wechat import inbound, make_channel_rig, text_message
+
+    rig, transport, _ = make_channel_rig(tmp_path)
+    try:
+        admin = rig.seed_user(role="super_admin")
+        owner = rig.seed_user(grants=("chat.use", "memory.view"))
+        account = rig.channels.register_account(
+            admin, account_id="bot", token="synthetic", base_url="https://ilink.test", bot_user_id="bot-user",
+        )
+        rig.channels.bind_user(
+            admin, platform="wechat", account_id="bot", external_user_id="wx_ext_1",
+            user_id=owner.user_id, account_pk=account.id,
+        )
+        event = await rig.channels.handle_inbound(inbound(
+            rig, rig.channels.repo.get_account(account.id), text_message("你好", message_id="message-before-revoke"),
+        ))
+        run = rig.assistant.repo.get_run(event.run_id)
+        target = DeliveryTarget(kind="wechat", ref="wx_ext_1", channel_account_id=account.id, context_token="ctx")
+        service = DeliveryService(rig.db, sender=WeChatTextSender(rig.channels))
+        with rig.db.transaction() as conn:
+            answer = service.enqueue_run_in_transaction(conn, run, target, "角色会话答案")
+        reminder = service.enqueue_text(
+            owner_id=owner.user_id, target=target, text="定时提醒", dedup_key="reminder", source="schedule",
+        )
+        worker = DeliveryWorker(service)
+        rig.access.set_user_permission(admin, owner.user_id, "chat.use", False)
+        await worker.tick()
+        assert service.status(owner.user_id, answer).status == DELIVERY_FAILED
+        assert service.status(owner.user_id, reminder).status == DELIVERY_SENT
+
+        rig.access.set_user_permission(admin, owner.user_id, "chat.use", True)
+        confirmation = service.enqueue_text(
+            owner_id=owner.user_id, target=target, text="记忆确认", dedup_key="confirm", source="memory",
+        )
+        rig.access.set_user_permission(admin, owner.user_id, "memory.view", False)
+        await worker.tick()
+        assert service.status(owner.user_id, confirmation).status == DELIVERY_FAILED
+        assert transport.sent == ["定时提醒"]
+    finally:
+        await rig.aclose()

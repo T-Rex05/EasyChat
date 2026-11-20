@@ -173,6 +173,10 @@ def new_analysis_id() -> str:
     return _new_id(_PREFIX_LEDGER_ANALYSIS)
 
 
+def new_persona_id() -> str:
+    return _new_id("persona")
+
+
 def new_mood_id() -> str:
     return _new_id(_PREFIX_MOOD)
 

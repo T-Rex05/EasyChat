@@ -29,6 +29,11 @@ _LEGACY_THREAD_RE = re.compile(r"^\d+_\d+$")
 _SSE_RETRY_AFTER_DONE = "retry: 86400000\n\n"
 
 
+class SessionCreateBody(BaseModel):
+    persona_id: str | None = None
+    title: str = ""
+
+
 class StreamPostBody(BaseModel):
     message: str
     thread_id: str
@@ -107,7 +112,8 @@ def build_web_chat_router(
         conn = assistant.db.connect()
         try:
             row = conn.execute(
-                "SELECT content FROM conversations WHERE run_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+                "SELECT content FROM conversations WHERE run_id=? AND role='assistant' "
+                "AND source!='system' ORDER BY id DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
             return str(row["content"]) if row else ""
@@ -162,6 +168,11 @@ def build_web_chat_router(
             return
 
     router = APIRouter()
+
+    @router.get("/api/assistant/runs/{run_id}/memory")
+    async def get_run_memory(run_id: str, authorization: Annotated[str | None, Header()] = None):
+        principal = _principal_from_request(None, authorization)
+        return assistant.memory_recall_for_run(principal, run_id)
 
     @router.get("/chat/stream")
     async def stream_get(
@@ -246,6 +257,16 @@ def build_web_chat_router(
         cancelled = await assistant.cancel(principal, target)
         return {"ok": True, "cancelled": bool(cancelled), "run_id": target}
 
+    @router.post("/api/history")
+    async def history_create(
+        body: SessionCreateBody, authorization: Annotated[str | None, Header()] = None,
+    ):
+        principal = _principal_from_token((authorization or "").replace("Bearer ", "").strip())
+        principal = assistant.access.validate_principal(principal)
+        assistant.access.require_permission(principal, "chat.use")
+        session_id = await assistant.create_session(principal, title=body.title[:120], persona_id=body.persona_id)
+        return {"session_id": session_id, "persona_id": body.persona_id}
+
     @router.get("/api/history")
     async def history_list(
         limit: int = Query(default=50, ge=1, le=200),
@@ -260,6 +281,7 @@ def build_web_chat_router(
                     "session_id": s["id"],
                     "title": s["title"],
                     "source": s["source"],
+                    "persona_id": s["persona_id"],
                     "created_at": s["created_at"],
                     "updated_at": s["updated_at"],
                 }
@@ -277,7 +299,11 @@ def build_web_chat_router(
         return {
             "session_id": session_id,
             "messages": [
-                {"role": m["role"], "content": m["content"], "created_at": m["created_at"]}
+                {
+                    "id": m["id"], "run_id": m["run_id"] if m["source"] != "system" else None,
+                    "role": m["role"],
+                    "content": m["content"], "created_at": m["created_at"],
+                }
                 for m in messages
                 if m["status"] == 1
             ],

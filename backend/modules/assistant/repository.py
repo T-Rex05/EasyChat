@@ -9,7 +9,7 @@ import json
 from typing import Any, Callable
 
 from backend.platform.sqlite import Database, utc_now_iso
-from backend.shared.errors import InvalidInputError, NotFoundError
+from backend.shared.errors import ConflictError, InvalidInputError, NotFoundError
 from backend.shared.identifiers import new_session_id
 
 RUN_QUEUED = "queued"
@@ -36,6 +36,18 @@ def normalize_channel_scope(channel_account_id: str | None) -> str:
     return channel_account_id or ""
 
 
+def _active_persona_tx(conn, owner_id: int, persona_id: str) -> Any:
+    row = conn.execute(
+        "SELECT version, instruction, active FROM persona_catalog WHERE owner_id=? AND id=?",
+        (owner_id, persona_id),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("角色不存在")
+    if not row["active"]:
+        raise ConflictError("角色已归档，请选择其他角色")
+    return row
+
+
 class AssistantRepository:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -44,14 +56,16 @@ class AssistantRepository:
 
     def create_session(self, *, owner_id: int, source: str = "web",
                        channel_account_id: str = "", external_chat_id: str = "",
-                       title: str = "") -> str:
+                       title: str = "", persona_id: str | None = None) -> str:
         sid = new_session_id()
         now = utc_now_iso()
         with self.db.transaction() as conn:
+            if persona_id is not None:
+                _active_persona_tx(conn, owner_id, persona_id)
             conn.execute(
                 "INSERT INTO sessions(id, owner_id, title, source, channel_account_id, "
-                "external_chat_id, active, created_at, updated_at) VALUES(?,?,?,?,?,?,1,?,?)",
-                (sid, owner_id, title, source, channel_account_id, external_chat_id, now, now),
+                "external_chat_id, active, created_at, updated_at, persona_id) VALUES(?,?,?,?,?,?,1,?,?,?)",
+                (sid, owner_id, title, source, channel_account_id, external_chat_id, now, now, persona_id),
             )
         return sid
 
@@ -83,7 +97,7 @@ class AssistantRepository:
         source/channel_account_id 用于渠道隔离：两个机器人账号下的同一 openid
         不共享会话；Web 不传渠道账号（规范为空串）。
         """
-        sql = "SELECT * FROM sessions WHERE owner_id=? AND external_chat_id=? AND active=1"
+        sql = "SELECT * FROM sessions WHERE owner_id=? AND external_chat_id=? AND active=1 AND persona_id IS NULL"
         params: list[Any] = [owner_id, external_chat_id]
         if source is not None:
             sql += " AND source=?"
@@ -185,7 +199,7 @@ class AssistantRepository:
         try:
             rows = conn.execute(
                 "SELECT id, owner_id, title, source, channel_account_id, external_chat_id, "
-                "active, created_at, updated_at FROM sessions "
+                "active, created_at, updated_at, persona_id FROM sessions "
                 "WHERE owner_id=? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                 (owner_id, limit, offset),
             ).fetchall()
@@ -211,12 +225,23 @@ class AssistantRepository:
             ).fetchone()
             if existing is not None:
                 return str(existing["id"]), True
+            session = conn.execute(
+                "SELECT persona_id, active FROM sessions WHERE owner_id=? AND id=?",
+                (owner_id, session_id),
+            ).fetchone()
+            if session is None:
+                raise NotFoundError("会话不存在")
+            if not session["active"]:
+                raise InvalidInputError("会话已停用")
+            persona_id = session["persona_id"]
+            persona = _active_persona_tx(conn, owner_id, persona_id) if persona_id is not None else None
             conn.execute(
                 "INSERT INTO runs(id, owner_id, session_id, source, channel_account_scope, "
-                "client_message_id, status, input_summary, attachment_ids, created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "client_message_id, status, input_summary, attachment_ids, created_at, "
+                "persona_id, persona_version, persona_instruction) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, owner_id, session_id, source, channel_account_scope, client_message_id,
-                 RUN_QUEUED, input_summary[:500], json.dumps(attachment_ids), now),
+                 RUN_QUEUED, input_summary[:500], json.dumps(attachment_ids), now, persona_id,
+                 persona["version"] if persona else None, persona["instruction"] if persona else ""),
             )
             return run_id, False
 
@@ -227,6 +252,35 @@ class AssistantRepository:
             if row is None:
                 raise NotFoundError(f"run 不存在: {run_id}")
             return dict(row)
+        finally:
+            conn.close()
+
+    def record_memory_context(self, run_id: str, refs: list[tuple[str, int]]) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE runs SET memory_context_refs=? WHERE id=? AND status=?",
+                (json.dumps(refs), run_id, RUN_RUNNING),
+            )
+
+    def completed_run_for_session(
+        self, owner_id: int, session_id: str, *, run_prefix: str = "",
+    ) -> dict[str, Any] | None:
+        conn = self.db.connect()
+        try:
+            query = "SELECT * FROM runs WHERE owner_id=? AND session_id=? AND status=?"
+            params = (owner_id, session_id, RUN_COMPLETED)
+            if run_prefix:
+                rows = conn.execute(
+                    query + " AND substr(id,1,length(?))=? LIMIT 2",
+                    (*params, run_prefix, run_prefix),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise NotFoundError("当前会话中未找到唯一的已完成运行")
+                return dict(rows[0])
+            row = conn.execute(
+                query + " ORDER BY finished_at DESC, id DESC LIMIT 1", params,
+            ).fetchone()
+            return dict(row) if row is not None else None
         finally:
             conn.close()
 

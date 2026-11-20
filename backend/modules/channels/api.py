@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,7 @@ from backend.modules.channels.wechat.media import MediaFetchError, MediaFetcher
 from backend.platform.sqlite import Database, utc_now_iso
 from backend.shared.context import Principal
 from backend.shared.crypto import decrypt_secret, encrypt_secret
-from backend.shared.errors import AppError, BusyError, ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.errors import AppError, BusyError, ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +66,20 @@ _WECHAT_COMMANDS_HELP = (
     "/status 当前会话\n"
     "/rename 标题 重命名\n"
     "/rm 删除当前会话\n"
-    "/人设 查看或切换说话风格\n"
-    "/记忆 查看长期记忆；/忘掉 <ID或关键词>\n"
+    "/人设 设置默认角色的说话风格\n"
+    "/角色 [名称] 查看或切换会话角色\n"
+    "/记忆 [ID] 查看长期记忆；/忘掉 <ID或关键词>\n"
+    "/纠正 <ID>@<版本> <正文> 修订记忆\n"
+    "/本轮记忆 [运行 ID] 查看本轮调用的记忆；/星图 查看入口\n"
     "/账单确认 <import_id> 提交已预览账单\n\n"
     "直接说「明天 9 点提醒我交周报」即可创建提醒；"
     "发账单文件后可让我预览。"
 )
+
+
+def _is_private_memory_command(message: InboundMessage) -> bool:
+    parts = message.text.strip().split(maxsplit=1)
+    return bool(parts) and parts[0].lower() in {"/记忆", "/memory", "/纠正", "/correct", "/本轮记忆"}
 
 
 class ChannelService:
@@ -88,6 +97,7 @@ class ChannelService:
         stt: Any = None,
         voice_echo: bool = False,
         commands: Any = None,
+        profiles: Any = None,
         clock=time.time,
         fingerprint_window: float = DEFAULT_FINGERPRINT_WINDOW_SECONDS,
     ) -> None:
@@ -110,6 +120,7 @@ class ChannelService:
         self.fingerprint_window = fingerprint_window
         # 命令处理器在构造时注入；渠道不反向持有/晚绑定各业务模块。
         self.commands: Any = commands
+        self.profiles: Any = profiles
 
     # ---- 生命周期 ----------------------------------------------------------------
 
@@ -330,65 +341,27 @@ class ChannelService:
     def make_session_target_provider(self):
         """WP-D:为记忆确认提供 (owner_id, session_id)->渠道投递目标 闭包。
 
-        复用 delivery_target_for_run 同一套真实渠道路由解析
-        (channel_session_cursors)：sessions.external_chat_id 是
-        `account_id:chat_id` 隔离键(/new 还追加时间戳)，绝不能当收件人。
-        fail-closed：会话归属、账号活跃、绑定有效且绑定归属=当前 owner
-        全部核验后才返回；任一失效返回 None(解绑/换绑后不投递)。
+        路由来自会话的微信来源历史。发送前重新核对归属和活动绑定。
         """
+        return self._delivery_target_for_session
 
-        def provider(owner_id: int, session_id: str) -> ChannelTarget | None:
-            conn = self.db.connect()
-            try:
-                row = conn.execute(
-                    "SELECT owner_id, source FROM sessions WHERE id=?",
-                    (session_id,),
-                ).fetchone()
-                if row is None or int(row["owner_id"]) != int(owner_id):
-                    return None
-                if str(row["source"] or "") != "wechat":
-                    return None
-            finally:
-                conn.close()
-            route = self.repo.find_session_route(session_id)
-            if route is None:
-                return None
-            platform = str(route["platform"])
-            account_id = str(route["account_id"])
-            external_user = str(route.get("external_user_id") or "")
-            if not external_user:
-                return None
-            account = self.repo.get_account_by_platform_id(platform, account_id)
-            if account is None or account.status != ACCOUNT_ACTIVE:
-                return None
-            resolved = self.repo.find_active_binding(platform, account_id, external_user)
-            if resolved is None or int(resolved[1].get("status") or 0) != 1:
-                return None
-            binding, _user_state = resolved
-            if int(binding.user_id) != int(owner_id):
-                return None
-            return ChannelTarget(
-                kind=platform,
-                ref=external_user,
-                channel_account_id=account.id,
-                context_token=str(route.get("context_token") or ""),
-            )
-
-        return provider
-
-    def delivery_target_for_run(self, run: dict[str, Any]) -> ChannelTarget | None:
-        """run 完成时按会话路由解析微信目标；未绑定/禁用返回 None（不投递）。"""
-        route = self.repo.find_session_route(str(run.get("session_id") or ""))
-        if route is None:
+    def _delivery_target_for_session(self, owner_id: int, session_id: str) -> ChannelTarget | None:
+        route = self.repo.find_session_route(session_id)
+        if route is None or int(route["owner_id"]) != owner_id:
             return None
         platform = str(route["platform"])
         account_id = str(route["account_id"])
         external_user = str(route["external_user_id"])
+        if not external_user:
+            return None
         account = self.repo.get_account_by_platform_id(platform, account_id)
-        if account is None or account.status != ACCOUNT_ACTIVE:
+        if account is None or account.id != route["channel_account_id"] or account.status != ACCOUNT_ACTIVE:
             return None
         resolved = self.repo.find_active_binding(platform, account_id, external_user)
-        if resolved is None or int(resolved[1].get("status") or 0) != 1:
+        if resolved is None:
+            return None
+        binding, user = resolved
+        if int(binding.user_id) != owner_id or int(user.get("status") or 0) != 1:
             return None
         return ChannelTarget(
             kind=platform,
@@ -397,18 +370,50 @@ class ChannelService:
             context_token=str(route.get("context_token") or ""),
         )
 
+    def delivery_target_for_run(self, run: dict[str, Any]) -> ChannelTarget | None:
+        """入站角色或会话切换后，仍按原运行的会话解析微信来源。"""
+        owner_id = run.get("owner_id")
+        if owner_id is None:
+            return None
+        session_id = str(run.get("session_id") or "")
+        target = self._delivery_target_for_session(int(owner_id), session_id)
+        if target is None or target.channel_account_id != run.get("channel_account_scope"):
+            return None
+        account = self.repo.get_account(target.channel_account_id)
+        if account is None:
+            return None
+        original_token = self.repo.context_token_for_run(
+            platform=account.platform, account_id=account.account_id, session_id=session_id,
+            external_event_id=str(run.get("client_message_id") or ""),
+        )
+        return replace(target, context_token=original_token) if original_token else target
+
     def report_stale_token(self, account_pk: str) -> None:
         """公开入口：iLink -14 凭据失效 → 账号入站/出站暂停（session-guard 语义）。"""
         from backend.modules.channels.wechat.account import pause_session  # noqa: PLC0415
 
         pause_session(account_pk)
 
-    def is_delivery_binding_active(self, account_pk: str, external_user_id: str) -> bool:
+    def is_delivery_binding_active(
+        self, account_pk: str, external_user_id: str, *, owner_id: int | None = None,
+        required_permissions: tuple[str, ...] = (),
+    ) -> bool:
         account = self.repo.get_account(account_pk)
         if account is None or account.status != ACCOUNT_ACTIVE:
             return False
         resolved = self.repo.find_active_binding(account.platform, account.account_id, external_user_id)
-        return resolved is not None and int(resolved[1].get("status") or 0) == 1
+        if resolved is None:
+            return False
+        binding, user = resolved
+        if int(user.get("status") or 0) != 1 or (owner_id is not None and binding.user_id != owner_id):
+            return False
+        if not required_permissions:
+            return True
+        try:
+            principal = self.access.snapshot_principal(binding.user_id)
+        except AppError:
+            return False
+        return all(self.access.has_permission(principal, permission) for permission in required_permissions)
 
     def delivery_target_for_owner(self, owner_id: int) -> ChannelTarget | None:
         """用户默认微信目标：取该 owner 第一个有效绑定且账号启用。"""
@@ -472,6 +477,7 @@ class ChannelService:
         event_id, inserted = self.repo.insert_event(
             platform=message.platform,
             account_id=message.external_account_id,
+            external_user_id=message.external_user_id,
             external_event_id=message.external_event_id,
             event_kind=message.event_kind,
             payload={
@@ -493,12 +499,23 @@ class ChannelService:
                 payload = json.loads(existing.get("payload") or "{}")
             except ValueError:
                 payload = {}
+            try:
+                original = _message_from_envelope(existing)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                original = None
             if str(existing.get("state") or "") == EVENT_RECEIVED:
-                # 上次处理在 mark processed 之前被取消/崩溃：平台重投时必须继续，
-                # 否则事件永远卡在 received，而 purge 又不会清理它。
+                if original is None or (
+                    original.account_pk, original.platform, original.external_account_id,
+                    original.external_user_id, original.external_chat_id, original.external_event_id,
+                ) != (
+                    account.id, message.platform, message.external_account_id,
+                    message.external_user_id, message.external_chat_id, message.external_event_id,
+                ):
+                    return InboundOutcome(accepted=False, reason=REASON_INVALID, event_id=event_id)
+                # 重投沿用首次持久化的正文及发送上下文。
                 try:
-                    outcome = await self._process_event(account, message, event_id)
-                    if outcome.reply_text:
+                    outcome = await self._process_event(account, original, event_id)
+                    if outcome.reply_text and not _is_private_memory_command(original):
                         self.repo.set_event_reply(event_id, outcome.reply_text)
                     self.repo.mark_event_processing_done(event_id)
                     return outcome
@@ -509,20 +526,49 @@ class ChannelService:
                     logger.exception("渠道事件重投处理失败 event=%s", event_id)
                     self._mark_replay_failed(event_id, exc)
                     return InboundOutcome(accepted=False, reason=REASON_INTERNAL)
+            # 缓存了确认或角色等个人信息的回复，仅向仍绑定原会话 owner 的来源重发。
+            original_session = str(existing.get("origin_session_id") or existing.get("session_id") or "")
+            route = self.repo.find_session_route(original_session) if original_session else None
+            target = self._delivery_target_for_session(int(route["owner_id"]), original_session) if route else None
+            same_source = target is not None and target.ref == message.external_user_id and (
+                target.channel_account_id == account.id and route["external_chat_id"] == message.external_chat_id
+            )
+            actor = None
+            if same_source:
+                try:
+                    actor = self.access.snapshot_principal(int(route["owner_id"]))
+                    self.access.require_permission(actor, "chat.use")
+                except AppError:
+                    actor = None
+            cached = payload.get("reply_text") if isinstance(payload, dict) else None
+            reply = ""
+            if actor is not None and original is not None:
+                if not _is_private_memory_command(original):
+                    reply = str(cached or "")
+                elif self.commands is not None and original.text.strip().split(maxsplit=1)[0].lower() in (
+                    "/纠正", "/correct",
+                ):
+                    try:
+                        session = await self.assistant.get_session(actor, original_session)
+                        if session is not None:
+                            reply = self.commands.previous_memory_correction(
+                                actor, event_id, persona_id=session["persona_id"],
+                            ) or ""
+                    except AppError:
+                        pass
             return InboundOutcome(
                 accepted=False,
                 reason=REASON_DUPLICATE,
                 duplicate=True,
-                run_id=str(existing.get("run_id") or ""),
-                session_id=str(existing.get("session_id") or ""),
+                run_id=str(existing.get("run_id") or "") if actor is not None else "",
+                session_id=str(existing.get("session_id") or "") if actor is not None else "",
                 event_id=event_id,
-                # 上次 reply 发送失败时平台会重投；重发确定性回复，避免危机文案丢失。
-                reply_text=str(payload.get("reply_text") or "") if isinstance(payload, dict) else "",
+                reply_text=reply,
             )
 
         try:
             outcome = await self._process_event(account, message, event_id)
-            if outcome.reply_text:
+            if outcome.reply_text and not _is_private_memory_command(message):
                 self.repo.set_event_reply(event_id, outcome.reply_text)
             self.repo.mark_event_processing_done(event_id)
             return outcome
@@ -559,7 +605,7 @@ class ChannelService:
                 continue
             try:
                 outcome = await self._process_event(account, message, str(row["id"]))
-                if outcome.reply_text:
+                if outcome.reply_text and not _is_private_memory_command(message):
                     self.repo.set_event_reply(str(row["id"]), outcome.reply_text)
                 self.repo.mark_event_processing_done(str(row["id"]))
                 replayed += 1
@@ -609,6 +655,9 @@ class ChannelService:
         if resolved is None:
             return self._reject(event_id, REASON_UNBOUND, "微信账号未绑定")
         binding, user_row = resolved
+        event = self.repo.get_event(event_id) or {}
+        if event.get("origin_owner_id") != binding.user_id:
+            return self._reject(event_id, REASON_FORBIDDEN, "入站消息的原始绑定无法验证")
         if int(user_row.get("status") or 0) != 1:
             return self._reject(event_id, REASON_USER_DISABLED, "账号已被禁用", user_id=binding.user_id)
 
@@ -619,11 +668,26 @@ class ChannelService:
             return self._reject(event_id, REASON_FORBIDDEN, str(exc), user_id=binding.user_id)
 
         try:
-            session_id = await self._resolve_session(principal, account, message)
+            session_id = str(event.get("origin_session_id") or "")
+            if not session_id:
+                incoming = await self._resolve_session(principal, account, message)
+                session_id = self.repo.bind_event_session(event_id, incoming, origin=(
+                    message.platform, account.account_id, message.external_user_id, message.external_chat_id,
+                ))
+            session = await self.assistant.get_session(principal, session_id)
+            if session is None or not session["active"]:
+                raise NotFoundError("消息的原会话已不可用")
+            route = self.repo.find_session_route(session_id)
+            if route is None or (
+                route["platform"], route["channel_account_id"], route["external_user_id"], route["external_chat_id"]
+            ) != (message.platform, account.id, message.external_user_id, message.external_chat_id):
+                raise NotFoundError("消息的微信来源已不可用")
         except AppError as exc:
             return self._reject(event_id, REASON_INVALID, str(exc), user_id=principal.user_id)
 
-        command_result = await self._handle_command(principal, account, message, session_id)
+        command_result = await self._handle_command(
+            principal, account, message, session_id, event_id=event_id, persona_id=session["persona_id"],
+        )
         if command_result is not None:
             reply_text, command_session = command_result
             self.repo.update_event(
@@ -716,34 +780,44 @@ class ChannelService:
     async def _resolve_session(
         self, principal: Principal, account: ChannelAccount, message: InboundMessage
     ) -> str:
-        cursor = self.repo.get_session_cursor(
-            message.platform, account.account_id, message.external_user_id, message.external_chat_id
-        )
+        origin = (message.platform, account.account_id, message.external_user_id, message.external_chat_id)
+        cursor = self.repo.get_session_cursor(*origin)
         if cursor:
             existing = await self.assistant.get_session(principal, cursor)
             if (
                 existing is not None
-                and existing.get("active")
-                and str(existing.get("source") or "") == "wechat"
-                and str(existing.get("channel_account_id") or "") == account.id
+                and existing["active"]
+                and existing["source"] == "wechat"
+                and existing["channel_account_id"] == account.id
             ):
-                self.repo.set_session_cursor(
-                    message.platform, account.account_id, message.external_user_id,
-                    message.external_chat_id, cursor, context_token=message.context_token,
-                )
+                self.repo.set_session_cursor(*origin, cursor, context_token=message.context_token)
                 return cursor
-        external_chat_key = f"{account.account_id}:{message.external_chat_id}"
-        session_id = await self.assistant.get_or_create_session(
-            principal,
-            external_chat_id=external_chat_key,
-            source="wechat",
-            channel_account_id=account.id,
-            title=message.text[:60],
+
+        return await self._select_persona_session(principal, account, message, persona_id=None)
+
+    async def _select_persona_session(
+        self, principal: Principal, account: ChannelAccount, message: InboundMessage, *,
+        persona_id: str | None, fresh: bool = False, event_id: str = "",
+    ) -> str:
+        origin = (message.platform, account.account_id, message.external_user_id, message.external_chat_id)
+        previous = [] if fresh else self.repo.list_origin_sessions(
+            principal.user_id, *origin, limit=1, filter_persona=True, persona_id=persona_id,
         )
-        self.repo.set_session_cursor(
-            message.platform, account.account_id, message.external_user_id,
-            message.external_chat_id, session_id, context_token=message.context_token,
-        )
+        if previous:
+            session_id = str(previous[0]["id"])
+        else:
+            chat_key = f"{account.account_id}:{message.external_chat_id}"
+            if fresh or persona_id is not None:
+                chat_key += f":{int(self.clock() * 1000)}"
+            session_id = await self.assistant.create_session(
+                principal, source="wechat", external_chat_id=chat_key,
+                channel_account_id=account.id, persona_id=persona_id,
+                title="微信对话" if fresh else message.text[:60],
+            )
+        if not self.repo.set_session_cursor(
+            *origin, session_id, context_token=message.context_token, event_id=event_id,
+        ):
+            raise ConflictError("此会话操作已处理或已被后续操作取代")
         return session_id
 
     async def _handle_command(
@@ -752,6 +826,9 @@ class ChannelService:
         account: ChannelAccount,
         message: InboundMessage,
         session_id: str,
+        *,
+        event_id: str,
+        persona_id: str | None,
     ) -> tuple[str, str] | None:
         """微信内命令；返回 (回复文本, 当前会话)，None 表示走 Assistant。
 
@@ -763,23 +840,38 @@ class ChannelService:
             return None
         if lowered in ("/help", "/帮助", "/?"):
             return _WECHAT_COMMANDS_HELP, session_id
-        if lowered in ("/new", "/新对话", "/新会话"):
-            new_session = await self.assistant.create_session(
-                principal,
-                source="wechat",
-                external_chat_id=f"{account.account_id}:{message.external_chat_id}:{int(self.clock() * 1000)}",
-                channel_account_id=account.id,
-                title="微信对话",
+        parts = command.split(maxsplit=1)
+        origin = (message.platform, account.account_id, message.external_user_id, message.external_chat_id)
+        switch_key = parts[1] if parts[0] == "/切换" and len(parts) == 2 else command[1:]
+        switch_index = int(switch_key) if switch_key.isdecimal() and len(switch_key) <= 3 else None
+        opens_session = lowered in ("/new", "/新对话", "/新会话")
+        deletes_session = lowered in ("/rm", "/删除", "/删除会话", "/delete")
+        changes_role = parts[0] == "/角色" and len(parts) == 2
+        if (switch_index is not None or opens_session or deletes_session or changes_role) and (
+            not self.repo.can_navigate(origin, event_id)
+        ):
+            return "此会话操作已处理或已被后续操作取代", session_id
+        if parts[0] == "/角色":
+            return await self._handle_role_command(
+                principal, account, message, session_id, persona_id, event_id=event_id,
             )
-            self.repo.set_session_cursor(
-                message.platform, account.account_id, message.external_user_id,
-                message.external_chat_id, new_session, context_token=message.context_token,
-            )
+        if parts[0] == "/本轮记忆":
+            run_prefix = parts[1] if len(parts) > 1 else ""
+            return self._memory_recall_reply(principal, session_id, run_prefix), session_id
+        if lowered == "/星图":
+            return "请登录 EasyChat 网页，打开「记忆管理 → 星图」。", session_id
+        if opens_session:
+            try:
+                new_session = await self._select_persona_session(
+                    principal, account, message, persona_id=persona_id, fresh=True, event_id=event_id,
+                )
+            except AppError as exc:
+                return exc.message, session_id
             return "✅ 已开启新对话", new_session
         if lowered in ("/status", "/当前"):
             return f"📌 当前会话: {session_id[:20]}...", session_id
-        if lowered in ("/history", "/历史", "/会话列表", "/list"):
-            sessions = await self._recent_sessions(principal, account)
+        if lowered in ("/history", "/历史", "/会话列表", "/list", "/切换"):
+            sessions = self._recent_sessions(principal, account, message)
             if not sessions:
                 return "📭 暂无微信对话记录", session_id
             lines = ["📚 最近会话："]
@@ -788,15 +880,14 @@ class ChannelService:
                 lines.append(f"{mark}{index}. {item['title'] or item['id'][:16]}")
             lines.append("发送 /序号 切换")
             return "\n".join(lines), session_id
-        if command.startswith("/") and command[1:].isdigit():
-            index = int(command[1:])
-            sessions = await self._recent_sessions(principal, account)
-            if 1 <= index <= len(sessions):
-                target = sessions[index - 1]
-                self.repo.set_session_cursor(
-                    message.platform, account.account_id, message.external_user_id,
-                    message.external_chat_id, target["id"], context_token=message.context_token,
-                )
+        if switch_index is not None:
+            sessions = self._recent_sessions(principal, account, message)
+            if 1 <= switch_index <= len(sessions):
+                target = sessions[switch_index - 1]
+                if not self.repo.set_session_cursor(
+                    *origin, target["id"], context_token=message.context_token, event_id=event_id,
+                ):
+                    return "此会话操作已处理或已被后续操作取代", session_id
                 return f"✅ 已切换到：{target['title'] or target['id'][:16]}", target["id"]
             return f"❌ 序号无效，范围 1-{len(sessions)}", session_id
         if lowered.startswith("/rename") or lowered.startswith("/重命名"):
@@ -806,32 +897,76 @@ class ChannelService:
                 return "❌ 标题不能为空且不超过 30 个字符", session_id
             await self.assistant.rename_session(principal, session_id, title)
             return f"✅ 已重命名为：{title}", session_id
-        if lowered in ("/rm", "/删除", "/删除会话", "/delete"):
+        if deletes_session:
             await self.assistant.delete_session(principal, session_id)
-            self.repo.clear_session_cursor(
-                message.platform, account.account_id, message.external_user_id,
-                message.external_chat_id,
-            )
+            self.repo.set_session_cursor(*origin, "", event_id=event_id)
             return "✅ 已删除当前会话", ""
         if lowered.split(maxsplit=1)[0] in (
             "/model", "/模型", "/send", "/restart", "/restart-all", "/stop", "/stop-all",
         ):
             return "⚠️ 该命令已停用：模型切换请到 Web 控制台操作", session_id
         if self.commands is not None:
-            handled = await self.commands.handle(principal, message, session_id)
+            handled = await self.commands.handle(
+                principal, message, session_id, event_id=event_id, persona_id=persona_id,
+            )
             if handled is not None:
                 return handled
         return None
 
-    async def _recent_sessions(self, principal: Principal, account: ChannelAccount) -> list[dict[str, Any]]:
-        """只列当前机器人账号下的微信会话，防止 /N 把 A 账号会话切给 B 账号。"""
-        sessions = await self.assistant.list_sessions(principal, limit=10)
-        return [
-            s for s in sessions
-            if s.get("source") == "wechat"
-            and s.get("active")
-            and str(s.get("channel_account_id") or "") == account.id
-        ]
+    def _memory_recall_reply(self, principal: Principal, session_id: str, run_prefix: str) -> str:
+        try:
+            receipt = self.assistant.memory_recall_for_session(principal, session_id, run_prefix=run_prefix)
+        except AppError as exc:
+            return exc.message
+        if not receipt["recorded"]:
+            return "这次运行暂无记忆回执。"
+        if not receipt["items"]:
+            return "这次运行没有可显示的记忆。"
+        lines = ["加入本轮请求的记忆"]
+        for item in receipt["items"]:
+            version = f"v{item['version']}"
+            if item["current_version"] != item["version"]:
+                version += f"（当前 v{item['current_version']}）"
+            lines.append(f"· {item['memory_id']} {version} {item['summary']}")
+        return "\n".join(lines)
+
+    async def _handle_role_command(
+        self, principal: Principal, account: ChannelAccount, message: InboundMessage,
+        session_id: str, persona_id: str | None, *, event_id: str,
+    ) -> tuple[str, str]:
+        if self.profiles is None:
+            return "角色暂不可用", session_id
+        personas = self.profiles.list_personas(principal)
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) == 1:
+            lines = ["可选角色（发送 /角色 名称 切换）："]
+            for persona in personas:
+                current = persona["id"] == persona_id
+                if persona["active"] or current:
+                    prefix = "▶ " if current else "· "
+                    archived = "" if persona["active"] else "（已归档）"
+                    lines.append(prefix + persona["name"] + archived)
+            return "\n".join(lines), session_id
+
+        name_key = parts[1].casefold()
+        persona = next((item for item in personas if item["name"].casefold() == name_key), None)
+        if persona is None or not persona["active"]:
+            return "角色不存在或已归档，请发送 /角色 查看可选角色", session_id
+        try:
+            selected = await self._select_persona_session(
+                principal, account, message, persona_id=persona["id"], event_id=event_id,
+            )
+        except AppError as exc:
+            return exc.message, session_id
+        memory_scope = "默认角色记忆和账号共享记忆" if persona["id"] is None else "角色私有记忆和账号共享记忆"
+        return f"✅ 已切换到角色：{persona['name']}\n记忆范围：{memory_scope}", selected
+
+    def _recent_sessions(
+        self, principal: Principal, account: ChannelAccount, message: InboundMessage,
+    ) -> list[dict[str, Any]]:
+        return self.repo.list_origin_sessions(
+            principal.user_id, message.platform, account.account_id, message.external_user_id, message.external_chat_id,
+        )
 
     async def _ingest_media(
         self,

@@ -24,6 +24,17 @@ class ProfilePatch(BaseModel):
     mood_retention_days: int | None = None
 
 
+class PersonaCreate(BaseModel):
+    name: str
+    instruction: str
+
+
+class PersonaPatch(BaseModel):
+    name: str | None = None
+    instruction: str | None = None
+    active: bool | None = None
+
+
 class MoodDeleteBody(BaseModel):
     confirm: bool = Field(default=False)
 
@@ -62,6 +73,22 @@ def build_profiles_router(service: ProfilesService, authenticate: Any) -> APIRou
         fields = body.model_dump(exclude_none=True)
         profile = service.update(actor, **fields)
         return {"profile": profile_as_dict(profile)}
+
+    @router.get("/personas")
+    async def list_personas(authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        return {"personas": service.list_personas(principal(authorization))}
+
+    @router.post("/personas")
+    async def create_persona(
+        body: PersonaCreate, authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        return service.create_persona(principal(authorization), name=body.name, instruction=body.instruction)
+
+    @router.patch("/personas/{persona_id}")
+    async def update_persona(
+        persona_id: str, body: PersonaPatch, authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        return service.update_persona(principal(authorization), persona_id, **body.model_dump(exclude_none=True))
 
     @router.get("/mood")
     async def list_mood(

@@ -83,6 +83,11 @@ class CompositeDeliverySender:
 
 
 class DeliveryService:
+    @staticmethod
+    def cancel_memory_confirmations_in_transaction(conn: Any, owner_id: int, run_ids: set[str]) -> None:
+        """撤下还在排队的确认，与调用方的遗忘操作一并提交。"""
+        DeliveryRepository.cancel_memory_confirmations_in_transaction(conn, owner_id, run_ids)
+
     def __init__(
         self,
         db: Database,

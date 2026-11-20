@@ -5,6 +5,7 @@ submit 持久化接收/去重/入队后立即返回，不等模型完成；
 """
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator
 
 from backend.modules.assistant.contracts import RunCommand, RunEvent, RunReceipt
@@ -12,6 +13,7 @@ from backend.modules.assistant.dispatcher import RunDispatcher
 from backend.modules.assistant.events import EventBus
 from backend.modules.assistant.repository import (
     RUN_CANCELLED,
+    RUN_COMPLETED,
     AssistantRepository,
     normalize_channel_scope,
 )
@@ -76,11 +78,13 @@ class AssistantService:
         external_chat_id: str = "",
         title: str = "",
         channel_account_id: str = "",
+        persona_id: str | None = None,
     ) -> str:
         return self.repo.create_session(
             owner_id=principal.user_id, source=source,
             channel_account_id=normalize_channel_scope(channel_account_id),
             external_chat_id=external_chat_id, title=title,
+            persona_id=persona_id,
         )
 
     async def get_or_create_session(
@@ -126,7 +130,7 @@ class AssistantService:
         conn = self.db.connect()
         try:
             rows = conn.execute(
-                "SELECT id, run_id, role, content, status, created_at FROM conversations "
+                "SELECT id, run_id, role, content, status, source, created_at FROM conversations "
                 "WHERE session_id=? ORDER BY id",
                 (session["id"],),
             ).fetchall()
@@ -248,6 +252,42 @@ class AssistantService:
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
         }
+
+    def memory_recall_for_run(self, principal: Principal, run_id: str) -> dict:
+        self.access.require_permission(principal, "chat.use")
+        self.access.require_permission(principal, "memory.view")
+        return self._memory_context(principal, self._require_run_access(principal, run_id))
+
+    def memory_recall_for_session(
+        self, principal: Principal, session_id: str, *, run_prefix: str = "",
+    ) -> dict:
+        self.access.require_permission(principal, "chat.use")
+        self.access.require_permission(principal, "memory.view")
+        self.repo.get_session(session_id, owner_id=principal.user_id)
+        run = self.repo.completed_run_for_session(principal.user_id, session_id, run_prefix=run_prefix)
+        return self._memory_context(principal, run)
+
+    def _memory_context(self, principal: Principal, run: dict | None) -> dict:
+        memory = self.dispatcher.memory
+        if (memory is None or run is None or run["status"] != RUN_COMPLETED
+                or run["memory_context_refs"] is None):
+            return {"recorded": False, "items": []}
+        items = []
+        for memory_id, version in json.loads(run["memory_context_refs"]):
+            try:
+                current = memory.get(
+                    principal, memory_id, persona_id=run["persona_id"], all_personas=False,
+                )
+            except NotFoundError:
+                continue  # 遗忘或取消共享后，当前运行的角色不能再看到该条目。
+            items.append({
+                "memory_id": current.memory_id,
+                "version": version,
+                "current_version": current.version,
+                "kind": current.kind,
+                "summary": " ".join(current.content.split())[:120],
+            })
+        return {"recorded": True, "items": items}
 
     # ---- 历史投影 ------------------------------------------------------------------
 

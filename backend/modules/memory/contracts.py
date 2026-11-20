@@ -81,6 +81,9 @@ class MemoryRecord:
     tags: tuple[str, ...]
     created_at: str
     updated_at: str
+    persona_id: str | None = None
+    is_shared: bool = False
+    supersedes: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

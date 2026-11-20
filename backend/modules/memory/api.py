@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from backend.modules.memory import retrieval
@@ -28,19 +29,32 @@ from backend.modules.memory.contracts import (
 )
 from backend.modules.memory.extractor import (
     ExtractionError,
+    MAX_CONTENT_CHARS,
     candidate_from_payload,
     validate_candidate,
 )
-from backend.modules.memory.repository import (
-    MemoryRepository,
-    content_hash,
-    source_hash,
-)
+from backend.modules.memory.repository import MemoryRepository
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
-from backend.shared.errors import AppError, ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.errors import AppError, InvalidInputError
 
 logger = logging.getLogger(__name__)
+_MEMORY_ID_PREFIX = re.compile(r"mem_[0-9a-f]{4,32}")
+
+
+def _memory_id_prefix(value: str) -> str:
+    if not _MEMORY_ID_PREFIX.fullmatch(value):
+        raise InvalidInputError("请提供以 mem_ 开头且至少含 4 位十六进制字符的记忆 ID")
+    return value
+
+
+def _revision_content(content: str) -> str:
+    content = content.strip()
+    if not content:
+        raise InvalidInputError("修改后的记忆内容不能为空")
+    if len(content) > MAX_CONTENT_CHARS:
+        raise InvalidInputError(f"修改后的记忆内容不能超过 {MAX_CONTENT_CHARS} 字")
+    return content
 
 
 class MemoryService:
@@ -68,26 +82,34 @@ class MemoryService:
     def _require(self, principal: Principal, permission: str) -> None:
         self.access.require_permission(principal, permission)
 
+    def require_view(self, actor: Principal) -> None:
+        self._require(self._principal(actor), "memory.view")
+
     # ---- 写入 ------------------------------------------------------------------
 
-    def remember(self, actor: Principal, candidate: MemoryCandidate) -> MemoryRecord:
+    def remember(
+        self, actor: Principal, candidate: MemoryCandidate, *,
+        persona_id: str | None = None, is_shared: bool = False,
+    ) -> MemoryRecord:
         principal = self._principal(actor)
         self._require(principal, "memory.edit")
         validate_candidate(candidate)
-        self._assert_not_forgotten(principal.user_id, candidate)
-        existing = self.repo.find_active_content(
-            principal.user_id, candidate.kind, candidate.content
+        return self.repo.create_memory(
+            owner_id=principal.user_id, candidate=candidate, persona_id=persona_id,
+            is_shared=is_shared, deduplicate=True,
         )
-        if existing is not None:
-            return existing
-        if candidate.supersedes:
-            old = self.repo.get(candidate.supersedes)
-            if old.owner_id != principal.user_id:
-                raise NotFoundError("被取代的记忆不存在")
-            self.repo.set_status(old.memory_id, STATUS_ARCHIVED)
-        return self.repo.create_memory(owner_id=principal.user_id, candidate=candidate)
 
-    def remember_explicit(self, actor: Principal, candidate: MemoryCandidate) -> MemoryRecord:
+    def require_active_persona(self, actor: Principal, persona_id: str) -> None:
+        principal = self._principal(actor)
+        conn = self.db.connect()
+        try:
+            self.repo.require_active_persona(conn, principal.user_id, persona_id)
+        finally:
+            conn.close()
+
+    def remember_explicit(
+        self, actor: Principal, candidate: MemoryCandidate, *, persona_id: str | None = None,
+    ) -> MemoryRecord:
         """用户明确要求记住：来源由服务端强制 user_confirmed，不信任模型字段。"""
         from dataclasses import replace
 
@@ -99,7 +121,7 @@ class MemoryService:
             confidence=1.0,
             scope="user",
         )
-        return self.remember(actor, confirmed)
+        return self.remember(actor, confirmed, persona_id=persona_id)
 
     def revise(
         self,
@@ -113,17 +135,42 @@ class MemoryService:
     ) -> MemoryRecord:
         principal = self._principal(actor)
         self._require(principal, "memory.edit")
-        record = self.repo.get(memory_id)
-        if record.owner_id != principal.user_id:
-            if not self.access.has_permission(principal, "system.manage"):
-                raise NotFoundError("记忆不存在")
-        if not content.strip():
-            raise InvalidInputError("修改后的记忆内容不能为空")
-        refs = source_refs or record.source_refs
         return self.repo.revise(
-            memory_id=memory_id, owner_id=record.owner_id,
-            expected_version=expected_version, content=content.strip(),
-            source_refs=refs, reason=reason or "user revised",
+            memory_id=memory_id, owner_id=principal.user_id,
+            expected_version=expected_version, content=_revision_content(content),
+            source_refs=source_refs, reason=reason or "user revised",
+        )
+
+    def revise_from_channel(
+        self, actor: Principal, memory_id: str, expected_version: int, *,
+        content: str, event_id: str, persona_id: str | None = None,
+    ) -> tuple[str, int]:
+        principal = self._principal(actor)
+        self._require(principal, "memory.view")
+        self._require(principal, "memory.edit")
+        if not event_id:
+            raise InvalidInputError("缺少微信事件标识")
+        return self.repo.revise_from_channel(
+            owner_id=principal.user_id, memory_id=_memory_id_prefix(memory_id), persona_id=persona_id,
+            expected_version=expected_version, content=_revision_content(content), event_id=event_id,
+        )
+
+    def channel_revision_receipt(
+        self, actor: Principal, event_id: str, *, persona_id: str | None = None,
+    ) -> tuple[str, int] | None:
+        principal = self._principal(actor)
+        self._require(principal, "memory.view")
+        self._require(principal, "memory.edit")
+        return self.repo.channel_revision_receipt(
+            owner_id=principal.user_id, event_id=event_id, persona_id=persona_id,
+        )
+
+    def set_sharing(self, actor: Principal, memory_id: str, *, is_shared: bool) -> MemoryRecord:
+        principal = self._principal(actor)
+        self._require(principal, "memory.view")
+        self._require(principal, "memory.edit")
+        return self.repo.set_sharing(
+            owner_id=principal.user_id, memory_id=_memory_id_prefix(memory_id), is_shared=is_shared,
         )
 
     def record_feedback(
@@ -131,9 +178,6 @@ class MemoryService:
     ) -> bool:
         principal = self._principal(actor)
         self._require(principal, "memory.edit")
-        record = self.repo.get(memory_id)
-        if record.owner_id != principal.user_id:
-            raise NotFoundError("记忆不存在")
         return self.repo.add_feedback(
             owner_id=principal.user_id, memory_id=memory_id,
             source_event_id=source_event_id, signal=signal, note=note,
@@ -143,14 +187,14 @@ class MemoryService:
 
     def recall(
         self, actor: Principal, query: str, *, top_k: int = DEFAULT_TOP_K,
-        token_budget: int | None = None,
+        token_budget: int | None = None, persona_id: str | None = None,
     ) -> RecallResult:
         principal = self._principal(actor)
         self._require(principal, "memory.view")
         include_archived = retrieval.wants_old_memories(query)
         candidates = self.repo.candidates(
             principal.user_id, include_archived=include_archived,
-            limit=DEFAULT_CANDIDATE_LIMIT,
+            limit=DEFAULT_CANDIDATE_LIMIT, persona_id=persona_id,
         )
         return retrieval.recall(
             candidates, query, top_k=top_k,
@@ -159,12 +203,39 @@ class MemoryService:
         )
 
     def list(
-        self, actor: Principal, *, include_archived: bool = False, limit: int = 50
+        self, actor: Principal, *, include_archived: bool = False, limit: int = 50,
+        persona_id: str | None = None, all_personas: bool = True, shared_only: bool = False,
+        query: str = "", exact_scope: bool = False,
     ) -> list[MemoryRecord]:
         principal = self._principal(actor)
         self._require(principal, "memory.view")
         statuses = (STATUS_ACTIVE, STATUS_ARCHIVED) if include_archived else (STATUS_ACTIVE,)
-        return self.repo.list_for_owner(principal.user_id, statuses=statuses, limit=limit)
+        return self.repo.list_for_owner(
+            principal.user_id, statuses=statuses, limit=limit, persona_id=persona_id,
+            all_personas=all_personas, shared_only=shared_only, query=query.strip(), exact_scope=exact_scope,
+        )
+
+    def get(
+        self, actor: Principal, memory_id: str, *,
+        persona_id: str | None = None, all_personas: bool = True,
+    ) -> MemoryRecord:
+        principal = self._principal(actor)
+        self._require(principal, "memory.view")
+        return self.repo.get_visible(
+            principal.user_id, _memory_id_prefix(memory_id),
+            persona_id=persona_id, all_personas=all_personas,
+        )
+
+    def revisions(
+        self, actor: Principal, memory_id: str, *, limit: int = 50, offset: int = 0,
+        persona_id: str | None = None, all_personas: bool = True,
+    ) -> list[dict[str, Any]]:
+        principal = self._principal(actor)
+        self._require(principal, "memory.view")
+        return self.repo.visible_revisions(
+            principal.user_id, _memory_id_prefix(memory_id),
+            persona_id=persona_id, all_personas=all_personas, limit=limit, offset=offset,
+        )
 
     # ---- 遗忘 ------------------------------------------------------------------
 
@@ -176,62 +247,20 @@ class MemoryService:
         source_ref: str = "",
         query: str = "",
         reason: str = "",
+        persona_id: str | None = None,
+        all_personas: bool = True,
     ) -> ForgetResult:
         principal = self._principal(actor)
         self._require(principal, "memory.edit")
-        owner = principal.user_id
         if sum(bool(v) for v in (memory_id, source_ref, query)) != 1:
             raise InvalidInputError("必须且只能指定 memory_id / source_ref / query 之一")
-
-        targets: list[MemoryRecord] = []
-        extra_rules: list[tuple[str, str]] = []
-        if memory_id:
-            record = self.repo.get(memory_id)
-            if record.owner_id != owner:
-                raise NotFoundError("记忆不存在")
-            targets = [record]
-            target_kind, target_hash = "memory", source_hash(memory_id)
-            # 同时按正文/来源登记墓碑，阻止同一内容被旧消息重新提取
-            extra_rules.append(("content", content_hash(record.content)))
-            extra_rules.extend(("source_ref", source_hash(ref.ref)) for ref in record.source_refs)
-        elif source_ref:
-            for record in self.repo.list_for_owner(
-                owner, statuses=(STATUS_ACTIVE, STATUS_ARCHIVED), limit=2000
-            ):
-                if any(ref.ref == source_ref for ref in record.source_refs):
-                    targets.append(record)
-            target_kind, target_hash = "source_ref", source_hash(source_ref)
-        else:
-            needle = query.strip().lower()
-            if not needle:
-                raise InvalidInputError("遗忘查询不能为空")
-            for record in self.repo.list_for_owner(
-                owner, statuses=(STATUS_ACTIVE, STATUS_ARCHIVED), limit=2000
-            ):
-                if needle in record.content.lower():
-                    targets.append(record)
-            target_kind, target_hash = "content", content_hash(query)
-
-        affected = [t.memory_id for t in targets]
-        forgotten = self.repo.forget_memories(
-            owner_id=owner, memory_ids=affected,
-            target_kind=target_kind, target_hash=target_hash, reason=reason,
+        if query and not query.strip():
+            raise InvalidInputError("遗忘查询不能为空")
+        affected = self.repo.forget_memories(
+            owner_id=principal.user_id, memory_id=_memory_id_prefix(memory_id) if memory_id else "",
+            source_ref=source_ref, query=query.strip().lower(), persona_id=persona_id, all_personas=all_personas,
         )
-        for rule_kind, rule_hash in extra_rules:
-            self.repo.forget_memories(
-                owner_id=owner, memory_ids=[], target_kind=rule_kind,
-                target_hash=rule_hash, reason=reason,
-            )
-        # 按内容遗忘时，同时登记每条被删正文的哈希，阻止旧消息重提取
-        if query:
-            for record in targets:
-                self.repo.forget_memories(
-                    owner_id=owner, memory_ids=[], target_kind="content",
-                    target_hash=content_hash(record.content), reason=reason,
-                )
-        return ForgetResult(
-            forgotten=forgotten, rule_recorded=True, affected_ids=tuple(affected),
-        )
+        return ForgetResult(forgotten=len(affected), rule_recorded=True, affected_ids=affected)
 
     # ---- 信号（幂等 job） --------------------------------------------------------
 
@@ -251,7 +280,7 @@ class MemoryService:
             owner_id=principal.user_id, source_event_id=source_event_id,
             signal=signal, payload=payload,
         )
-        if inserted and self.queue is not None:
+        if inserted and state == "pending" and self.queue is not None:
             self.queue.enqueue(
                 kind="memory.signal",
                 dedup_key=f"memory:{principal.user_id}:{source_event_id}",
@@ -313,12 +342,3 @@ class MemoryService:
         return SignalReceipt(
             signal_id=signal_id, state="processed", duplicate=False, memory_id=memory_id,
         )
-
-    # ---- 内部 ------------------------------------------------------------------
-
-    def _assert_not_forgotten(self, owner_id: int, candidate: MemoryCandidate) -> None:
-        if self.repo.find_forget_rule(owner_id, "content", content_hash(candidate.content)):
-            raise ForbiddenError("该内容已被用户遗忘，不能重新写入")
-        for ref in candidate.source_refs:
-            if self.repo.find_forget_rule(owner_id, "source_ref", source_hash(ref.ref)):
-                raise ForbiddenError("该来源已被用户遗忘，不能重新提取")

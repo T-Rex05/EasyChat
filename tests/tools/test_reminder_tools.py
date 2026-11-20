@@ -259,7 +259,7 @@ def test_stale_token_pauses_account_and_retry_is_bounded(rig) -> None:
             self.reported: list[str] = []
             self.fail = True
 
-        def is_delivery_binding_active(self, account_pk: str, ext: str) -> bool:
+        def is_delivery_binding_active(self, account_pk: str, ext: str, *, owner_id=None, required_permissions=()) -> bool:
             return True
 
         async def send_wechat_text(self, *, account_pk, external_user_id, text,

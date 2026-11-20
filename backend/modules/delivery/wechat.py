@@ -97,13 +97,17 @@ class WeChatTextSender:
         if target.kind != "wechat" or not target.ref:
             return False
         return bool(self.channels.is_delivery_binding_active(
-            target.channel_account_id, target.ref
+            target.channel_account_id, target.ref, owner_id=target.owner_id,
+            required_permissions=target.required_permissions,
         ))
 
     async def send_text(
         self, target: DeliveryTarget, text: str, *, context_token: str = ""
     ) -> SendResult:
         try:
+            # 每个分块外呼前重新检查，覆盖同一轮投递中途解绑或换绑。
+            if target.owner_id is not None and not await self.can_deliver(target):
+                return SendResult.failed("微信绑定已失效")
             await self.channels.send_wechat_text(
                 account_pk=target.channel_account_id,
                 external_user_id=target.ref,

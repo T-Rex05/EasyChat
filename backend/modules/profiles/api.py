@@ -37,6 +37,7 @@ from backend.shared.errors import InvalidInputError
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
+DEFAULT_PERSONA_NAME = "默认角色"
 _PRESET_RULES = {
     "warm": "温和但不腻；先接住，再给建议",
     "concise": "直接给结论，少寒暄",
@@ -48,6 +49,24 @@ _EMOJI_RULES = {
     "sparse": "最多 1 个 emoji",
     "rich": "可适量使用 emoji，但不要堆砌",
 }
+
+
+def _validate_persona_name(name: str) -> str:
+    clean = name.strip()
+    if not clean or len(clean) > 30 or any(char in clean for char in "\r\n\x00"):
+        raise InvalidInputError("角色名称需为 1 至 30 个字符的单行文本")
+    if clean == DEFAULT_PERSONA_NAME:
+        raise InvalidInputError("该名称由默认角色保留")
+    return clean
+
+
+def _validate_persona_instruction(instruction: str) -> str:
+    clean = instruction.strip()
+    if not clean or len(clean) > MAX_CUSTOM_INSTRUCTION:
+        raise InvalidInputError(f"角色设定需为 1 至 {MAX_CUSTOM_INSTRUCTION} 个字符")
+    return clean
+
+
 class ProfilesService:
     def __init__(
         self,
@@ -123,13 +142,46 @@ class ProfilesService:
         self._purge_sample_payloads(int(owner_id))
         return profile
 
+    def list_personas(self, actor: Principal) -> list[dict[str, Any]]:
+        principal = self.access.validate_principal(actor)
+        profile = self.get_by_owner(principal.user_id)
+        return [
+            {
+                "id": None, "name": DEFAULT_PERSONA_NAME, "instruction": profile.custom_instruction,
+                "version": profile.persona_revision, "active": True,
+            },
+            *self.repo.list_personas(principal.user_id),
+        ]
+
+    def create_persona(self, actor: Principal, *, name: str, instruction: str) -> dict[str, Any]:
+        principal = self.access.validate_principal(actor)
+        return self.repo.create_persona(
+            principal.user_id, name=_validate_persona_name(name), instruction=_validate_persona_instruction(instruction),
+        )
+
+    def update_persona(
+        self, actor: Principal, persona_id: str, *,
+        name: str | None = None, instruction: str | None = None, active: bool | None = None,
+    ) -> dict[str, Any]:
+        principal = self.access.validate_principal(actor)
+        return self.repo.update_persona(
+            principal.user_id, persona_id,
+            name=_validate_persona_name(name) if name is not None else None,
+            instruction=_validate_persona_instruction(instruction) if instruction is not None else None,
+            active=active,
+        )
+
     def timezone_for(self, owner_id: int) -> str:
         return self._ensure(int(owner_id)).timezone
 
-    def render_persona(self, owner_id: int, surface: str = "wechat") -> str:
+    def render_persona(
+        self, owner_id: int, surface: str = "wechat", *, instruction: str | None = None,
+    ) -> str:
         profile = self._ensure(int(owner_id))
         rule = _PRESET_RULES.get(profile.persona_preset, _PRESET_RULES[PERSONA_WARM])
-        if profile.persona_preset == PERSONA_CUSTOM and profile.custom_instruction:
+        if instruction is not None:
+            rule = instruction
+        elif profile.persona_preset == PERSONA_CUSTOM and profile.custom_instruction:
             rule = profile.custom_instruction.strip() or rule
         # proactivity 只驱动 C3 的确定性关怀任务，不进入普通回复提示词，
         # 否则模型会自行“主动关心”，绕过频率上限与安静时段。

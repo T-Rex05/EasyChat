@@ -29,6 +29,11 @@ from backend.shared.identifiers import new_artifact_id, new_delivery_id, new_par
 
 def _lease_from_row(row: Any, attempts: int) -> DeliveryLease:
     d = dict(row)
+    permissions: tuple[str, ...] = ()
+    if d["source"] == "memory":
+        permissions = ("chat.use", "memory.view")
+    elif d["source"] == "wechat" and d["run_id"]:
+        permissions = ("chat.use",)
     return DeliveryLease(
         delivery_id=str(d["id"]),
         owner_id=int(d["owner_id"]),
@@ -39,6 +44,8 @@ def _lease_from_row(row: Any, attempts: int) -> DeliveryLease:
             ref=str(d["target_ref"]),
             channel_account_id=str(d.get("channel_account_id") or ""),
             context_token=str(d.get("context_token") or ""),
+            owner_id=int(d["owner_id"]),
+            required_permissions=permissions,
         ),
         content_text=str(d.get("content_text") or ""),
         artifact_id=str(d.get("artifact_id") or ""),
@@ -116,6 +123,25 @@ class DeliveryRepository:
         return delivery_id
 
     # ---- 认领与完成 --------------------------------------------------------------
+
+    @staticmethod
+    def cancel_memory_confirmations_in_transaction(conn: Any, owner_id: int, run_ids: set[str]) -> None:
+        criteria = "owner_id=? AND source='memory' AND dedup_key=? AND status IN (?,?)"
+        pending = [
+            (owner_id, f"memory-confirm:{run_id}", DELIVERY_PENDING, DELIVERY_RETRY_WAIT)
+            for run_id in run_ids
+        ]
+        conn.executemany(
+            "UPDATE delivery_parts SET content='', error='' WHERE status!=? "
+            f"AND delivery_id IN (SELECT id FROM deliveries WHERE {criteria})",
+            ((PART_SENT, *values) for values in pending),
+        )
+        now = utc_now_iso()
+        conn.executemany(
+            "UPDATE deliveries SET status=?, content_text='', error='', updated_at=? "
+            f"WHERE {criteria}",
+            ((DELIVERY_CANCELLED, now, *values) for values in pending),
+        )
 
     def claim_due(self, worker_id: str, *, now: float, max_attempts: int = 5) -> DeliveryLease | None:
         with self.db.transaction() as conn:

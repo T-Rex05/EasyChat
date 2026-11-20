@@ -300,6 +300,7 @@ class ChannelRepository:
         *,
         platform: str,
         account_id: str,
+        external_user_id: str,
         external_event_id: str,
         event_kind: str,
         payload: dict[str, Any],
@@ -314,11 +315,14 @@ class ChannelRepository:
             cur = conn.execute(
                 "INSERT INTO channel_events(id, platform, account_id, external_event_id, event_kind, "
                 "payload, fingerprint, received_at, state, envelope_version, envelope_json, "
-                "processing_state, attempts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "processing_state, attempts, origin_owner_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, "
+                "(SELECT user_id FROM channel_bindings WHERE platform=? AND account_id=? "
+                "AND external_user_id=? AND status=?)) "
                 "ON CONFLICT(platform, account_id, external_event_id) DO NOTHING",
                 (event_id, platform, account_id, external_event_id, event_kind,
                  json.dumps(payload, ensure_ascii=False), fingerprint, received_at, EVENT_RECEIVED,
-                 envelope_version, envelope_json, PROCESSING_PENDING, 0),
+                 envelope_version, envelope_json, PROCESSING_PENDING, 0,
+                 platform, account_id, external_user_id, BINDING_ACTIVE),
             )
             if cur.rowcount == 1:
                 return event_id, True
@@ -371,6 +375,23 @@ class ChannelRepository:
         finally:
             conn.close()
         return [dict(r) for r in rows]
+
+    def bind_event_session(
+        self, event_id: str, session_id: str, *, origin: tuple[str, str, str, str],
+    ) -> str:
+        """重放复用首次绑定的会话，避免入站切换角色后重复创建 run。"""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel_events SET origin_session_id=?, origin_cursor_version=("
+                "SELECT cursor_version FROM channel_session_cursors WHERE platform=? AND account_id=? "
+                "AND external_user_id=? AND external_chat_id=? AND session_id=?) "
+                "WHERE id=? AND origin_session_id=''",
+                (session_id, *origin, session_id, event_id),
+            )
+            row = conn.execute("SELECT origin_session_id FROM channel_events WHERE id=?", (event_id,)).fetchone()
+            if row is None:
+                raise NotFoundError("入站消息不存在")
+            return str(row["origin_session_id"])
 
     def update_event(
         self,
@@ -451,6 +472,23 @@ class ChannelRepository:
         finally:
             conn.close()
 
+    @staticmethod
+    def _can_navigate_tx(conn: Any, origin: tuple[str, str, str, str], event_id: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM channel_session_cursors c JOIN channel_events e "
+            "ON e.origin_session_id=c.session_id AND e.origin_cursor_version=c.cursor_version "
+            "WHERE c.platform=? AND c.account_id=? AND c.external_user_id=? AND c.external_chat_id=? AND e.id=?",
+            (*origin, event_id),
+        ).fetchone()
+        return row is not None
+
+    def can_navigate(self, origin: tuple[str, str, str, str], event_id: str) -> bool:
+        conn = self.db.connect()
+        try:
+            return self._can_navigate_tx(conn, origin, event_id)
+        finally:
+            conn.close()
+
     def set_session_cursor(
         self,
         platform: str,
@@ -459,17 +497,43 @@ class ChannelRepository:
         external_chat_id: str,
         session_id: str,
         context_token: str = "",
-    ) -> None:
+        *,
+        event_id: str = "",
+    ) -> bool:
+        now = utc_now_iso()
+        origin = (platform, account_id, external_user_id, external_chat_id)
         with self.db.transaction() as conn:
+            if event_id and not self._can_navigate_tx(conn, origin, event_id):
+                return False
+            history = conn.execute(
+                "INSERT INTO channel_session_history(platform, account_id, external_user_id, "
+                "external_chat_id, session_id, context_token, updated_at) "
+                "SELECT ?,?,?,?,?,?,? FROM sessions s JOIN channel_accounts a ON a.id=s.channel_account_id "
+                "WHERE s.id=? AND s.source=? AND a.platform=? AND a.account_id=? "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "context_token=CASE WHEN excluded.context_token='' THEN channel_session_history.context_token "
+                "ELSE excluded.context_token END, updated_at=excluded.updated_at "
+                "WHERE channel_session_history.platform=excluded.platform "
+                "AND channel_session_history.account_id=excluded.account_id "
+                "AND channel_session_history.external_user_id=excluded.external_user_id "
+                "AND channel_session_history.external_chat_id=excluded.external_chat_id",
+                (platform, account_id, external_user_id, external_chat_id, session_id, context_token,
+                 now, session_id, platform, platform, account_id),
+            )
+            if history.rowcount == 0 and conn.execute(
+                "SELECT 1 FROM sessions WHERE id=?", (session_id,)
+            ).fetchone() is not None:
+                raise ConflictError("会话与微信来源不匹配")
             conn.execute(
                 "INSERT INTO channel_session_cursors(platform, account_id, external_user_id, "
                 "external_chat_id, session_id, context_token, updated_at) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(platform, account_id, external_user_id, external_chat_id) "
                 "DO UPDATE SET session_id=excluded.session_id, context_token=excluded.context_token, "
-                "updated_at=excluded.updated_at",
-                (platform, account_id, external_user_id, external_chat_id, session_id,
-                 context_token, utc_now_iso()),
+                "updated_at=excluded.updated_at, cursor_version=cursor_version + "
+                "(session_id != excluded.session_id OR ?)",
+                (*origin, session_id, context_token, now, bool(event_id)),
             )
+            return True
 
     def latest_context_token(
         self, platform: str, account_id: str, external_user_id: str
@@ -487,29 +551,60 @@ class ChannelRepository:
         finally:
             conn.close()
 
+    def list_origin_sessions(
+        self, owner_id: int, platform: str, account_id: str, external_user_id: str, external_chat_id: str, *,
+        limit: int = 10, filter_persona: bool = False, persona_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [owner_id, platform, account_id, external_user_id, external_chat_id]
+        sql = (
+            "SELECT s.id, s.title, s.persona_id FROM channel_session_history h "
+            "JOIN sessions s ON s.id=h.session_id "
+            "WHERE s.owner_id=? AND s.active=1 AND h.platform=? AND h.account_id=? "
+            "AND h.external_user_id=? AND h.external_chat_id=?"
+        )
+        if filter_persona:
+            sql += " AND s.persona_id IS ?"
+            params.append(persona_id)
+        sql += " ORDER BY h.updated_at DESC, s.created_at DESC, s.id LIMIT ?"
+        params.append(limit)
+        conn = self.db.connect()
+        try:
+            return [dict(row) for row in conn.execute(sql, params)]
+        finally:
+            conn.close()
+
     def find_session_route(self, session_id: str) -> dict[str, Any] | None:
         """按 Assistant 会话反查渠道路由（run 完成时确定投递目标）。"""
         conn = self.db.connect()
         try:
             row = conn.execute(
-                "SELECT * FROM channel_session_cursors WHERE session_id=? "
-                "ORDER BY updated_at DESC LIMIT 1",
+                "SELECT h.*, s.owner_id, s.channel_account_id FROM channel_session_history h "
+                "JOIN sessions s ON s.id=h.session_id AND s.source=h.platform WHERE h.session_id=?",
                 (session_id,),
             ).fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
 
-    def clear_session_cursor(
-        self, platform: str, account_id: str, external_user_id: str, external_chat_id: str
-    ) -> None:
-        with self.db.transaction() as conn:
-            conn.execute(
-                "DELETE FROM channel_session_cursors WHERE platform=? AND account_id=? "
-                "AND external_user_id=? AND external_chat_id=?",
-                (platform, account_id, external_user_id, external_chat_id),
-            )
-
+    def context_token_for_run(
+        self, *, platform: str, account_id: str, external_event_id: str, session_id: str,
+    ) -> str:
+        conn = self.db.connect()
+        try:
+            row = conn.execute(
+                "SELECT envelope_json FROM channel_events WHERE platform=? AND account_id=? "
+                "AND external_event_id=? AND (origin_session_id=? OR session_id=?)",
+                (platform, account_id, external_event_id, session_id, session_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return ""
+        try:
+            envelope = json.loads(row["envelope_json"] or "{}")
+        except ValueError:
+            return ""
+        return str(envelope.get("context_token") or "") if isinstance(envelope, dict) else ""
 
 def _load_credentials(raw: str) -> dict[str, Any]:
     if not raw:

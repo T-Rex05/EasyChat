@@ -465,14 +465,14 @@ async def test_session_confirmation_idempotent_within_run(rig) -> None:
         rig, None, confirm_writer=lambda *a: None, client_msg="cap-twice")
     confirm = make_memory_confirm(ready.db)
     confirm(user.user_id, run_id, "已记住：少糖咖啡")
-    confirm(user.user_id, run_id, "已记住：少糖咖啡")
+    confirm(user.user_id, run_id, "已记住：无糖咖啡")  # 两次消费之间可能修订了记忆。
     conn = ready.db.connect()
     try:
         rows = conn.execute(
-            "SELECT id FROM conversations WHERE run_id=? AND role='assistant'"
-            " AND source='system' AND content=?",
-            (run_id, "已记住：少糖咖啡"),
+            "SELECT content FROM conversations WHERE run_id=? AND role='assistant'"
+            " AND source='system'",
+            (run_id,),
         ).fetchall()
     finally:
         conn.close()
-    assert len(rows) == 1, f"稳定操作身份(run+content)必须幂等，实际 {len(rows)} 条"
+    assert [row["content"] for row in rows] == ["已记住：少糖咖啡"]

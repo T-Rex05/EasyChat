@@ -309,15 +309,19 @@ class RunDispatcher:
                 role_toolsets = tuple(set(role_toolsets) | set(granted))
         source = str(run["source"])
         text = self._input_text(run)
-        persona_context = ""
+        persona_id = run.get("persona_id")
+        instruction = str(run["persona_instruction"]) if persona_id is not None else None
+        persona_context = instruction or ""
         timezone_name = "Asia/Shanghai"
         if self.profiles is not None:
             try:
                 profile = self.profiles.get_by_owner(owner_id)
                 timezone_name = profile.timezone
-                persona_context = self.profiles.render_persona(
-                    owner_id, "wechat" if source == "wechat" else "web"
-                )
+                surface = "wechat" if source == "wechat" else "web"
+                if instruction is None:
+                    persona_context = self.profiles.render_persona(owner_id, surface)
+                else:
+                    persona_context = self.profiles.render_persona(owner_id, surface, instruction=instruction)
             except Exception:  # noqa: BLE001  人格失败不阻塞回答
                 logger.exception("人格渲染失败 owner=%s", owner_id)
 
@@ -348,7 +352,7 @@ class RunDispatcher:
                 logger.exception("技能快照加载失败 owner=%s", owner_id)
 
         prefix = self._context_prefix(
-            owner_id, str(run["id"]), text, attachment_ids, source, timezone_name
+            owner_id, str(run["id"]), text, attachment_ids, source, timezone_name, persona_id=persona_id,
         )
 
         ctx = ExecutionContext(
@@ -382,6 +386,8 @@ class RunDispatcher:
         attachment_ids: tuple[str, ...],
         source: str,
         timezone_name: str,
+        *,
+        persona_id: str | None = None,
     ) -> str:
         """当前时间 + 附件元数据 + 记忆召回；只放易变上下文。"""
         try:
@@ -409,13 +415,16 @@ class RunDispatcher:
             try:
                 principal = self.access.snapshot_principal(owner_id)
                 recalled = self.memory.recall(
-                    principal, text[:500], top_k=3, token_budget=800
+                    principal, text[:500], top_k=3, token_budget=800, persona_id=persona_id,
                 )
                 if recalled.items:
                     lines.append("【可能是相关的记忆，未必准确；自然使用，不要逐条复述】")
                     for index, item in enumerate(recalled.items, 1):
                         memory = item.memory
                         lines.append(f"{index}. [{memory.kind}] {memory.content}")
+                self.repo.record_memory_context(
+                    run_id, [(item.memory.memory_id, item.memory.version) for item in recalled.items],
+                )
             except Exception:  # noqa: BLE001  记忆失败只跳过
                 logger.warning("记忆召回失败 owner=%s run=%s", owner_id, run_id)
         return "\n".join(lines)

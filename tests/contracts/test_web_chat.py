@@ -9,6 +9,9 @@ from fastapi import FastAPI
 
 from backend.modules.assistant.contracts import RunCommand
 from backend.modules.assistant.routes import build_web_chat_router
+from backend.modules.memory.api import MemoryService
+from backend.modules.memory.contracts import MemoryCandidate, SourceRef
+from backend.modules.profiles.api import ProfilesService
 from backend.shared.errors import AppError
 from backend.runtime.contracts import RuntimeEvent
 from tests.support.rig import make_rig
@@ -55,6 +58,124 @@ async def _read_sse(rig, client: httpx.AsyncClient, params: dict, headers: dict 
     async with client.stream("GET", "/chat/stream", params=params, headers=headers or {}) as response:
         chunks = [chunk async for chunk in response.aiter_text()]
         return response.status_code, "".join(chunks)
+
+
+async def test_run_memory_reports_injected_versions_only_to_owner(rig, monkeypatch):
+    grants = ("chat.use", "memory.view", "memory.edit")
+    owner = rig.seed_user(grants=grants)
+    other = rig.seed_user(grants=grants)
+    without_memory = rig.seed_user(grants=("chat.use",), revokes=("memory.view",))
+    service = MemoryService(rig.db, access=rig.access)
+    rig.assistant.dispatcher.memory = service
+    rig.runtime.script_events([
+        _e("completed", {"result": {"final_response": "好的", "completed": True}}),
+    ])
+    memory = service.remember(owner, MemoryCandidate(
+        kind="preference", content="喜欢无糖豆浆",
+        source_refs=(SourceRef(kind="manual", ref="synthetic"),),
+    ))
+    session = await rig.seed_session(owner)
+    run = await rig.assistant.submit(RunCommand(
+        principal=owner, source="web", session_id=session,
+        client_message_id="recall-reference", text="无糖豆浆",
+    ))
+    async for event in rig.assistant.iter_events(owner, run.run_id):
+        if event.kind == "completed":
+            break
+    assert "喜欢无糖豆浆" in rig.runtime.requests[0].context_prefix
+
+    service.revise(owner, memory.memory_id, memory.version, content="改喝温水")
+    from backend.bootstrap import make_memory_confirm
+
+    make_memory_confirm(rig.db)(owner.user_id, run.run_id, "已记住")
+    url = f"/api/assistant/runs/{run.run_id}/memory"
+    async with _client(rig) as client:
+        history = await client.get(f"/api/history/{session}", headers=_auth_headers(rig, owner))
+        assert [(item["role"], item["run_id"]) for item in history.json()["messages"]] == [
+            ("user", run.run_id), ("assistant", run.run_id), ("assistant", None),
+        ]
+        monkeypatch.setattr(rig.assistant.events, "_ttl", 0)
+        assert rig.assistant.events.sweep() == 1
+        status, body = await _read_sse(rig, client, {
+            "thread_id": session, "client_msg_id": "recall-reference", "message": "无糖豆浆",
+        }, headers=_auth_headers(rig, owner))
+        assert status == 200 and "stream_reset" in body
+        assert "好的" in body and "已记住" not in body
+        assert rig.runtime.execute_count == 1
+        response = await client.get(url, headers=_auth_headers(rig, owner))
+        assert response.status_code == 200
+        data = response.json()
+        assert data["recorded"] is True
+        assert data["items"] == [{
+            "memory_id": memory.memory_id, "version": 1, "current_version": 2,
+            "kind": "preference", "summary": "改喝温水",
+        }]
+        assert (await client.get(url, headers=_auth_headers(rig, other))).status_code == 404
+        assert (await client.get(url, headers=_auth_headers(rig, without_memory))).status_code == 403
+        assert rig.assistant.memory_recall_for_session(owner, session) == data
+        service.forget(owner, memory_id=memory.memory_id)
+        after = await client.get(url, headers=_auth_headers(rig, owner))
+        assert after.json() == {"recorded": True, "items": []}
+
+        empty_session = await rig.seed_session(owner)
+        assert rig.assistant.memory_recall_for_session(owner, empty_session) == {
+            "recorded": False, "items": [],
+        }
+        empty_run = await rig.assistant.submit(RunCommand(
+            principal=owner, source="web", session_id=empty_session,
+            client_message_id="empty-recall", text="无关文字",
+        ))
+        async for event in rig.assistant.iter_events(owner, empty_run.run_id):
+            if event.kind == "completed":
+                break
+        empty = await client.get(
+            f"/api/assistant/runs/{empty_run.run_id}/memory", headers=_auth_headers(rig, owner),
+        )
+        assert empty.json() == {"recorded": True, "items": []}
+        assert (await client.get("/api/assistant/runs/unknown/memory")).status_code == 401
+
+
+async def test_run_memory_follows_role_and_current_sharing(rig):
+    owner = rig.seed_user(grants=("chat.use", "memory.view", "memory.edit"))
+    profiles = ProfilesService(rig.db, access=rig.access)
+    editor = profiles.create_persona(owner, name="编辑", instruction="检查表达")
+    teacher = profiles.create_persona(owner, name="老师", instruction="逐步讲解")
+    memory = MemoryService(rig.db, access=rig.access)
+    rig.assistant.dispatcher.memory = memory
+    rig.runtime.script_events([
+        _e("completed", {"result": {"final_response": "好的", "completed": True}}),
+    ])
+    private = memory.remember(
+        owner, MemoryCandidate(kind="preference", content="咖啡只在编辑会话谈论",
+                               source_refs=(SourceRef(kind="manual", ref="one"),)),
+        persona_id=editor["id"],
+    )
+    shared = memory.remember(
+        owner, MemoryCandidate(kind="preference", content="咖啡不要加糖",
+                               source_refs=(SourceRef(kind="manual", ref="two"),)),
+        persona_id=teacher["id"], is_shared=True,
+    )
+    session = await rig.assistant.create_session(owner, persona_id=editor["id"])
+    other_session = await rig.assistant.create_session(owner, persona_id=teacher["id"])
+    runs = []
+    for session_id in (session, other_session):
+        run = await rig.assistant.submit(RunCommand(
+            principal=owner, source="web", session_id=session_id,
+            client_message_id="role-memory", text="咖啡",
+        ))
+        async for event in rig.assistant.iter_events(owner, run.run_id):
+            if event.kind == "completed":
+                break
+        runs.append(run)
+
+    assert private.content in rig.runtime.requests[0].context_prefix
+    assert private.content not in rig.runtime.requests[1].context_prefix
+    assert all(shared.content in request.context_prefix for request in rig.runtime.requests)
+    memory.set_sharing(owner, shared.memory_id, is_shared=False)
+    first = rig.assistant.memory_recall_for_run(owner, runs[0].run_id)
+    second = rig.assistant.memory_recall_for_run(owner, runs[1].run_id)
+    assert [item["memory_id"] for item in first["items"]] == [private.memory_id]
+    assert [item["memory_id"] for item in second["items"]] == [shared.memory_id]
 
 
 async def test_stream_legacy_thread_id_full_flow(rig):

@@ -155,3 +155,23 @@ def test_service_rejects_candidate_without_source(env):
 
     with pytest.raises(ExtractionError):
         service.remember(user, MemoryCandidate(kind="fact", content="无来源的推断", source_refs=()))
+
+
+def test_oversized_revision_does_not_change_version(env):
+    _, service, user = env
+    record = service.remember(user, _candidate())
+    with pytest.raises(InvalidInputError):
+        service.revise(user, record.memory_id, 1, content="长" * 2001)
+    assert service.repo.get(record.memory_id).version == 1
+
+
+def test_system_manage_cannot_revise_another_owners_memory(env):
+    rig, service, user = env
+    from backend.shared.errors import NotFoundError
+
+    admin = rig.seed_user(role="super_admin", grants=("memory.view", "memory.edit"), username="memory_admin")
+    assert rig.access.has_permission(admin, "system.manage")
+    record = service.remember(user, _candidate())
+    with pytest.raises(NotFoundError):
+        service.revise(admin, record.memory_id, 1, content="尝试跨用户修改")
+    assert service.get(user, record.memory_id).version == 1

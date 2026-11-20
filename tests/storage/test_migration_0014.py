@@ -90,22 +90,57 @@ def test_0013_database_upgrades_without_rewriting_old_checksums(tmp_path: Path) 
     assert "0014" not in before
 
     applied = db.migrate()
-    assert applied == ["0014", "0015", "0016", "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024", "0025", "0026"]
+    assert applied == [f"{number:04d}" for number in range(14, 30)]
     after = _checksums(db)
-    assert after["0012"] == before["0012"]
-    assert after["0013"] == before["0013"]
-    assert after["0014"]
-    assert after["0015"]
-    assert after["0016"]
-    assert after["0017"]
-    assert after["0018"]
-    assert after["0019"]
-    assert after["0020"]
-    assert after["0021"]
-    assert after["0022"]
-    assert after["0023"]
-    assert after["0024"]
-    assert after["0025"]
+    assert {version: after[version] for version in before} == before
+    assert all(after[version] for version in applied)
+
+
+def test_0026_memory_upgrade_keeps_active_rows_and_scrubs_tombstones(tmp_path: Path) -> None:
+    old_dir = tmp_path / "migrations_0026"
+    old_dir.mkdir()
+    for source in MIGRATIONS_DIR.glob("*.sql"):
+        if source.name[:4] <= "0026":
+            shutil.copy2(source, old_dir / source.name)
+
+    db = Database(tmp_path / "old-app.db")
+    assert sqlite_module.run_migrations(db, migrations_dir=old_dir)[-1] == "0026"
+    now = "2026-01-01T00:00:00Z"
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO users(id, username, password, created_at, updated_at) VALUES(1,'u','p',?,?)",
+            (now, now),
+        )
+        conn.executemany(
+            "INSERT INTO memories(id, owner_id, kind, status, version, content, source_refs, "
+            "recorded_at, created_at, updated_at) VALUES(?,1,'fact',?,?,?,?,?,?,?)",
+            (
+                ("mem_aaaa", "active", 3, "仍在使用", "[]", now, now, now),
+                ("mem_bbbb", "deleted", 2, "", '[{"kind":"message","ref":"run_a","quote":"遗忘原文"}]',
+                 now, now, now),
+            ),
+        )
+        conn.execute("INSERT INTO memory_tags(memory_id, tag) VALUES('mem_bbbb','遗忘标签')")
+        conn.execute(
+            "INSERT INTO memory_revisions(id, memory_id, version, content, created_at) "
+            "VALUES('revision_1','mem_bbbb',1,'遗忘前版本',?)", (now,),
+        )
+
+    assert db.migrate() == ["0027", "0028", "0029"]
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, status, version, content, source_refs, persona_id, is_shared FROM memories ORDER BY id",
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("mem_aaaa", "active", 3, "仍在使用", "[]", None, 0),
+            ("mem_bbbb", "deleted", 2, "", "[]", None, 0),
+        ]
+        assert conn.execute("SELECT count(*) FROM memory_tags").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM memory_revisions").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        conn.close()
 
 
 def test_partial_url_unique_index_allows_multiple_empty_urls(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from sqlite3 import SQLITE_CONSTRAINT_UNIQUE, IntegrityError
 from typing import Any
 
 from backend.modules.profiles.contracts import (
@@ -13,7 +14,8 @@ from backend.modules.profiles.contracts import (
     ProfileView,
 )
 from backend.platform.sqlite import Database, utc_now_iso
-from backend.shared.identifiers import new_mood_id
+from backend.shared.errors import ConflictError, NotFoundError
+from backend.shared.identifiers import new_mood_id, new_persona_id
 
 
 def _profile(row: Any) -> ProfileView:
@@ -120,6 +122,58 @@ class ProfilesRepository:
             if cur.rowcount != 1:
                 raise LookupError(f"profile 不存在: {owner_id}")
         return self.get(owner_id)  # type: ignore[return-value]
+
+    # ---- personas ------------------------------------------------------------
+
+    def list_personas(self, owner_id: int) -> list[dict[str, Any]]:
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, instruction, version, active FROM persona_catalog "
+                "WHERE owner_id=? ORDER BY created_at, id",
+                (owner_id,),
+            ).fetchall()
+            return [dict(row, active=bool(row["active"])) for row in rows]
+        finally:
+            conn.close()
+
+    def create_persona(self, owner_id: int, *, name: str, instruction: str) -> dict[str, Any]:
+        persona_id = new_persona_id()
+        now = utc_now_iso()
+        with self.db.transaction() as conn:
+            try:
+                row = conn.execute(
+                    "INSERT INTO persona_catalog(id, owner_id, name, name_key, instruction, created_at, updated_at) "
+                    "VALUES(?,?,?,?,?,?,?) RETURNING id, name, instruction, version, active",
+                    (persona_id, owner_id, name, name.casefold(), instruction, now, now),
+                ).fetchone()
+            except IntegrityError as exc:
+                if exc.sqlite_errorcode != SQLITE_CONSTRAINT_UNIQUE:
+                    raise
+                raise ConflictError("角色名称已存在") from exc
+            return dict(row, active=bool(row["active"]))
+
+    def update_persona(
+        self, owner_id: int, persona_id: str, *, name: str | None, instruction: str | None, active: bool | None,
+    ) -> dict[str, Any]:
+        with self.db.transaction() as conn:
+            try:
+                row = conn.execute(
+                    "UPDATE persona_catalog SET name=COALESCE(?, name), name_key=COALESCE(?, name_key), "
+                    "instruction=COALESCE(?, instruction), active=COALESCE(?, active), "
+                    "version=version + (COALESCE(?, name) != name OR COALESCE(?, instruction) != instruction), "
+                    "updated_at=? WHERE owner_id=? AND id=? "
+                    "RETURNING id, name, instruction, version, active",
+                    (name, name.casefold() if name is not None else None, instruction, active,
+                     name, instruction, utc_now_iso(), owner_id, persona_id),
+                ).fetchone()
+            except IntegrityError as exc:
+                if exc.sqlite_errorcode != SQLITE_CONSTRAINT_UNIQUE:
+                    raise
+                raise ConflictError("角色名称已存在") from exc
+            if row is None:
+                raise NotFoundError("角色不存在")
+            return dict(row, active=bool(row["active"]))
 
     # ---- mood ----------------------------------------------------------------
 

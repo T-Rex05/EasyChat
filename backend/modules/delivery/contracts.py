@@ -36,6 +36,8 @@ class DeliveryTarget:
     ref: str
     channel_account_id: str = ""
     context_token: str = ""
+    owner_id: int | None = None
+    required_permissions: tuple[str, ...] = ()
 
 
 class ChannelTargetLike(Protocol):

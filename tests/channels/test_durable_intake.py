@@ -216,3 +216,59 @@ async def test_cursor_advances_and_batch_continues_after_internal_failure(rig) -
     # 失败的事件在本地重放队列里
     due = service.repo.due_replay_events(now=1_001_000.0, stale_pending_before=0, limit=10)
     assert [json.loads(e["envelope_json"])["text"] for e in due] == ["第一条"]
+
+
+async def test_memory_correction_commits_once_across_durable_inbound_retry(rig, monkeypatch) -> None:
+    from backend.modules.channels.commands import CommandServices, WeChatCommands
+    from backend.modules.memory.api import MemoryService
+    from backend.modules.memory.contracts import MemoryCandidate, SourceRef
+
+    channel_rig, _, _ = make_channel_rig(rig.tmp_path)
+    channel = channel_rig.channels
+    admin = _admin(channel_rig)
+    user = channel_rig.seed_user(role="user", grants=("chat.use", "memory.view", "memory.edit"), username="writer")
+    account = _register(channel_rig, admin)
+    _bind(channel_rig, admin, account, "wx_ext_1", user)
+    memory = MemoryService(channel_rig.db, access=channel_rig.access)
+    channel.commands = WeChatCommands(CommandServices(memory=memory))
+    initial = memory.remember(user, MemoryCandidate(
+        kind="fact", content="初始信息", source_refs=(SourceRef("message", "original"),),
+    ))
+    async def interrupt_after_revision(version: int, text: str):
+        command = _mk_message(account, text_message(
+            f"/纠正 {initial.memory_id[:12]}@{version} {text}", message_id=f"fix-{version}",
+        ))
+
+        def fail_after_revision(event_id, **fields):
+            assert memory.get(user, initial.memory_id).version == version + 1
+            raise RuntimeError("修订提交后、入站标记完成前中断")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(channel.repo, "update_event", fail_after_revision)
+            failed = await channel.handle_inbound(command)
+        assert failed.reason == "internal"
+        return command
+
+    command = await interrupt_after_revision(1, "纠正后的信息")
+    retry = await channel.handle_inbound(command)
+    assert retry.accepted
+    assert "已纠正" in retry.reply_text and "版本 2" in retry.reply_text
+    assert [item["version"] for item in memory.revisions(user, initial.memory_id)] == [1, 2]
+
+    command = await interrupt_after_revision(2, "再次纠正后的信息")
+    assert await channel.replay_due_events(now=channel_rig.clock() + 1200, limit=5) == 1
+    retry = await channel.handle_inbound(command)
+    assert retry.duplicate and "已纠正" in retry.reply_text and "版本 3" in retry.reply_text
+    assert [item["version"] for item in memory.revisions(user, initial.memory_id)] == [1, 2, 3]
+
+    channel_rig.access.set_user_permission(admin, user.user_id, "memory.view", False)
+    assert (await channel.handle_inbound(command)).reply_text == ""
+    channel_rig.access.set_user_permission(admin, user.user_id, "memory.view", True)
+
+    details = _mk_message(account, text_message(f"/记忆 {initial.memory_id[:12]}", message_id="details-1"))
+    first = await channel.handle_inbound(details)
+    assert "再次纠正后的信息" in first.reply_text
+    memory.forget(user, memory_id=initial.memory_id)
+    assert (await channel.handle_inbound(command)).reply_text == ""
+    duplicate = await channel.handle_inbound(details)
+    assert duplicate.duplicate and duplicate.reply_text == ""
