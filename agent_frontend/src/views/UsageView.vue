@@ -162,7 +162,7 @@ async function loadAll() {
   ])
 }
 
-watch(() => auth.ready && !globalOpen.value, (showOverview) => {
+watch([() => auth.ready && !globalOpen.value, () => auth.userId], ([showOverview]) => {
   if (showOverview) loadAll()
 }, { immediate: true })
 </script>

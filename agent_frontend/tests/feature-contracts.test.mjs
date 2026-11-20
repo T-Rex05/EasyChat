@@ -35,6 +35,41 @@ function view(path, request, exposed, auth = {}) {
   }, exposed)
 }
 
+test('login, verification, refresh and logout update the active user identity', async () => {
+  const storage = () => {
+    const items = new Map()
+    return {
+      getItem: key => items.get(key) ?? null,
+      setItem: (key, value) => items.set(key, String(value)),
+      removeItem: key => items.delete(key),
+      clear: () => items.clear(),
+    }
+  }
+  const localStorage = storage()
+  const sessionStorage = storage()
+  const { useAuthStore } = evaluate(readSource('stores/auth.ts'), {
+    defineStore: (_name, setup) => setup,
+    ref, computed, localStorage, sessionStorage,
+    apiLogin: async () => ({ token: 'fixture', user_id: 7 }),
+    verifyToken: async () => ({ id: 7 }),
+    refreshToken: async () => ({ token: 'fixture-refreshed', user_id: 7 }),
+    useChatStore: () => ({ resetAll() {} }),
+  }, ['useAuthStore: exports.useAuthStore'])
+  const auth = useAuthStore()
+  assert.equal(auth.userId.value, '')
+  await auth.login('fixture', 'fixture-password')
+  assert.equal(auth.userId.value, '7')
+  await auth.verify()
+  await auth.tryRefresh()
+  assert.equal(auth.userId.value, '7')
+  assert.equal(localStorage.getItem('chatUserId'), '7')
+  assert.equal(sessionStorage.getItem('chatUserId'), '7')
+  auth.logout()
+  assert.equal(auth.userId.value, '')
+  assert.equal(localStorage.getItem('chatUserId'), null)
+  assert.equal(sessionStorage.getItem('chatUserId'), null)
+})
+
 test('manual memory uses a supported, user-confirmed source type', async () => {
   let submitted
   const { rememberMemory } = evaluate(readSource('api/memoryManagement.ts'), {

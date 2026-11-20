@@ -28,23 +28,29 @@ export const useAuthStore = defineStore(
     const username = ref<string>(localStorage.getItem('username') || '')
     const permissions = ref<string[]>(readStoredPermissions())
     const capabilities = ref<UserCapabilities | null>(null)
+    const userId = ref(localStorage.getItem('chatUserId') || sessionStorage.getItem('chatUserId') || '')
     // 身份初始化状态：/me 对齐完成前，依赖身份的调用应等待（ready=false）
     const ready = ref(false)
 
     // 计算属性
     const isAuthenticated = computed(() => !!token.value)
 
-    const userId = computed(() => {
-      // 未知身份返回空串（T8）：调用方必须等待 ready 或显式处理空值，
-      // 绝不再默认到 '1'（会把对话记到 admin 头上）
-      return localStorage.getItem('chatUserId') || sessionStorage.getItem('chatUserId') || ''
-    })
+    function syncUserId(id?: number) {
+      const value = id ? String(id) : ''
+      userId.value = value
+      if (value) {
+        localStorage.setItem('chatUserId', value)
+        sessionStorage.setItem('chatUserId', value)
+      } else {
+        localStorage.removeItem('chatUserId')
+        sessionStorage.removeItem('chatUserId')
+      }
+    }
 
     // 操作
     async function login(user: string, pass: string) {
       try {
         const response = await apiLogin({ username: user, password: pass })
-        console.log('Login response:', response)
 
         token.value = response.token
         userRole.value = response.role || ''
@@ -58,9 +64,7 @@ export const useAuthStore = defineStore(
         localStorage.setItem('userRole', response.role || '')
         localStorage.setItem('username', response.username || '')
         localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-        const uid = String(response.user_id || '')
-        localStorage.setItem('chatUserId', uid)
-        sessionStorage.setItem('chatUserId', uid)
+        syncUserId(response.user_id)
 
         return true
       } catch (error: any) {
@@ -97,12 +101,7 @@ export const useAuthStore = defineStore(
         localStorage.setItem('username', userData.username || '')
         localStorage.setItem('userPermissions', JSON.stringify(userData.permissions || []))
 
-        // 刷新 token 时同步 chatUserId，避免 fallback 到 '1'（admin）
-        if (userData.id) {
-          const uid = String(userData.id)
-          localStorage.setItem('chatUserId', uid)
-          sessionStorage.setItem('chatUserId', uid)
-        }
+        syncUserId(userData.id)
         return true
       } catch (error) {
         console.error('Token 验证失败:', error)
@@ -130,16 +129,14 @@ export const useAuthStore = defineStore(
           userRole.value = response.role || ''
           username.value = response.username || ''
           permissions.value = response.permissions || []
-        capabilities.value = (response as any).capabilities || null
-        persistCapabilities(capabilities.value)
+          capabilities.value = (response as any).capabilities || null
+          persistCapabilities(capabilities.value)
 
           localStorage.setItem('authToken', response.token)
           localStorage.setItem('userRole', response.role || '')
           localStorage.setItem('username', response.username || '')
           localStorage.setItem('userPermissions', JSON.stringify(response.permissions || []))
-          const uid = String(response.user_id || '')
-          localStorage.setItem('chatUserId', uid)
-          sessionStorage.setItem('chatUserId', uid)
+          syncUserId(response.user_id)
 
           console.log('[Auth] Token 静默刷新成功')
           return true
@@ -164,7 +161,7 @@ export const useAuthStore = defineStore(
       localStorage.removeItem('userRole')
       localStorage.removeItem('username')
       localStorage.removeItem('userPermissions')
-      localStorage.removeItem('chatUserId')
+      syncUserId()
       sessionStorage.clear()
 
       // 清空聊天状态（避免切换用户后看到上一用户的对话）
@@ -198,8 +195,8 @@ export const useAuthStore = defineStore(
   {
     persist: {
       storage: localStorage,
-      // 注：pinia-plugin-persistedstate v4 已用 pick/omit 取代 v3 的 paths；
-      // 原 paths 键在 v4 下被静默忽略（等同全量持久化），删除以保持运行时行为不变。
+      // chatUserId 由 syncUserId 持久化，避免同一身份出现两份缓存。
+      omit: ['userId'],
     },
   }
 )
