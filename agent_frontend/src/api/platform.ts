@@ -28,9 +28,9 @@ export async function getPlatformConfig(platform: string): Promise<PlatformConfi
 export async function savePlatformConfig(
   platform: string,
   data: { config_json: Record<string, any>; enabled: boolean },
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; id: string }> {
   const cfg = data.config_json || {}
-  await request.post('/api/channels/accounts', {
+  const res = await request.post<{ account: { id: string } }>('/api/channels/accounts', {
     platform,
     account_id: String(cfg.account_id || '').trim(),
     token: String(cfg.token || '').trim(),
@@ -38,7 +38,19 @@ export async function savePlatformConfig(
     bot_user_id: String(cfg.bot_user_id || ''),
     display_name: String(cfg.nickname || ''),
   })
-  return { ok: true }
+  return { ok: true, id: res.data.account.id }
+}
+
+export interface WechatListener {
+  status: string
+  last_error?: string
+}
+
+export async function startWechatListener(accountPk: string): Promise<WechatListener> {
+  const res = await request.post<{ listener: WechatListener }>(
+    `/api/channels/accounts/${encodeURIComponent(accountPk)}/start`,
+  )
+  return res.data.listener
 }
 
 export async function getPlatformBindings(platform: string): Promise<{ bindings: any[] }> {
@@ -78,12 +90,17 @@ export async function checkWechatQrStatus(sessionId: string): Promise<QrStatusRe
   return { status: qr.status, qr_image: qr.qr_image, qr_scan_data: qr.qr_content || '', error: qr.error }
 }
 
-export async function bindWechatQr(sessionId: string): Promise<{ ok: boolean; wechat_user_id: string; bot_configured: boolean }> {
-  const res = await request.post<any>(`/api/channels/wechat/qr/${sessionId}/bind`)
+export async function bindWechatQr(sessionId: string) {
+  const res = await request.post<{
+    account: { id: string; has_credentials: boolean }
+    binding: { external_user_id: string } | null
+    listener: WechatListener
+  }>(`/api/channels/wechat/qr/${encodeURIComponent(sessionId)}/bind`)
   return {
-    ok: res.data.ok ?? true,
-    wechat_user_id: res.data.external_user_id || res.data.wechat_user_id || '',
-    bot_configured: true,
+    account_pk: res.data.account.id,
+    wechat_user_id: res.data.binding?.external_user_id || '',
+    bot_configured: res.data.account.has_credentials,
+    listener: res.data.listener,
   }
 }
 
@@ -96,10 +113,10 @@ export interface UserBinding {
   created_at: string
 }
 
-export async function getUserBindings(): Promise<{ bindings: UserBinding[] }> {
+export async function getUserBindings(ownerId: number): Promise<{ bindings: UserBinding[] }> {
   const res = await request.get<{ bindings: any[] }>('/api/channels/bindings')
   return {
-    bindings: (res.data.bindings || []).map((b) => ({
+    bindings: (res.data.bindings || []).filter(b => b.user_id === ownerId && b.status === 'active').map((b) => ({
       id: b.id,
       platform: b.platform,
       open_id: b.external_user_id,

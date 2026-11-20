@@ -103,6 +103,10 @@ class UsageService:
     def _permissions(self, actor: Principal) -> frozenset[str]:
         return self._effective_permissions(actor)
 
+    def _require_view(self, actor: Principal) -> None:
+        if actor.role != "super_admin" and not {"trace.view", "trace.manage"} & self._permissions(actor):
+            raise ForbiddenError("缺少权限: trace.view")
+
     def _can_view_owner(self, actor: Principal, owner_id: int) -> bool:
         if owner_id == actor.user_id:
             return True
@@ -119,10 +123,7 @@ class UsageService:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """明细查看：需 trace.view/manage；他人/全量需 trace.manage（WP-D：撤权后本人也 403）。"""
-        if actor.role != "super_admin" and not (
-            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
-        ):
-            raise ForbiddenError("缺少权限: trace.view")
+        self._require_view(actor)
         if owner_id is not None:
             if not self._can_view_owner(actor, owner_id):
                 raise ForbiddenError("无权查看他人调用明细")
@@ -132,20 +133,29 @@ class UsageService:
         rows = self.repo.list_calls(owner_id=owner_id, limit=limit, offset=offset)
         return [self._call_view(row) for row in rows]
 
-    def user_options(self, actor: Principal, *, limit: int = 100, offset: int = 0) -> dict:
-        """全局用量页用户筛选选项:仅 trace.manage/super_admin,字段最小化。"""
+    def _require_manage(self, actor: Principal) -> None:
         if actor.role != "super_admin" and "trace.manage" not in self._permissions(actor):
             raise ForbiddenError("无权查看全局用量")
+
+    def user_options(self, actor: Principal, *, limit: int = 100, offset: int = 0) -> dict:
+        """全局用量页用户筛选选项:仅 trace.manage/super_admin,字段最小化。"""
+        self._require_manage(actor)
         items, total = self.repo.user_options(limit=limit, offset=offset)
         return {"users": items, "total": total}
 
     def get_call(self, actor: Principal, call_id: str) -> dict[str, Any]:
+        self._require_view(actor)
         row = self.repo.get_call(call_id)
         if row is None:
             raise NotFoundError(f"调用不存在: {call_id}")
         if not self._can_view_owner(actor, int(row["owner_id"])):
             raise ForbiddenError("无权查看他人调用明细")
-        return self._call_view(row)
+        detail = self._call_view(row)
+        messages = self.repo.conversation_text(
+            owner_id=row["owner_id"], session_id=row["session_id"], run_id=row["run_id"],
+        )
+        detail.update(prompt_text=messages.get("user"), completion_text=messages.get("assistant"))
+        return detail
 
     @staticmethod
     def _call_view(row: dict[str, Any]) -> dict[str, Any]:
@@ -157,19 +167,41 @@ class UsageService:
 
     def ranking(self, actor: Principal, *, days: int = 7, limit: int = 20) -> dict[str, Any]:
         """Token 排行：trace.view 或 trace.manage（管理语义含查看；方案 §5.1 入口一致）。"""
-        if actor.role != "super_admin" and not (
-            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
-        ):
-            raise ForbiddenError("缺少权限: trace.view")
+        self._require_view(actor)
         rows = self.repo.ranking(days=days, limit=limit, today_utc=self._clock())
         return {"ranking": rows, "days": days}
 
+    def my_call_groups(self, actor: Principal, *, limit: int, offset: int) -> dict[str, Any]:
+        self._require_view(actor)
+        return self._call_groups(owner_id=actor.user_id, limit=limit, offset=offset)
+
+    def global_call_groups(
+        self, actor: Principal, *, owner_id: int | None, limit: int, offset: int,
+    ) -> dict[str, Any]:
+        self._require_manage(actor)
+        return self._call_groups(owner_id=owner_id, limit=limit, offset=offset)
+
+    def _call_groups(self, *, owner_id: int | None, limit: int, offset: int) -> dict[str, Any]:
+        rows = self.repo.call_groups(owner_id=owner_id, limit=limit + 1, offset=offset)
+        return {"groups": rows[:limit], "has_more": len(rows) > limit}
+
+    def my_group_calls(self, actor: Principal, *, session_id: str | None, limit: int, offset: int) -> list[dict[str, Any]]:
+        self._require_view(actor)
+        return self._group_calls(owner_id=actor.user_id, session_id=session_id, limit=limit, offset=offset)
+
+    def global_group_calls(
+        self, actor: Principal, *, owner_id: int, session_id: str | None, limit: int, offset: int,
+    ) -> list[dict[str, Any]]:
+        self._require_manage(actor)
+        return self._group_calls(owner_id=owner_id, session_id=session_id, limit=limit, offset=offset)
+
+    def _group_calls(self, *, owner_id: int, session_id: str | None, limit: int, offset: int) -> list[dict[str, Any]]:
+        rows = self.repo.group_calls(owner_id=owner_id, session_id=session_id, limit=limit, offset=offset)
+        return [self._call_view(row) for row in rows]
+
     def my_daily_usage(self, actor: Principal, *, days: int = 30) -> list[dict[str, Any]]:
         # WP-D：与 calls/detail 同闸——本人归属不能代替 trace.view 动作授权
-        if actor.role != "super_admin" and not (
-            "trace.view" in self._permissions(actor) or "trace.manage" in self._permissions(actor)
-        ):
-            raise ForbiddenError("缺少权限: trace.view")
+        self._require_view(actor)
         return self.repo.daily_totals(owner_id=actor.user_id, days=days, today_utc=self._clock())
 
     def cleanup_old_calls(self, actor: Principal, *, days: int) -> int:

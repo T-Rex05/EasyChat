@@ -27,6 +27,28 @@ def _skills(rig) -> SkillService:
     return SkillService(rig.db, access=rig.access, content_root=rig.tmp_path / "skills")
 
 
+def test_chat_revocation_covers_inbox_changes_and_profile(rig):
+    from backend.modules.inbox.api import InboxService
+    from backend.modules.profiles.api import ProfilesService
+    from backend.shared.errors import ForbiddenError
+
+    ready = make_rig(rig.tmp_path, seed_access=True, clock=rig.clock)
+    user = _user(ready)
+    admin = _user(ready, role="super_admin")
+    inbox = InboxService(ready.db, access=ready.access)
+    profiles = ProfilesService(ready.db, access=ready.access)
+    item = inbox.save(user, note="合成条目", url="https://example.invalid/fixture")
+    assert profiles.get(user).owner_id == user.user_id
+    ready.access.set_user_permission(admin, user.user_id, "chat.use", False)
+    for operation in (inbox.archive, inbox.mark_read, inbox.delete):
+        with pytest.raises(ForbiddenError):
+            operation(user, item.item_id)
+    with pytest.raises(ForbiddenError):
+        profiles.get(user)
+    with pytest.raises(ForbiddenError):
+        profiles.update(user, address_form="测试")
+
+
 def _usage(rig) -> UsageService:
     from datetime import datetime, timezone as _tz
 
@@ -158,7 +180,7 @@ async def test_schedule_cross_owner_needs_system_manage(rig) -> None:
     import time as _time
 
     ready = make_rig(rig.tmp_path, seed_access=True, clock=rig.clock)
-    service = _SchedulingService(_S, ready) if False else _scheduling_real(ready)
+    service = _scheduling_real(ready)
     owner = _user(ready)
     manager = _user(ready, role="admin")
     stranger = _user(ready)

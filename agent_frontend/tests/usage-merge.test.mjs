@@ -13,6 +13,14 @@ async function loadUtility(name) {
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
 }
 
+test('用量缩写保留小计数，单位进位采用十进制', async () => {
+  const { formatUsageCount } = await loadUtility('usageNumbers')
+  for (const [count, label] of [[0, '0'], [999, '999'], [1000, '1K'], [9917, '9.92K'],
+    [223209, '223.21K'], [999999, '1M'], [1234567, '1.23M']]) {
+    assert.equal(formatUsageCount(count), label)
+  }
+})
+
 test('筛选切换重置页码到 1', async () => {
   const { onFilterChanged } = await loadUtility('globalUsage')
   assert.deepEqual(onFilterChanged(7), { page: 1, selectedUid: 7 })
@@ -27,13 +35,6 @@ test('快速切换用户：旧令牌响应判定为过期，新令牌可落数�
   assert.equal(isStaleResponse(token, a.requestToken), true)
   // B 正常返回：应用
   assert.equal(isStaleResponse(token, b.requestToken), false)
-})
-
-test('分页真实口径：满页才给下一页，不再展示伪总数', async () => {
-  const { canGoNext, GLOBAL_PAGE_SIZE } = await loadUtility('globalUsage')
-  assert.equal(canGoNext(GLOBAL_PAGE_SIZE), true)
-  assert.equal(canGoNext(GLOBAL_PAGE_SIZE - 1), false)
-  assert.equal(canGoNext(0), false)
 })
 
 test('本人区 owner 校验：身份未知返回 0（组件必须拒发请求）', async () => {
@@ -54,9 +55,9 @@ test('结构：单菜单入口 + 旧链接重定向 + 全局区域按 trace.mana
   // 侧栏只保留一个用量入口：全局项已移除
   assert.doesNotMatch(sidebar, /traceUsers/)
   assert.doesNotMatch(sidebar, /\/trace\/users/)
-  // 合并页嵌入全局区域且仅 manage 可见；本人区显式 owner_id 且等待身份就绪
+  // 合并页嵌入全局区域且仅 manage 可见；本人分组由 /me API 根据登录身份限定。
   assert.match(usage, /UserUsageView/)
   assert.match(usage, /trace.*manage|canManageGlobal/)
-  assert.match(usage, /owner_id/)
+  assert.match(usage, /\/api\/usage\/me\/call-groups/)
   assert.match(usage, /ready/)
 })

@@ -141,6 +141,12 @@ def build_access_router(access: AccessService) -> APIRouter:
         principal = access.authenticate_token(_bearer_token(authorization))
         return access.list_users(principal)
 
+    @router.post("/api/admin/users", status_code=201)
+    async def admin_create_user(req: RegisterRequest, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
+        principal = access.authenticate_token(_bearer_token(authorization))
+        user_id = access.create_user(principal, req.username, req.password, req.email)
+        return {"ok": True, "id": user_id}
+
     @router.put("/api/admin/users/{user_id}/role")
     async def admin_set_role(user_id: int, req: SetRoleRequest, authorization: Annotated[str | None, Header()] = None) -> dict[str, Any]:
         principal = access.authenticate_token(_bearer_token(authorization))

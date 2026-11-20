@@ -1,53 +1,56 @@
 /* ============================================================
-   AgentForge Design System — Arco Design 风格
-   参考 Austin Admin 视觉规范
+   AgentForge Design System — 双主题(亮/暗)
+   亮色:暖白 + 靛蓝;暗色:近黑 + 紫蓝渐变(与选型预览稿一致)
+   主题开关:<html data-theme="dark|light"> + .dark(Element Plus)
    ============================================================ */
 
 :root {
   /* ─── 品牌色 ─── */
-  --brand: #4e6ef2;
-  --brand-hover: #3a56d4;
-  --brand-light: #eef1ff;
-  --brand-shadow: rgba(78, 110, 242, 0.08);
-  --brand-shadow-lg: rgba(78, 110, 242, 0.25);
-  --brand-gradient: linear-gradient(135deg, #4e6ef2, #6b83f5);
+  --brand: #5b6cff;
+  --brand-hover: #4a5ae8;
+  --brand-light: #eef0ff;
+  --brand-shadow: rgba(91, 108, 255, 0.10);
+  --brand-shadow-lg: rgba(91, 108, 255, 0.28);
+  --brand-gradient: linear-gradient(135deg, #5b6cff, #7683ff);
+  --brand-2: #7683ff;
 
   /* ─── 背景色层级 ─── */
   --bg-primary: #fff;
-  --bg-secondary: #f7f8fa;
-  --bg-tertiary: #f2f3f5;
-  --bg-hover: #f7f8fa;
-  --bg-active: #eef1ff;
+  --bg-secondary: #fafaf8;
+  --bg-tertiary: #f2f3f7;
+  --bg-hover: #f3f4f8;
+  --bg-active: #eef0ff;
   --bg-card: #fff;
-  --bg-sidebar: #fff;
+  --bg-sidebar: #f3f3f0;
   --bg-overlay: rgba(0, 0, 0, 0.4);
   --bg-input: #fff;
-  --bg-code: #f2f3f5;
+  --bg-code: #f2f3f7;
 
   /* ─── 文字色层级 ─── */
-  --text-primary: #1d2129;
-  --text-secondary: #4e5969;
-  --text-tertiary: #86909c;
-  --text-placeholder: #c9cdd4;
+  --text-primary: #1a1a2e;
+  --text-secondary: #4b5563;
+  --text-tertiary: #8a90a2;
+  --text-placeholder: #c3c7d4;
   --text-inverse: #fff;
 
   /* ─── 语义色 ─── */
   --text-success: #00b42a; --bg-success: #e8ffea;
   --text-warning: #ff7d00; --bg-warning: #fff7e8;
   --text-danger: #f53f3f;  --bg-danger: #ffece8;
-  --text-brand: #4e6ef2;   --bg-info: #e8f3ff;
+  --text-brand: #5b6cff;   --bg-info: #eef0ff;
 
   /* ─── 边框色 ─── */
-  --border-primary: #f2f3f5;
-  --border-secondary: #e5e6eb;
-  --border-focus: #4e6ef2;
+  --border-primary: #efeff3;
+  --border-secondary: #e5e7eb;
+  --border-focus: #5b6cff;
   --border-success: #b7eb8f;
   --border-danger: #ffccc7;
+  --border-warning: #ffe082;
 
   /* ─── 阴影 ─── */
-  --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 2px rgba(16, 18, 35, 0.04), 0 4px 16px rgba(16, 18, 35, 0.05);
+  --shadow-md: 0 4px 20px rgba(16, 18, 35, 0.07);
+  --shadow-lg: 0 8px 40px rgba(16, 18, 35, 0.10);
 
   /* ─── 圆角 ─── */
   --radius-sm: 6px;
@@ -58,32 +61,65 @@
 
   /* ─── 过渡 ─── */
   --transition: all 0.2s ease;
+
+  /* Element Plus 品牌色桥接:跟随 --brand;深浅色经 --el-bg-color 自动适配 */
+  --el-color-primary: var(--brand);
+  --el-color-primary-dark-2: var(--brand-hover);
+  --el-color-primary-light-3: color-mix(in srgb, var(--brand) 70%, var(--el-bg-color, #fff));
+  --el-color-primary-light-5: color-mix(in srgb, var(--brand) 50%, var(--el-bg-color, #fff));
+  --el-color-primary-light-7: color-mix(in srgb, var(--brand) 30%, var(--el-bg-color, #fff));
+  --el-color-primary-light-8: color-mix(in srgb, var(--brand) 20%, var(--el-bg-color, #fff));
+  --el-color-primary-light-9: color-mix(in srgb, var(--brand) 10%, var(--el-bg-color, #fff));
+
+  /* 原生控件(复选框/滑块等)与根级色彩方案跟随主题 */
+  accent-color: var(--brand);
+  color-scheme: light;
 }
 
-/* ─── 暗色主题 ─── */
+/* ─── 暗色主题(近黑 + 紫蓝渐变) ─── */
 [data-theme="dark"] {
-  --bg-primary: #1a1a2e;
-  --bg-secondary: #16162a;
-  --bg-tertiary: #222240;
-  --bg-hover: #1e1e38;
-  --bg-active: #2a2a48;
-  --bg-card: #1e1e38;
-  --bg-sidebar: #141428;
-  --bg-overlay: rgba(0, 0, 0, 0.6);
-  --bg-input: #1e1e38;
-  --bg-code: #222240;
+  --brand: #8b95ff;
+  --brand-hover: #a3aaff;
+  --brand-light: rgba(124, 106, 255, 0.16);
+  --brand-shadow: rgba(0, 0, 0, 0.4);
+  --brand-shadow-lg: rgba(0, 0, 0, 0.5);
+  --brand-gradient: linear-gradient(135deg, #7c6aff, #4d9fff);
+  --brand-2: #4d9fff;
+
+  --bg-primary: #16161f;
+  --bg-secondary: #0b0b12;
+  --bg-tertiary: #1d1d2a;
+  --bg-hover: #1d1d2a;
+  --bg-active: rgba(124, 106, 255, 0.14);
+  --bg-card: #16161f;
+  --bg-sidebar: #101018;
+  --bg-overlay: rgba(0, 0, 0, 0.65);
+  --bg-input: #1d1d2a;
+  --bg-code: #101018;
+
   --text-primary: #e8e8f0;
-  --text-secondary: #a8a8c0;
-  --text-tertiary: #6a6a88;
-  --text-placeholder: #4a4a68;
-  --border-primary: #2a2a48;
-  --border-secondary: #3a3a58;
-  --brand: #7c93f7;
-  --brand-hover: #6a7fe8;
-  --brand-light: #2a2a48;
-  --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.4);
+  --text-secondary: #a0a6b8;
+  --text-tertiary: #767d92;
+  --text-placeholder: #4e5468;
+  --text-inverse: #fff;
+
+  --text-success: #4ade80; --bg-success: rgba(74, 222, 128, 0.12);
+  --text-warning: #fbbf24; --bg-warning: rgba(251, 191, 36, 0.12);
+  --text-danger: #f87171;  --bg-danger: rgba(248, 113, 113, 0.12);
+  --text-brand: #a5acff;   --bg-info: rgba(139, 149, 255, 0.12);
+
+  --border-primary: #232332;
+  --border-secondary: #26263a;
+  --border-focus: #8b95ff;
+  --border-success: rgba(74, 222, 128, 0.35);
+  --border-danger: rgba(248, 113, 113, 0.4);
+  --border-warning: rgba(251, 191, 36, 0.4);
+
+  --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.55);
+
+  color-scheme: dark;
 }
 
 /* ─── 全局重置 ─── */
@@ -113,13 +149,24 @@ a { color: var(--brand); text-decoration: none; }
 a:hover { color: var(--brand-hover); }
 
 /* ─── 滚动条 ─── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--border-secondary);
-  border-radius: 3px;
+/* 标准属性(继承):scrollbar-width/scrollbar-color,Baseline 2024-12/2025-12 */
+:root {
+  --scrollbar-thumb: var(--border-secondary);
+  --scrollbar-track: transparent;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* WebKit 回退:仅在不支持标准 scrollbar-color 的浏览器生效 */
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+}
 
 /* ─── 工具类 ─── */
 .page-container {

@@ -35,6 +35,47 @@ def _propose_and_activate(service, user, name="alpha", content="# alpha\n"):
     return skill, version
 
 
+@pytest.mark.asyncio
+async def test_http_reads_history_only_for_the_requested_owned_skill(env):
+    import httpx
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from backend.modules.skills.routes import build_skills_router
+    from backend.shared.errors import AppError
+
+    rig, service, _, owner = env
+    skill, old = _propose_and_activate(service, owner, content="# Historical version\n")
+    active = service.propose(owner, skill.name, "# Current version\n")
+    service.activate(owner, skill.skill_id, active.version_id, old.version_id)
+    _, other_version = _propose_and_activate(service, owner, name="other")
+    other_user = make_user(rig, tag="other")
+    owner_token = rig.access.create_token(owner.user_id, "history", "user")
+    other_token = rig.access.create_token(other_user.user_id, "history", "user")
+    app = FastAPI()
+    app.include_router(build_skills_router(service, rig.access.authenticate_token))
+
+    @app.exception_handler(AppError)
+    async def handle_error(_, exc):
+        return JSONResponse(exc.to_payload(), status_code=exc.http_status)
+
+    path = f"/api/skills/{skill.skill_id}/versions"
+    history = f"{path}/{old.version_id}"
+    auth = {"Authorization": f"Bearer {owner_token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        result = await client.get(history, headers=auth)
+        assert result.status_code == 200
+        assert result.json() == {"content": "# Historical version\n"}
+        detail = await client.get(f"/api/skills/{skill.skill_id}", headers=auth)
+        assert detail.json()["content"] == "# Current version\n"
+        assert (await client.get(history)).status_code == 401
+        assert (await client.get(history, headers={"Authorization": f"Bearer {other_token}"})).status_code == 403
+        assert (await client.get(f"{path}/{other_version.version_id}", headers=auth)).status_code == 404
+        assert (await client.get(f"{path}/missing", headers=auth)).status_code == 404
+
+
 def test_version_files_are_immutable_and_activation_is_explicit(env):
     _, service, root, user = env
     skill, v1 = _propose_and_activate(service, user)

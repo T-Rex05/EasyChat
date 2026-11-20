@@ -77,6 +77,11 @@ export interface TaskPage {
   next_cursor: string
 }
 
+export interface SuperagentTaskUser {
+  user_id: number
+  username: string
+}
+
 export async function getSuperagentCapabilities(): Promise<SuperagentCapabilities> {
   const res = await request.get<{ capabilities: SuperagentCapabilities }>('/api/superagent/capabilities')
   return res.data.capabilities
@@ -98,10 +103,15 @@ export async function updateSuperagentSettings(
 }
 
 export async function listSuperagentTasks(params?: {
-  limit?: number; cursor?: string; status?: string
+  limit?: number; cursor?: string; status?: string; owner_id?: number
 }): Promise<TaskPage> {
   const res = await request.get<TaskPage>('/api/superagent/tasks', { params })
   return res.data
+}
+
+export async function listSuperagentTaskUsers(): Promise<SuperagentTaskUser[]> {
+  const res = await request.get<{ users: SuperagentTaskUser[] }>('/api/superagent/task-users')
+  return res.data.users
 }
 
 export async function createSuperagentTask(

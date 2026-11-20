@@ -629,6 +629,8 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     # a terminal session (or vice versa) would inject the wrong runtime hints.
     stored_platform = line_value("Platform")
     current_platform = str(getattr(agent, "platform", "") or "").strip()
+    if current_platform in ("easychat", "easychat-coding") and stored_platform != current_platform:
+        return False  # Legacy chat prompts may contain the server checkout.
     if stored_platform and current_platform and stored_platform != current_platform:
         return False
 

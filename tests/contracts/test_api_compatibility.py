@@ -45,6 +45,64 @@ async def test_removed_module_prefixes_not_mounted(client):
         assert not any(path.startswith(removed) for path in paths), removed
 
 
+async def test_admin_can_create_active_user_with_default_role(client):
+    c, app = client
+    access = app.state.registry.access
+    manager = access.register("user-manager", "manager-password")
+    access.repo.set_user_role(manager["user_id"], "admin")
+    access.invalidate_all()
+    headers = {"Authorization": f"Bearer {manager['token']}"}
+    credentials = {"username": "managed-user", "password": "new-password"}
+
+    created = await c.post("/api/admin/users", headers=headers, json={**credentials, "role": "super_admin"})
+
+    assert created.status_code == 201
+    user_id = created.json()["id"]
+    assert created.json() == {"ok": True, "id": user_id}
+    users = await c.get("/api/admin/users", headers=headers)
+    user = next(user for user in users.json() if user["id"] == user_id)
+    assert (user["username"], user["role"], user["status"]) == (credentials["username"], "user", 1)
+    login = await c.post("/api/auth/login", json=credentials)
+    assert login.status_code == 200
+    assert login.json()["user_id"] == user_id
+
+
+async def test_admin_user_creation_requires_effective_manage_permission(client):
+    c, app = client
+    access = app.state.registry.access
+    member = access.register("plain-member", "member-password")
+    manager = access.register("revoked-manager", "manager-password")
+    access.repo.set_user_role(manager["user_id"], "admin")
+    access.repo.set_user_permission(manager["user_id"], "system.manage", False)
+    access.invalidate_all()
+    credentials = {"username": "forbidden-user", "password": "new-password"}
+
+    assert (await c.post("/api/admin/users", json=credentials)).status_code == 401
+    for actor in (member, manager):
+        headers = {"Authorization": f"Bearer {actor['token']}"}
+        denied = await c.post("/api/admin/users", headers=headers, json=credentials)
+        assert denied.status_code == 403
+    assert access.repo.get_user_by_username(credentials["username"]) is None
+
+
+async def test_admin_user_creation_rejects_case_insensitive_duplicate_and_invalid_credentials(client):
+    c, app = client
+    access = app.state.registry.access
+    manager = access.register("user-manager", "manager-password")
+    access.repo.set_user_role(manager["user_id"], "admin")
+    access.invalidate_all()
+    headers = {"Authorization": f"Bearer {manager['token']}"}
+
+    duplicate = await c.post("/api/admin/users", headers=headers, json={
+        "username": "USER-MANAGER", "password": "changed-password",
+    })
+    assert duplicate.status_code == 409
+    for invalid in ({"username": "x", "password": "new-password"}, {"username": "valid", "password": "short"}):
+        assert (await c.post("/api/admin/users", headers=headers, json=invalid)).status_code == 422
+    original_login = await c.post("/api/auth/login", json={"username": "user-manager", "password": "manager-password"})
+    assert original_login.status_code == 200
+
+
 async def test_register_login_and_memory_ownership(client):
     c, _ = client
     assert (await c.get("/api/auth/me")).status_code == 401
@@ -78,6 +136,28 @@ async def test_register_login_and_memory_ownership(client):
     })
     assert created.status_code == 200
     schedule_id = created.json()["schedule"]["schedule_id"]
+    edited = await c.patch(f"/api/schedules/{schedule_id}", headers=headers, json={
+        "title": "周报", "weekly_at": "09:30", "weekday": 2,
+    })
+    assert edited.status_code == 200
+    assert edited.json()["schedule"]["schedule_id"] == schedule_id
+    assert edited.json()["schedule"]["title"] == "周报"
+    assert edited.json()["schedule"]["kind"] == "weekly"
+    assert edited.json()["schedule"]["weekday"] == 2
+    assert edited.json()["schedule"]["target"] == created.json()["schedule"]["target"]
+    retargeted = await c.patch(f"/api/schedules/{schedule_id}", headers=headers, json={
+        "target_kind": "email", "target_ref": "new-recipient@example.com",
+    })
+    assert retargeted.status_code == 200
+    assert retargeted.json()["schedule"]["target"]["ref"] == "new-recipient@example.com"
+    arbitrary_wechat = await c.patch(f"/api/schedules/{schedule_id}", headers=headers, json={
+        "target_kind": "wechat", "target_ref": "unbound-recipient",
+    })
+    assert arbitrary_wechat.status_code == 422
+    paused = await c.patch(f"/api/schedules/{schedule_id}", headers=headers, json={"enabled": False})
+    assert paused.status_code == 200
+    assert paused.json()["schedule"]["enabled"] is False
+    assert paused.json()["schedule"]["target"] == retargeted.json()["schedule"]["target"]
     assert (await c.delete(f"/api/schedules/{schedule_id}", headers=headers)).status_code == 200
     remaining = await c.get("/api/schedules", headers=headers)
     assert all(s["schedule_id"] != schedule_id for s in remaining.json()["schedules"])

@@ -79,9 +79,12 @@ class AccessRepository:
         now = utc_now_iso()
         with self.db.transaction() as conn:
             cur = conn.execute(
-                "INSERT INTO users(username, password, email, role, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO users(username, password, email, role, created_at, updated_at) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(username) DO NOTHING",
                 (username, password_hash, email, role, now, now),
             )
+            if cur.rowcount == 0:
+                raise ConflictError(f"用户名 '{username}' 已存在")
             return int(cur.lastrowid)
 
     def get_user(self, user_id: int) -> UserSnapshot | None:

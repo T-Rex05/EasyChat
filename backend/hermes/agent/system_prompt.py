@@ -343,7 +343,8 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Environment hints (WSL, Termux, etc.) — tell the agent about the
     # execution environment so it can translate paths and adapt behavior.
     # Stable for the lifetime of the process.
-    _env_hints = _r.build_environment_hints()
+    include_host_context = agent.platform != "easychat"
+    _env_hints = _r.build_environment_hints() if include_host_context else ""
     if _env_hints:
         stable_parts.append(_env_hints)
 
@@ -384,7 +385,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # entirely for remote terminal backends (the host's Python state is
     # irrelevant when tools run inside docker/modal/ssh).  Gated by
     # config.yaml ``agent.environment_probe`` (default True).
-    if getattr(agent, "_environment_probe", True):
+    if include_host_context and getattr(agent, "_environment_probe", True):
         try:
             from tools.env_probe import get_environment_probe_line
             _probe_line = get_environment_probe_line()
@@ -406,7 +407,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         active_profile = _resolve_active_profile_name()
     except Exception:
         active_profile = "default"
-    if active_profile == "default":
+    if include_host_context and active_profile == "default":
         post_workspace_parts.append(
             "Active profile: default. Other profiles (if any) live "
             "under " + str(get_hermes_home()) + "/profiles/<name>/. Each profile has its own "
@@ -415,7 +416,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             "skills/plugins/cron/memories unless the user explicitly directs "
             "you to."
         )
-    else:
+    elif include_host_context:
         post_workspace_parts.append(
             f"Active profile: {active_profile}. This session reads "
             f"and writes {get_hermes_home()}/profiles/{active_profile}/. The default "

@@ -1,6 +1,6 @@
 """Web 兼容路由：旧 /chat/stream SSE 契约 → 统一 Assistant（A09）。
 
-帧格式 id:{seq} + data:{json}；事件名 start/token/thinking_step/stream_reset/
+帧格式 id:{seq} + data:{json}；事件名 start/token/tool_activity/stream_reset/
 chat_complete/error；busy→409；Last-Event-ID 续传；缓存失效发 resync+持久终态，
 不重新执行。薄适配层：不选模型、不写 SQL、不创建 Agent。
 """
@@ -74,6 +74,7 @@ def build_web_chat_router(
         raise UnauthenticatedError("请先登录")
 
     async def _resolve_session(principal, thread_id: str) -> str:
+        principal = assistant.require_chat_access(principal)
         if not thread_id:
             raise InvalidInputError("缺少 thread_id")
         if thread_id.startswith("wx_"):
@@ -107,8 +108,8 @@ def build_web_chat_router(
         conn = assistant.db.connect()
         try:
             row = conn.execute(
-                "SELECT content FROM conversations WHERE run_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
-                (run_id,),
+                "SELECT content FROM conversations WHERE run_id=? AND owner_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+                (run_id, principal.user_id),
             ).fetchone()
             return str(row["content"]) if row else ""
         finally:
@@ -135,13 +136,16 @@ def build_web_chat_router(
                 kind = event.kind
                 if kind == "token":
                     yield _sse_frame(seq, {"type": "token", "content": str(event.payload.get("text", ""))})
-                elif kind == "thinking":
-                    yield _sse_frame(seq, {"type": "thinking_step", "content": str(event.payload.get("text", ""))})
                 elif kind == "stream_reset":
                     yield _sse_frame(seq, {"type": "stream_reset"})
                 elif kind == "tool_started":
-                    # 内部工具事件不直接暴露敏感内容；前端兼容层不消费此帧
-                    continue
+                    tools = event.payload.get("tools")
+                    # Hermes reports the previous iteration's tools. At iteration 1
+                    # any names come from the conversation's preceding turn.
+                    if event.payload.get("iteration") != 1 and isinstance(tools, list):
+                        names = [name for name in tools if isinstance(name, str) and name.strip()]
+                        if names:
+                            yield _sse_frame(seq, {"type": "tool_activity", "tools": names})
                 elif kind == "completed":
                     assistant.events.flush_token(run_id)
                     yield _sse_frame(None, {"type": "chat_complete", "thread_id": thread_id,

@@ -15,8 +15,10 @@ Gate：enabled 且 repo_url 可解析才受理新任务；GitHub token 可后补
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from backend.modules.access.api import AccessService
@@ -47,7 +49,7 @@ from backend.modules.superagent.verification import MAX_VERIFY_COMMANDS, load_ve
 from backend.platform.sqlite import Database
 from backend.shared.context import Principal
 from backend.shared.crypto import decrypt_secret, encrypt_secret
-from backend.shared.errors import ForbiddenError, InvalidInputError, NotFoundError
+from backend.shared.errors import ForbiddenError, InvalidInputError, NotFoundError, UnauthenticatedError
 
 logger = logging.getLogger(__name__)
 
@@ -269,21 +271,35 @@ class SuperagentService:
     def list_tasks(
         self, principal: Principal, *, limit: int = 50,
         cursor_created_at: str = "", cursor_id: str = "",
-        status: str = "",
+        status: str = "", owner_id: int | None = None,
     ) -> list[SuperagentTask]:
         self.access.validate_principal(principal)
         self.access.require_permission(principal, "superagent.view")
-        tasks = (
-            self.repo.list_all(limit=limit, cursor_created_at=cursor_created_at, cursor_id=cursor_id)
-            if self._can_manage(principal)
-            else self.repo.list_for_owner(
-                principal.user_id, limit=limit,
+        if self._can_manage(principal):
+            if owner_id is not None:
+                try:
+                    owner = self.access.snapshot_principal(owner_id)
+                except (ForbiddenError, UnauthenticatedError):
+                    raise ForbiddenError("该用户不可用于筛选任务") from None
+                if not self._has(owner, "superagent.view"):
+                    raise ForbiddenError("该用户不可用于筛选任务")
+            return self.repo.list_all(
+                limit=limit, owner_id=owner_id, status=status,
                 cursor_created_at=cursor_created_at, cursor_id=cursor_id,
             )
+        if owner_id is not None and owner_id != principal.user_id:
+            raise ForbiddenError("无权查看其他用户的任务")
+        return self.repo.list_for_owner(
+            principal.user_id, limit=limit, status=status,
+            cursor_created_at=cursor_created_at, cursor_id=cursor_id,
         )
-        if status:
-            tasks = [t for t in tasks if t.status == status]
-        return tasks
+
+    def list_task_users(self, principal: Principal) -> list[dict[str, int | str]]:
+        self.access.validate_principal(principal)
+        self.access.require_permission(principal, "superagent.view")
+        return self.access.list_users_with_permission(
+            principal, permission="superagent.view", manage_permission="superagent.manage",
+        )
 
     def get_task(self, principal: Principal, task_id: str) -> SuperagentTask:
         return self._task_for(principal, task_id)
@@ -563,9 +579,6 @@ class SuperagentService:
                                  item_id: str, index: int):
         """受控读取证据文件：owner 校验 + 相对 attempt.verification_ref 的 resolve 防逃逸。"""
         self._task_for(principal, task_id)
-        import json as _json
-        from pathlib import Path
-
         rounds = self.acceptance.list_rounds(task_id)
         for r in rounds:
             if r["id"] != round_id:
@@ -573,16 +586,15 @@ class SuperagentService:
             for c in r["checks"]:
                 if c["item_id"] != item_id:
                     continue
-                entries = _json.loads(c["evidence_json"] or "[]")
+                entries = json.loads(c["evidence_json"] or "[]")
                 if not (0 <= index < len(entries)):
                     raise NotFoundError("证据序号不存在")
                 rel = str(entries[index].get("path") or "")
                 # 证据根:该轮 attempt 最新报告的 verification_ref(验证工件目录)
                 root = None
-                for rep in reversed(self.repo.reports_for_task(task.task_id)):
+                for rep in self.repo.reports_for_task(task_id):
                     if (not r["attempt_id"] or rep.attempt_id == r["attempt_id"]) and rep.verification_ref:
-                        from pathlib import Path as _P
-                        root = _P(rep.verification_ref)
+                        root = Path(rep.verification_ref)
                         break
                 if not rel or not rel.startswith("assets/") or root is None or not root.is_dir():
                     raise ForbiddenError("证据路径不在受控工件目录内")

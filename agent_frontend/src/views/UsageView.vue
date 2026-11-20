@@ -3,9 +3,12 @@
     <header class="page-header">
       <div>
         <h2>用量与 Token 排行</h2>
-        <p class="hint">数据来自 usage 账本；无凭证时不会产生调用记录。</p>
+        <nav v-if="canManageGlobal" class="usage-nav" aria-label="用量视图">
+          <RouterLink to="/trace" :aria-current="!globalOpen ? 'page' : undefined" :class="{ selected: !globalOpen }">用量概览</RouterLink>
+          <RouterLink :to="{ path: '/trace', hash: '#global-detail' }" :aria-current="globalOpen ? 'page' : undefined" :class="{ selected: globalOpen }">全局调用明细</RouterLink>
+        </nav>
       </div>
-      <div class="filters">
+      <div v-if="!globalOpen" class="filters">
         <select v-model.number="days" class="select" @change="loadRanking">
           <option :value="1">今日</option>
           <option :value="7">近 7 天</option>
@@ -16,80 +19,84 @@
       </div>
     </header>
 
-    <div v-if="error" class="error-banner">{{ error }}</div>
+    <UserUsageView v-if="globalOpen" />
+    <template v-else>
+      <div v-if="error" class="error-banner">{{ error }}</div>
 
-    <section class="card">
-      <h3>我的每日用量</h3>
-      <div v-if="daily.length === 0" class="empty">暂无用量</div>
-      <div v-else class="daily-list">
-        <div v-for="d in daily" :key="d.stat_date" class="daily-row">
-          <span>{{ d.stat_date }}</span>
-          <span>输入 {{ d.input_tokens }}</span>
-          <span>输出 {{ d.output_tokens }}</span>
-          <span>合计 {{ d.total_tokens }}</span>
-          <span class="muted">调用 {{ d.call_count }}</span>
+      <section class="card">
+        <h3>我的每日用量</h3>
+        <div v-if="daily.length === 0" class="empty">暂无用量</div>
+        <div v-else class="daily-list">
+          <div v-for="d in daily" :key="d.stat_date" class="daily-row">
+            <span>{{ d.stat_date }}</span>
+            <span :title="String(d.input_tokens)">输入 {{ formatUsageCount(d.input_tokens) }}</span>
+            <span :title="String(d.output_tokens)">输出 {{ formatUsageCount(d.output_tokens) }}</span>
+            <span :title="String(d.total_tokens)">合计 {{ formatUsageCount(d.total_tokens) }}</span>
+            <span class="muted" :title="String(d.call_count)">调用 {{ formatUsageCount(d.call_count) }}</span>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="card">
-      <h3>Token 排行（{{ days }} 天）</h3>
-      <div v-if="ranking.length === 0" class="empty">暂无排行数据</div>
-      <table v-else class="table">
-        <thead><tr><th>#</th><th>用户</th><th>输入</th><th>输出</th><th>合计</th><th>调用次数</th></tr></thead>
-        <tbody>
-          <tr v-for="(row, idx) in ranking" :key="row.owner_id ?? idx">
-            <td>{{ idx + 1 }}</td>
-            <td>{{ row.username || row.owner_id }}</td>
-            <td>{{ row.input_tokens }}</td>
-            <td>{{ row.output_tokens }}</td>
-            <td>{{ row.total_tokens }}</td>
-            <td>{{ row.call_count }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+      <section class="card">
+        <h3>Token 排行（{{ days }} 天）</h3>
+        <div v-if="ranking.length === 0" class="empty">暂无排行数据</div>
+        <table v-else class="table">
+          <thead><tr><th>#</th><th>用户</th><th>输入</th><th>输出</th><th>合计</th><th>调用次数</th></tr></thead>
+          <tbody>
+            <tr v-for="(row, idx) in ranking" :key="row.owner_id ?? idx">
+              <td>{{ idx + 1 }}</td>
+              <td><UsageOwnerBadge :label="row.username || String(row.owner_id ?? '—')" /></td>
+              <td :title="String(row.input_tokens)">{{ formatUsageCount(row.input_tokens) }}</td>
+              <td :title="String(row.output_tokens)">{{ formatUsageCount(row.output_tokens) }}</td>
+              <td :title="String(row.total_tokens)">{{ formatUsageCount(row.total_tokens) }}</td>
+              <td :title="String(row.call_count)">{{ formatUsageCount(row.call_count) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
 
-    <section class="card">
-      <h3>最近调用（本人）</h3>
-      <p v-if="ownerPendingHint" class="empty">{{ ownerPendingHint }}</p>
-      <div v-else-if="calls.length === 0" class="empty">暂无调用记录</div>
-      <table v-else class="table">
-        <thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>状态</th></tr></thead>
-        <tbody>
-          <tr v-for="c in calls" :key="c.call_id">
-            <td>{{ formatDateTime(c.created_at) }}</td>
-            <td>{{ c.model || '—' }}</td>
-            <td>{{ c.input_tokens }}</td>
-            <td>{{ c.output_tokens }}</td>
-            <td :class="c.status && c.status !== 'ok' ? 'st-bad' : 'st-ok'">{{ c.status || 'ok' }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+      <section class="card">
+        <h3>最近调用（本人）</h3>
+        <p v-if="ownerPendingHint" class="empty">{{ ownerPendingHint }}</p>
+        <template v-else>
+          <UsageSessionGroup v-for="group in groups" :key="group.session_id ?? ''" :group="group" />
+          <p v-if="groupError" role="alert">{{ groupError }}</p>
+          <div v-else-if="!groups.length && !loadingGroups" class="empty">暂无调用记录</div>
+          <button v-if="hasMoreGroups || groupError || loadingGroups" class="btn btn-secondary" type="button"
+                  :disabled="loadingGroups" @click="loadMyCalls()">
+            {{ loadingGroups ? '加载中…' : groupError ? '重试' : '加载更多会话' }}
+          </button>
+        </template>
+      </section>
 
-    <!-- P2：全局用量并入本页，单菜单入口；仅 trace.manage（或 super_admin）可见 -->
-    <UserUsageView v-if="canManageGlobal" />
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import UsageSessionGroup, { type CallGroup } from '@/components/UsageSessionGroup.vue'
+import UsageOwnerBadge from '@/components/UsageOwnerBadge.vue'
 import request from '@/api/request'
-import { formatDateTime } from '@/utils/dateTime'
+import { formatUsageCount } from '@/utils/usageNumbers'
 import { resolveMyUid } from '@/utils/globalUsage'
 import { useAuthStore } from '@/stores/auth'
 import UserUsageView from './UserUsageView.vue'
 
 interface Daily { stat_date: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
 interface RankRow { owner_id?: number; username?: string; input_tokens: number; output_tokens: number; total_tokens: number; call_count: number }
-interface Call { call_id: string; created_at: string; model?: string; input_tokens: number; output_tokens: number; status?: string }
-
+const route = useRoute()
 const auth = useAuthStore()
 const days = ref(7)
 const daily = ref<Daily[]>([])
 const ranking = ref<RankRow[]>([])
-const calls = ref<Call[]>([])
+const groups = ref<CallGroup[]>([])
+const loadingGroups = ref(false)
+const hasMoreGroups = ref(false)
+const groupError = ref('')
+let groupOffset = 0
+let requestVersion = 0
 const error = ref('')
 const ownerPendingHint = ref('')
 
@@ -101,6 +108,8 @@ const canManageGlobal = computed(() => {
   return auth.permissions.includes('trace.manage')
 })
 
+const globalOpen = computed(() => auth.ready && canManageGlobal.value && route.hash === '#global-detail')
+
 async function loadRanking() {
   error.value = ''
   try {
@@ -111,53 +120,63 @@ async function loadRanking() {
   }
 }
 
-async function loadMyCalls() {
-  // 本人区显式 owner：身份未就绪不发请求——trace.manage 用户此前
-  // "个人页默认拉全量却呈现为我的调用"的语义失真必须杜绝。
-  const uid = resolveMyUid(auth.userId)
-  if (!uid) {
-    ownerPendingHint.value = '身份尚未就绪，无法确定"本人"范围，暂不加载调用记录'
-    calls.value = []
+async function loadMyCalls(reset = false) {
+  if (reset) {
+    requestVersion++
+    groups.value = []
+    groupOffset = 0
+    hasMoreGroups.value = false
+    loadingGroups.value = false
+  }
+  if (loadingGroups.value) return
+  if (!resolveMyUid(auth.userId)) {
+    ownerPendingHint.value = '身份尚未就绪，暂不加载本人调用记录'
     return
   }
   ownerPendingHint.value = ''
+  groupError.value = ''
+  loadingGroups.value = true
+  const version = requestVersion
   try {
-    const res = await request.get<Call[]>('/api/usage/calls', { params: { limit: 50, owner_id: uid } })
-    calls.value = res.data
+    const { data } = await request.get<{ groups: CallGroup[]; has_more: boolean }>('/api/usage/me/call-groups', {
+      params: { limit: 20, offset: groupOffset },
+    })
+    if (version !== requestVersion) return
+    const seen = new Set(groups.value.map(g => g.session_id))
+    groups.value.push(...data.groups.filter(g => !seen.has(g.session_id)))
+    hasMoreGroups.value = data.has_more
+    groupOffset += data.groups.length
   } catch {
-    calls.value = []
+    if (version === requestVersion) groupError.value = '会话加载失败。'
+  } finally {
+    if (version === requestVersion) loadingGroups.value = false
   }
 }
 
 async function loadAll() {
-  // 等待 App 的 /me 身份对齐完成（ready），再发本人请求
-  const start = Date.now()
-  while (!auth.ready && Date.now() - start < 5000) {
-    await new Promise((r) => setTimeout(r, 100))
-  }
   await Promise.all([
     loadRanking(),
     request.get<Daily[]>('/api/usage/me/daily', { params: { days: 30 } })
       .then(r => { daily.value = r.data }).catch(() => { daily.value = [] }),
-    loadMyCalls(),
+    loadMyCalls(true),
   ])
 }
 
-onMounted(async () => {
-  await loadAll()
-  // 旧链接重定向(#/trace/users→#/trace#global-detail)后滚动到全局区域
-  if (window.location.hash.includes("global-detail")) {
-    document.getElementById("global-detail")?.scrollIntoView({ behavior: "smooth" })
-  }
-})
+watch(() => auth.ready && !globalOpen.value, (showOverview) => {
+  if (showOverview) loadAll()
+}, { immediate: true })
 </script>
 
 <style scoped>
 .usage-page { max-width: 1100px; margin: 0 auto; padding: 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .page-header h2 { margin: 0 0 4px; }
-.hint { margin: 0; color: var(--text-tertiary); font-size: 13px; }
+.usage-nav { display: flex; gap: 6px; margin-top: 12px; }
+.usage-nav a { color: var(--text-secondary); text-decoration: none; padding: 6px 12px; border-radius: 6px; }
+.usage-nav a.selected { background: var(--bg-primary); color: var(--text-primary); box-shadow: inset 0 -2px currentColor; font-weight: 600; }
+.page-header { flex-wrap: wrap; gap: 8px; }
 .filters { display: flex; gap: 8px; }
+.filters .btn { white-space: nowrap; }
 .card { padding: 16px; margin-bottom: 16px; }
 .card h3 { margin: 0 0 12px; font-size: 15px; }
 .daily-list { display: grid; gap: 6px; }

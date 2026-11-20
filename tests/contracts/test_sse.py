@@ -87,6 +87,29 @@ async def test_token_coalescing_within_window(rig):
     assert token_frames[0].payload["text"] == "abc"
 
 
+async def test_stream_flush_signals_preserve_tool_and_text_order(rig):
+    user = rig.seed_user(role="user", grants=("chat.use",), username="sse_flush")
+    session = await rig.seed_session(user)
+    rig.runtime.script_events([
+        _e("token", {"text": None}),
+        _e("token", {"text": None}),
+        _e("token", {"text": "正在查询"}),
+        _e("token", {"text": None}),
+        _e("tool_started", {"tools": ["search"]}),
+        _e("token", {"text": "查询结束"}),
+        _e("completed", {"result": {"final_response": "查询结束"}}),
+    ])
+    receipt = await rig.assistant.submit(RunCommand(
+        principal=user, session_id=session, source="web", client_message_id="flush1", text="查询"))
+    await rig.drain_runs()
+    status = await rig.assistant.run_status(user, receipt.run_id)
+    assert status["status"] == "completed"
+    frames = await _drain(rig, user, receipt.run_id, after_seq=0)
+    assert [(f.kind, f.payload.get("text")) for f in frames if f.kind in {"token", "tool_started"}] == [
+        ("token", "正在查询"), ("tool_started", None), ("token", "查询结束"),
+    ]
+
+
 async def test_ring_buffer_truncation_signals_resync(rig):
     """环形缓存截断后续传先收 stream_reset（不从头重放，也不重新执行）。"""
     from backend.modules.assistant.events import EventBus

@@ -21,7 +21,7 @@ from backend.modules.superagent.contracts import (
     TASK_SUCCEEDED,
 )
 from backend.platform.sqlite import Database, utc_now_iso
-from backend.shared.errors import ConflictError, InvalidInputError, NotFoundError
+from backend.shared.errors import InvalidInputError, NotFoundError
 from backend.shared.identifiers import new_acceptance_round_id
 
 CHECK_STATUSES = frozenset({"pass", "fail", "blocked", "skipped"})

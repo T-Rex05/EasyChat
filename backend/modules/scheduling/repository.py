@@ -113,12 +113,28 @@ class SchedulingRepository:
     def get(self, schedule_id: str) -> ScheduleView:
         conn = self.db.connect()
         try:
-            row = conn.execute("SELECT * FROM scheduled_jobs WHERE id=?", (schedule_id,)).fetchone()
-            if row is None:
-                raise NotFoundError(f"提醒计划不存在: {schedule_id}")
-            return _schedule(row)
+            return self.get_tx(conn, schedule_id)
         finally:
             conn.close()
+
+    def get_tx(self, conn: Any, schedule_id: str) -> ScheduleView:
+        row = conn.execute("SELECT * FROM scheduled_jobs WHERE id=?", (schedule_id,)).fetchone()
+        if row is None:
+            raise NotFoundError(f"提醒计划不存在: {schedule_id}")
+        return _schedule(row)
+
+    def update_tx(self, conn: Any, schedule: ScheduleView) -> None:
+        conn.execute(
+            "UPDATE scheduled_jobs SET title=?, text=?, target_kind=?, target_ref=?, "
+            "channel_account_id=?, schedule_kind=?, interval_seconds=?, at_time=?, timezone=?, "
+            "next_run_at=?, weekday=?, enabled=?, updated_at=? WHERE id=?",
+            (
+                schedule.title, schedule.text, schedule.target.kind, schedule.target.ref,
+                schedule.target.channel_account_id, schedule.kind, schedule.interval_seconds,
+                schedule.at_time, schedule.timezone, schedule.next_run_at, schedule.weekday,
+                int(schedule.enabled), utc_now_iso(), schedule.schedule_id,
+            ),
+        )
 
     def list_for_owner(self, owner_id: int, limit: int = 50) -> list[ScheduleView]:
         conn = self.db.connect()
@@ -157,6 +173,13 @@ class SchedulingRepository:
             return [_schedule(r) for r in rows]
         finally:
             conn.close()
+
+    def get_due_tx(self, conn: Any, schedule_id: str, now: float) -> ScheduleView | None:
+        row = conn.execute(
+            "SELECT * FROM scheduled_jobs WHERE id=? AND enabled=1 AND next_run_at<=?",
+            (schedule_id, now),
+        ).fetchone()
+        return _schedule(row) if row else None
 
     def insert_occurrence_tx(
         self, conn: Any, schedule_id: str, scheduled_at: str, *, missed: int = 0

@@ -35,6 +35,10 @@ export async function getUsers(): Promise<User[]> {
   return response.data
 }
 
+export async function createUser(credentials: { username: string; password: string }): Promise<void> {
+  await request.post('/api/admin/users', credentials)
+}
+
 /**
  * 更新用户角色
  */

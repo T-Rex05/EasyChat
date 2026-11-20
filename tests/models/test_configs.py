@@ -43,6 +43,33 @@ def test_create_and_masking(models):
     assert "sk-abcdefghijklmnop1234" not in dumped
 
 
+@pytest.mark.asyncio
+async def test_probe_uses_selected_config_and_requires_permission(models):
+    import httpx
+
+    svc, _, admin = models
+    cid = svc.create_config(admin, name="glm", model="glm-5.3-flash", provider="custom",
+                            api_key="fixture-key", base_url="https://example.test/api/coding/paas/v4")
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    transport = httpx.MockTransport(reply)
+    with pytest.raises(ForbiddenError):
+        await svc.test_connection(Principal(user_id=2, role="user", permission_revision=0), cid, transport=transport)
+    assert not calls
+    result = await svc.test_connection(admin, cid, transport=transport)
+    assert result["ok"] and len(calls) == 1
+    assert calls[0].url.path == "/api/coding/paas/v4/chat/completions"
+    assert calls[0].headers["Authorization"] == "Bearer fixture-key"
+    assert svc.get_chat_profile() is None
+    denied = httpx.MockTransport(lambda _: httpx.Response(403, text="fixture-key"))
+    result = await svc.test_connection(admin, cid, transport=denied)
+    assert not result["ok"] and result["status_code"] == 403 and "fixture-key" not in str(result)
+
+
 def test_config_version_bumps_on_update(models):
     svc, db, admin = models
     cid = svc.create_config(admin, name="m1", provider="p", model="m1", api_key="k" * 20)
@@ -50,6 +77,18 @@ def test_config_version_bumps_on_update(models):
     svc.update_config(admin, cid, model="m2")
     v2 = svc.repo.get_config(cid).config_version
     assert v2 == v1 + 1
+
+
+@pytest.mark.parametrize(("url", "expected"), [
+    ("http://localhost:8080", "http://localhost:8080/v1"),
+    ("https://example.test/proxy", "https://example.test/proxy/v1"),
+    ("https://example.test/v1/", "https://example.test/v1"),
+    ("https://example.test/api/coding/paas/v4/chat/completions", "https://example.test/api/coding/paas/v4"),
+])
+def test_openai_compatible_base_urls(url, expected):
+    from backend.shared.model_endpoint import model_base_url
+
+    assert model_base_url(url, "custom") == expected
 
 
 def test_active_pointer_switches_atomically(models):

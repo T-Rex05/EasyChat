@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from backend.modules.memory import retrieval
+from backend.modules.memory.capture import explicit_candidate, preference_request_content
 from backend.modules.memory.contracts import (
     DEFAULT_CANDIDATE_LIMIT,
     DEFAULT_TOKEN_BUDGET,
@@ -101,6 +102,16 @@ class MemoryService:
         )
         return self.remember(actor, confirmed)
 
+    def remember_preference_request(
+        self, actor: Principal, *, text: str, source_ref: str,
+    ) -> MemoryRecord | None:
+        content = preference_request_content(text)
+        if not content:
+            return None
+        return self.remember_explicit(actor, explicit_candidate(
+            kind="preference", content=content, text=text, source_ref=source_ref,
+        ))
+
     def revise(
         self,
         actor: Principal,
@@ -163,8 +174,7 @@ class MemoryService:
     ) -> list[MemoryRecord]:
         principal = self._principal(actor)
         self._require(principal, "memory.view")
-        statuses = (STATUS_ACTIVE, STATUS_ARCHIVED) if include_archived else (STATUS_ACTIVE,)
-        return self.repo.list_for_owner(principal.user_id, statuses=statuses, limit=limit)
+        return self.repo.candidates(principal.user_id, include_archived=include_archived, limit=limit)
 
     # ---- 遗忘 ------------------------------------------------------------------
 

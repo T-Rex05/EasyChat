@@ -78,9 +78,9 @@ request.interceptors.response.use(
         _isHandling401 = true
         const authStore = useAuthStore()
         authStore.logout()
-        // 跳转到登录页（如果在路由环境中）
-        if (window.location.pathname !== '/login') {
-          window.location.href = '/login'
+        // Vue Router 使用 hash，/login#/chat 仍是聊天路由。
+        if (window.location.hash !== '#/login') {
+          window.location.hash = '#/login'
         }
         // 延迟重置标记，避免页面跳转前的其他请求再次触发
         setTimeout(() => { _isHandling401 = false }, 3000)

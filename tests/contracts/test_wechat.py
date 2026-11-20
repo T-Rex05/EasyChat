@@ -20,6 +20,7 @@ from backend.modules.channels.contracts import (
     LISTENER_STARTING,
     LISTENER_STOPPED,
     QR_CONFIRMED,
+    QR_EXPIRED,
     QR_WAIT,
     MediaRef,
 )
@@ -29,8 +30,8 @@ from backend.modules.channels.wechat.media import HttpMediaFetcher, MediaFetchEr
 from backend.modules.channels.wechat.parser import parse_inbound
 from backend.runtime.contracts import RuntimeEvent
 from backend.shared.crypto import decrypt_secret
-from backend.shared.errors import AppError, ForbiddenError
-from tests.support.rig import TEST_ENCRYPTION_SECRET
+from backend.shared.errors import AppError, ForbiddenError, InvalidInputError
+from tests.support.rig import TEST_ENCRYPTION_SECRET, FakeClock
 from tests.support.wechat import (
     image_message,
     inbound,
@@ -93,6 +94,52 @@ async def env(tmp_path):
 
 
 # ── 身份与拒绝 ────────────────────────────────────────────────────────────────
+
+
+async def test_bound_wechat_remember_preference_round_trip(env):
+    from backend.modules.channels.commands import CommandServices, WeChatCommands
+    from backend.modules.memory.api import MemoryService
+    from backend.modules.memory.routes import build_memory_router
+
+    rig, transport, _ = env
+    memory = MemoryService(rig.db, access=rig.access)
+    rig.channels.commands = WeChatCommands(CommandServices(memory=memory))
+    admin = _admin(rig)
+    owner = rig.seed_user(grants=("memory.edit", "memory.view", "chat.use"))
+    account = _register(rig, admin)
+    _bind(rig, admin, account, "wx_ext_1", owner)
+
+    async def send(text, message_id):
+        message = inbound(rig, account, text_message(text, message_id=message_id))
+        return await rig.channels.handle_inbound(message)
+
+    text = "记得我喜欢吃辣的"
+    transport.script_updates({"ret": 0, "msgs": [text_message(text, message_id="spicy")]})
+    assert await rig.channels.listener.poll_once(account.id) == 1
+    assert transport.sent == ["已记住：我喜欢吃辣的"]
+    replay = await send(text, "spicy")
+    assert replay.duplicate
+    records = memory.list(owner)
+    assert [(r.kind, r.content) for r in records] == [("preference", "我喜欢吃辣的")]
+    assert records[0].source_refs[0].quote == text
+    assert records[0].source_refs[0].ref == replay.event_id
+    assert memory.list(admin) == []
+    app = FastAPI()
+    app.include_router(build_memory_router(memory, rig.access.authenticate_token))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/memory", headers={"Authorization": f"Bearer {_token(rig, owner)}"})
+        assert response.status_code == 200
+        item, = response.json()["memories"]
+        assert item["content"] == "我喜欢吃辣的" and item["tags"] == ["explicit"]
+    await send("/new", "new-session")
+    assert "我喜欢吃辣的" in (await send("/记忆", "list")).reply_text
+    assert memory.recall(owner, "我喜欢吃什么").items[0].memory == records[0]
+    rig.access.set_user_permission(admin, owner.user_id, "memory.edit", False)
+    denied = await send("记得我喜欢喝茶", "denied")
+    assert "未保存" in denied.reply_text
+    assert len(memory.list(owner)) == 1
+    assert rig.runtime.execute_count == 0
+    assert (await send("你还记得我喜欢吃什么吗？", "question")).run_id
 
 
 async def test_unbound_message_rejected_without_execution(env):
@@ -652,10 +699,43 @@ async def test_channels_http_account_and_binding_crud(env):
         assert removed.json()["status"] == "disabled"
 
 
+async def test_channels_http_qr_start_reports_unavailable_upstream(env):
+    rig, _, _ = env
+    headers = {"Authorization": f"Bearer {_token(rig, _admin(rig))}"}
+    async with _client(rig) as client:
+        response = await client.post("/api/channels/wechat/qr/start", headers=headers)
+    assert response.status_code == 503
+    assert response.json()["error"] == "capability_unavailable"
+
+
+async def test_confirmed_qr_credentials_expire_at_deadline(tmp_path):
+    clock = FakeClock()
+    rig, transport, _ = make_channel_rig(tmp_path, clock=clock)
+    try:
+        admin = _admin(rig)
+        transport.script_qr({"qrcode": "value"}, {
+            "status": "confirmed", "ilink_bot_id": "bot", "bot_token": "token",
+            "ilink_user_id": "scanner",
+        })
+        started = await rig.channels.start_qr_login(admin)
+        confirmed = await rig.channels.poll_qr_login(admin, started.session_id)
+        assert confirmed.status == QR_CONFIRMED
+        clock.advance(started.expires_at - clock())
+        with pytest.raises(InvalidInputError):
+            await rig.channels.bind_after_qr(admin, started.session_id)
+        expired = await rig.channels.poll_qr_login(admin, started.session_id)
+        assert expired.status == QR_EXPIRED
+        assert not expired.account_id
+        assert not rig.channels.list_accounts(admin)
+    finally:
+        await rig.aclose()
+
+
 async def test_channels_http_qr_flow(env):
     rig, transport, _ = env
     admin = _admin(rig)
     headers = {"Authorization": f"Bearer {_token(rig, admin)}"}
+    other_headers = {"Authorization": f"Bearer {_token(rig, _admin(rig))}"}
     transport.script_qr(
         {"qrcode": "http-qr", "qrcode_img_content": "https://weixin.qq.com/qr"},
         {"status": "confirmed", "ilink_bot_id": "http-qr-bot", "bot_token": "qr-token",
@@ -667,13 +747,24 @@ async def test_channels_http_qr_flow(env):
         session_id = started.json()["qr"]["session_id"]
         assert started.json()["qr"]["status"] == QR_WAIT
 
+        foreign_poll = await client.get(f"/api/channels/wechat/qr/{session_id}", headers=other_headers)
+        assert foreign_poll.json()["qr"]["status"] == QR_EXPIRED
+        assert not foreign_poll.json()["qr"]["qr_content"]
         polled = await client.get(f"/api/channels/wechat/qr/{session_id}", headers=headers)
         assert polled.json()["qr"]["status"] == QR_CONFIRMED
 
+        foreign_bind = await client.post(f"/api/channels/wechat/qr/{session_id}/bind", headers=other_headers)
+        assert foreign_bind.status_code == 422
         bound = await client.post(f"/api/channels/wechat/qr/{session_id}/bind", headers=headers)
         assert bound.status_code == 200
         assert bound.json()["account"]["account_id"] == "http-qr-bot"
         assert bound.json()["binding"]["user_id"] == admin.user_id
+        assert bound.json()["binding"]["external_user_id"] == "http-scanner"
+        await _wait_until(lambda: any(p["url"].endswith("/getupdates") for p in transport.posts))
+        states = (await client.get("/api/channels/listeners", headers=headers)).json()["listeners"]
+        assert [(s["account_id"], s["status"]) for s in states] == [
+            (bound.json()["account"]["id"], LISTENER_RUNNING),
+        ]
 
     account = rig.channels.repo.get_account_by_platform_id("wechat", "http-qr-bot")
     await rig.channels.listener.stop(account.id)

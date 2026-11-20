@@ -1,6 +1,6 @@
 <template>
   <div class="app-shell">
-    <AppSidebar v-if="showSidebar" />
+    <div v-if="showSidebar" class="nav-slot"><AppSidebar /></div>
     <main class="app-main" :class="{ 'full-width': !showSidebar }">
       <!-- P8 实测缺陷②：transition mode="out-in" 要求单根组件；ChatView 三列布局为
            多根模板，leave 永不完成 → 登录后所有 SPA 路由切换冻结（URL 变、视图不换）。
@@ -58,7 +58,14 @@ onMounted(async () => {
 .app-shell {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+}
+
+.nav-slot { flex: none; display: flex; }
+@media (max-width: 850px) {
+  .nav-slot { width: 64px; position: relative; z-index: 5; }
+  .nav-slot > :deep(.sidebar) { position: absolute; inset: 0 auto 0 0; max-width: calc(100vw - 44px); }
 }
 
 .app-main {

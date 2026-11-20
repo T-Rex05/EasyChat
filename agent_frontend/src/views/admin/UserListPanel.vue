@@ -2,7 +2,12 @@
   <div class="section">
     <div class="section-header">
       <h2 class="section-title">用户列表</h2>
+      <button v-if="auth.hasPerm('system.manage')" type="button" class="btn btn-primary" @click="openCreateDialog">
+        添加用户
+      </button>
     </div>
+    <p class="status-feedback" role="status">{{ statusFeedback }}</p>
+    <p class="status-error" role="alert">{{ statusError }}</p>
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
       <p>加载中...</p>
@@ -40,64 +45,130 @@
             </td>
             <td>{{ formatTime(user.created_at) }}</td>
             <td>
-              <button @click="showEffectivePerms(user)" class="btn-link">有效权限</button>
-              <button @click="toggleUserStatus(user)" class="btn-link">
-                {{ user.status === 1 ? '禁用' : '启用' }}
+              <button
+                type="button"
+                class="btn btn-sm user-status-action"
+                :class="user.status === 1 ? 'btn-danger' : 'btn-secondary'"
+                :disabled="!!statusRestriction(user) || updatingStatus.has(user.id)"
+                :aria-label="`${user.status === 1 ? '禁用' : '启用'} ${user.username}`"
+                :title="statusRestriction(user) || undefined"
+                @click="toggleUserStatus(user)"
+              >
+                {{ updatingStatus.has(user.id) ? '更新中…' : user.status === 1 ? '禁用' : '启用' }}
               </button>
             </td>
           </tr>
         </tbody>
       </table>
-
-      <!-- 用户有效权限预览（来源可解释：角色授权 / 单独授予 / 单独撤销；撤销优先） -->
-      <div v-if="permUser" class="perm-preview">
-        <div class="perm-preview-head">
-          <strong>{{ permUser.username }} 的有效权限</strong>
-          <span v-if="permDetail?.super_admin" class="badge badge-info">系统拥有者：全部权限</span>
-          <button class="btn-link" @click="permUser = null">收起</button>
-        </div>
-        <div v-if="permLoading" class="loading-state">加载中…</div>
-        <div v-else-if="permDetail" class="perm-list">
-          <div v-for="item in permDetail.permissions" :key="item.permission" class="perm-item">
-            <span class="perm-key">{{ item.permission }}</span>
-            <span v-if="item.override === 'revoke'" class="badge badge-danger">已单独撤销</span>
-            <span v-else-if="item.override === 'grant'" class="badge badge-success">已单独授予</span>
-            <span v-else-if="item.from_role" class="badge badge-info">角色授权</span>
-            <span v-else class="muted-hint">未授予</span>
-            <span v-if="!item.effective" class="muted-hint">→ 不生效</span>
-          </div>
-        </div>
-      </div>
     </div>
 
+    <dialog
+      ref="createDialog"
+      class="create-dialog"
+      :aria-labelledby="`${createId}-title`"
+      @cancel="onCreateCancel"
+      @close="resetCreateDialog"
+    >
+      <h3 :id="`${createId}-title`">添加用户</h3>
+      <form @submit.prevent="submitNewUser" @input="createError = ''">
+        <div class="form-group">
+          <label class="form-label" :for="`${createId}-username`">用户名</label>
+          <input
+            :id="`${createId}-username`"
+            v-model.trim="newUsername"
+            class="input"
+            name="username"
+            autocomplete="username"
+            autocorrect="off"
+            autocapitalize="none"
+            spellcheck="false"
+            :aria-describedby="`${createId}-username-help`"
+            minlength="2"
+            required
+            autofocus
+          />
+          <small :id="`${createId}-username-help`">至少 2 个字符</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label" :for="`${createId}-password`">密码</label>
+          <input
+            :id="`${createId}-password`"
+            v-model="newPassword"
+            class="input"
+            name="password"
+            type="password"
+            autocomplete="new-password"
+            :aria-describedby="`${createId}-password-help`"
+            minlength="6"
+            required
+          />
+          <small :id="`${createId}-password-help`">至少 6 个字符</small>
+        </div>
+        <p class="create-error" role="alert">{{ createError }}</p>
+        <div class="dialog-footer">
+          <button type="button" class="btn btn-secondary" :disabled="creating" @click="createDialog?.close()">
+            取消
+          </button>
+          <button type="submit" class="btn btn-primary" :disabled="creating">
+            {{ creating ? '创建中…' : '创建用户' }}
+          </button>
+        </div>
+      </form>
+    </dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, useId } from 'vue'
 import * as AdminAPI from '@/api/admin'
 import type { User, Role } from '@/api/admin'
 
-import { getUserEffectivePerms, type UserEffectiveDetail } from '@/api/permissions'
+import { useAuthStore } from '@/stores/auth'
+import { extractErrorMessage } from '@/utils/errorMessage'
 
+const auth = useAuthStore()
 const users = ref<User[]>([])
 const roles = ref<Role[]>([])
 const loading = ref(false)
-const permUser = ref<User | null>(null)
-const permDetail = ref<UserEffectiveDetail | null>(null)
-const permLoading = ref(false)
+const updatingStatus = ref(new Set<number>())
+const statusFeedback = ref('')
+const statusError = ref('')
+const createId = useId()
+const createDialog = ref<HTMLDialogElement | null>(null)
+const newUsername = ref('')
+const newPassword = ref('')
+const creating = ref(false)
+const createError = ref('')
 
-async function showEffectivePerms(user: User) {
-  permUser.value = user
-  permDetail.value = null
-  permLoading.value = true
+function openCreateDialog() {
+  statusFeedback.value = ''
+  statusError.value = ''
+  createDialog.value?.showModal()
+}
+
+function onCreateCancel(event: Event) {
+  if (creating.value) event.preventDefault()
+}
+
+function resetCreateDialog() {
+  newUsername.value = ''
+  newPassword.value = ''
+  createError.value = ''
+}
+
+async function submitNewUser() {
+  if (creating.value) return
+  creating.value = true
+  createError.value = ''
   try {
-    permDetail.value = await getUserEffectivePerms(user.id)
-  } catch (e) {
-    console.error('加载有效权限失败:', e)
-    alert('加载有效权限失败：' + (e as Error).message)
+    await AdminAPI.createUser({ username: newUsername.value, password: newPassword.value })
+    statusFeedback.value = `已创建用户 ${newUsername.value}`
+    createDialog.value?.close()
+    await loadUsers()
+  } catch (error) {
+    createError.value = extractErrorMessage(error) || '创建用户失败，请重试'
   } finally {
-    permLoading.value = false
+    creating.value = false
   }
 }
 
@@ -131,15 +202,28 @@ async function updateUserRole(user: User) {
   }
 }
 
+function statusRestriction(user: User): string {
+  if (!auth.hasPerm('system.manage')) return '需要系统管理权限'
+  if (user.id === (auth.user?.id ?? Number(auth.userId))) return '无法禁用当前登录账号'
+  if (user.role === 'super_admin' && auth.userRole !== 'super_admin') return '拥有者身份只能由超级管理员管理'
+  return ''
+}
+
 async function toggleUserStatus(user: User) {
+  if (statusRestriction(user) || updatingStatus.value.has(user.id)) return
   const newStatus = user.status === 1 ? 0 : 1
+  const action = newStatus === 1 ? '启用' : '禁用'
+  statusFeedback.value = ''
+  statusError.value = ''
+  updatingStatus.value.add(user.id)
   try {
     await AdminAPI.updateUserStatus(user.id, newStatus)
     user.status = newStatus
-    alert(`✅ 用户 ${user.username} 已${newStatus === 1 ? '启用' : '禁用'}`)
-  } catch (e) {
-    console.error('更新用户状态失败:', e)
-    alert('❌ 操作失败')
+    statusFeedback.value = `已${action}用户 ${user.username}`
+  } catch (error) {
+    statusError.value = `${action}用户 ${user.username} 失败。${extractErrorMessage(error)}`
+  } finally {
+    updatingStatus.value.delete(user.id)
   }
 }
 
@@ -163,16 +247,16 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .section-title {
   font-size: 18px;
   color: var(--text-primary);
   margin: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-primary);
-  width: 100%;
 }
 
 .loading-state,
@@ -257,158 +341,54 @@ onMounted(() => {
   color: #c62828;
 }
 
-.btn-link {
-  background: none;
-  border: none;
-  color: var(--brand);
-  cursor: pointer;
-  font-size: 13px;
-  text-decoration: underline;
+.user-status-action:disabled {
+  cursor: default;
+  opacity: .55;
 }
 
-.btn-link:hover {
-  color: var(--brand-hover);
-}
-
-/* Dialog */
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.dialog {
+.create-dialog {
   background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
   border-radius: 12px;
-  width: 90%;
-  max-width: 420px;
-}
-
-.dialog-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-primary);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.dialog-header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.btn-close {
-  background: none;
-  border: none;
-  font-size: 24px;
-  cursor: pointer;
-  color: var(--text-secondary);
-}
-
-.dialog-body {
+  box-shadow: var(--shadow-lg);
+  width: min(420px, calc(100% - 32px));
+  margin: auto;
   padding: 20px;
 }
 
-.dialog-user {
-  margin: 0 0 16px 0;
-  font-size: 14px;
+.create-dialog::backdrop {
+  background: rgb(0 0 0 / 50%);
+}
+
+.create-dialog h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+.create-dialog small {
   color: var(--text-secondary);
 }
 
-.layer-checkboxes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+.status-feedback {
+  color: var(--text-secondary);
 }
 
-.layer-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  padding: 6px 10px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  transition: all 0.15s;
+.create-error,
+.status-error {
+  color: var(--text-danger);
 }
 
-.layer-checkbox:hover {
-  background: var(--bg-hover);
-}
-
-.layer-checkbox input {
-  width: auto;
+.status-feedback:empty,
+.create-error:empty,
+.status-error:empty {
   margin: 0;
 }
 
 .dialog-footer {
-  padding: 12px 20px;
-  border-top: 1px solid var(--border-primary);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.btn {
-  padding: 8px 16px;
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  background: var(--bg-primary);
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.btn-primary {
-  background: var(--brand);
-  color: white;
-  border-color: var(--brand);
-}
-
-.btn-primary:hover {
-  background: var(--brand-hover);
-}
-.perm-preview {
-  margin-top: 16px;
-  border: 1px solid var(--border-primary);
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.perm-preview-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.perm-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 4px;
-}
-
-.perm-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  padding: 2px 0;
-}
-
-.perm-key {
-  min-width: 130px;
-}
-
-.muted-hint {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
 </style>

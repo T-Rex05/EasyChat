@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from backend.shared.errors import UnauthenticatedError
 
 
 class AcceptanceCheckBody(BaseModel):
@@ -28,9 +29,6 @@ class AcceptanceRoundBody(BaseModel):
 class AcceptanceDecisionBody(BaseModel):
     decision: str  # accepted | rejected
     note: str = ""
-
-from backend.shared.errors import UnauthenticatedError
-
 
 class SettingsBody(BaseModel):
     enabled: bool | None = None
@@ -148,22 +146,28 @@ def build_superagent_router(service: Any, authenticate: Any) -> APIRouter:
 
     @router.get("/tasks")
     async def list_tasks(authorization: Annotated[str | None, Header()] = None,
-                         limit: int = 50, cursor: str = "", status: str = ""):
+                         limit: int = 50, cursor: str = "", status: str = "", owner_id: int | None = None):
         principal = _principal(authorization)
         page_limit = max(1, min(limit, 100))
         cursor_created_at, _, cursor_id = cursor.partition("|")
         tasks = service.list_tasks(
             principal,
-            limit=page_limit,
+            limit=page_limit + 1,
             cursor_created_at=cursor_created_at,
             cursor_id=cursor_id,
             status=status.strip(),
+            owner_id=owner_id,
         )
         next_cursor = ""
-        if len(tasks) == page_limit and tasks:
+        if len(tasks) > page_limit:
+            tasks = tasks[:page_limit]
             last = tasks[-1]
             next_cursor = f"{last.created_at}|{last.task_id}"
         return {"tasks": [_task_dict(t) for t in tasks], "next_cursor": next_cursor}
+
+    @router.get("/task-users")
+    async def list_task_users(authorization: Annotated[str | None, Header()] = None):
+        return {"users": service.list_task_users(_principal(authorization))}
 
     @router.post("/tasks")
     async def create_task(body: TaskCreateBody,

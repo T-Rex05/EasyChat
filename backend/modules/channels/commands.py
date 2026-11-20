@@ -15,7 +15,7 @@ from backend.modules.ledger.contracts import (
 )
 from backend.modules.profiles.contracts import PRESET_NAMES
 from backend.shared.context import Principal
-from backend.shared.errors import AppError
+from backend.shared.errors import AppError, ForbiddenError
 from backend.shared.identifiers import is_valid_id
 
 TargetResolver = Callable[[int], ChannelTarget | None]
@@ -32,6 +32,9 @@ class ProfilesCommands(Protocol):
 
 
 class MemoryCommands(Protocol):
+    def remember_preference_request(
+        self, actor: Principal, *, text: str, source_ref: str,
+    ) -> Any: ...
     def list(self, actor: Principal, *, limit: int) -> list[Any]: ...
     def forget(
         self, actor: Principal, *, memory_id: str = "", query: str = "",
@@ -77,6 +80,16 @@ class CommandServices:
 class WeChatCommands:
     def __init__(self, services: CommandServices) -> None:
         self.services = services
+
+    def remember_preference(self, principal: Principal, text: str, event_id: str) -> str | None:
+        memory = self.services.memory
+        if memory is None:
+            return None
+        try:
+            record = memory.remember_preference_request(principal, text=text, source_ref=event_id)
+        except ForbiddenError as exc:
+            return f"这条偏好未保存：{exc}"
+        return f"已记住：{record.content}" if record else None
 
     async def handle(
         self, principal: Principal, message: InboundMessage, session_id: str

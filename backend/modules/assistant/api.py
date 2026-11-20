@@ -110,7 +110,13 @@ class AssistantService:
             channel_account_id=channel_account_id, title=title[:60],
         )
 
+    def require_chat_access(self, principal: Principal) -> Principal:
+        principal = self.access.validate_principal(principal)
+        self.access.require_permission(principal, "chat.use")
+        return principal
+
     async def list_sessions(self, principal: Principal, limit: int = 50, offset: int = 0) -> list[dict]:
+        principal = self.require_chat_access(principal)
         return self.repo.list_sessions(principal.user_id, limit=limit, offset=offset)
 
     async def get_session(self, principal: Principal, session_id: str) -> dict | None:
@@ -122,13 +128,14 @@ class AssistantService:
 
     async def session_messages(self, principal: Principal, session_id: str) -> list[dict]:
         """UI 投影消息（仅 owner；投影不是模型历史）。"""
+        principal = self.require_chat_access(principal)
         session = self.repo.get_session(session_id, owner_id=principal.user_id)
         conn = self.db.connect()
         try:
             rows = conn.execute(
                 "SELECT id, run_id, role, content, status, created_at FROM conversations "
-                "WHERE session_id=? ORDER BY id",
-                (session["id"],),
+                "WHERE session_id=? AND owner_id=? ORDER BY id",
+                (session["id"], principal.user_id),
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -172,8 +179,7 @@ class AssistantService:
     # ---- 提交 ------------------------------------------------------------------
 
     async def submit(self, command: RunCommand) -> RunReceipt:
-        principal = self.access.validate_principal(command.principal)
-        self.access.require_permission(principal, "chat.use")
+        principal = self.require_chat_access(command.principal)
 
         session = self.repo.get_session(command.session_id, owner_id=principal.user_id)
         if not session["active"]:
@@ -230,6 +236,7 @@ class AssistantService:
 
     def iter_events(self, principal: Principal, run_id: str, after_seq: int = 0) -> AsyncIterator[RunEvent]:
         """订阅 run 事件流（owner 校验后）。注意与 self.events(EventBus) 属性区分。"""
+        principal = self.require_chat_access(principal)
         run = self._require_run_access(principal, run_id)
         return self.events.subscribe(principal, int(run["owner_id"]), run_id, after_seq=after_seq)
 
@@ -239,6 +246,7 @@ class AssistantService:
         return status in (RUN_CANCELLED, "cancel_requested")
 
     async def run_status(self, principal: Principal, run_id: str) -> dict:
+        principal = self.require_chat_access(principal)
         run = self._require_run_access(principal, run_id)
         return {
             "run_id": str(run["id"]),
@@ -252,6 +260,7 @@ class AssistantService:
     # ---- 历史投影 ------------------------------------------------------------------
 
     async def rename_session(self, principal: Principal, session_id: str, title: str) -> None:
+        principal = self.require_chat_access(principal)
         session = self.repo.get_session(session_id, owner_id=principal.user_id)
         with self.db.transaction() as conn:
             conn.execute("UPDATE sessions SET title=?, updated_at=? WHERE id=?",
@@ -259,8 +268,10 @@ class AssistantService:
 
     async def delete_session(self, principal: Principal, session_id: str) -> None:
         """停用会话（active=0，保留数据）；投影行按旧语义标删除。"""
+        principal = self.require_chat_access(principal)
         session = self.repo.get_session(session_id, owner_id=principal.user_id)
         now = utc_now_iso()
         with self.db.transaction() as conn:
             conn.execute("UPDATE sessions SET active=0, updated_at=? WHERE id=?", (now, session["id"]))
-            conn.execute("UPDATE conversations SET status=0, updated_at=? WHERE session_id=?", (now, session["id"]))
+            conn.execute("UPDATE conversations SET status=0, updated_at=? WHERE session_id=? AND owner_id=?",
+                         (now, session["id"], principal.user_id))

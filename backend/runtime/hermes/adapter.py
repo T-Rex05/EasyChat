@@ -134,6 +134,7 @@ class HermesRuntimeAdapter(ExecutionRuntime):
         return (
             ctx.principal.user_id,
             ctx.session_id,
+            ctx.source == "superagent",
             ctx.model_profile_id,
             ctx.policy_revision,
             ctx.principal.permission_revision,
@@ -346,16 +347,33 @@ class HermesRuntimeAdapter(ExecutionRuntime):
             user_message = request.text
             if request.context_prefix.strip():
                 user_message = f"{request.context_prefix.strip()}\n\n{request.text}"
+            cwd_token = None
             try:
                 # 会话连续性由 agent 绑定的 SessionDB（state.db）提供；
                 # UI 投影历史不得在此拼接（架构 §5.1：conversations 仅是投影）。
+                run_kwargs = {}
+                if request.context.source == "superagent":
+                    from agent.runtime_cwd import set_session_cwd
+                    from tools.terminal_tool import resolve_task_overrides
+
+                    session_id = request.context.session_id
+                    workspace = resolve_task_overrides(session_id).get("cwd")
+                    if not workspace or not Path(workspace).is_dir():
+                        raise ValueError("编码会话缺少可用的任务工作区")
+                    # The executor's private Context carries the CWD to prompt
+                    # builders. The same task ID selects the file/terminal CWD.
+                    cwd_token = set_session_cwd(str(workspace))
+                    run_kwargs["task_id"] = session_id
                 return run_conversation(
                     agent,
                     user_message,
                     system_message=None,
                     persist_user_message=request.persist_user_message or request.text,
+                    **run_kwargs,
                 )
             finally:
+                if cwd_token is not None:
+                    cwd_token.var.reset(cwd_token)
                 agent.stream_delta_callback = None
                 agent.reasoning_callback = None
                 agent.step_callback = None

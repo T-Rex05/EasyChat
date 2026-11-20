@@ -93,6 +93,27 @@ def test_extract_trigger_covers_natural_explicit_expressions() -> None:
     assert should_extract("今天天气不错，随便聊聊") is False
 
 
+@pytest.mark.parametrize("text", ["记得我喜欢吃辣的", "请记得：我喜欢吃辣的"])
+def test_remember_my_preference_has_user_evidence(text):
+    from backend.modules.memory.capture import candidate_from_user_message, should_extract
+
+    assert should_extract(text)
+    candidate = candidate_from_user_message(run_id="source", text=text)
+    assert candidate and candidate.content == "我喜欢吃辣的"
+    assert candidate.kind == "preference" and candidate.source_refs[0].quote == text
+
+
+@pytest.mark.parametrize("text", [
+    "你还记得我喜欢吃什么吗？", "你还记得，我喜欢吃什么吗？", "记得我喜欢吃辣的吗", "记得 我喜欢吃什么",
+    "我记得我喜欢吃辣的", "记得明天提醒我买辣椒", "记得我喜欢吃辣的，帮我订餐",
+])
+def test_remember_questions_and_other_actions_are_not_preference_commands(text):
+    from backend.modules.memory.capture import should_capture, should_extract
+
+    assert not should_capture(text)
+    assert not should_extract(text)
+
+
 class FakeGenerator:
     def __init__(self, output: str) -> None:
         self.output = output

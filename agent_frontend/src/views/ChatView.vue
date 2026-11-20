@@ -1,7 +1,7 @@
 <template>
-  <div class="chat-view">
+  <div class="chat-view" :class="{ 'show-history': historyOpen }">
     <!-- 左侧历史侧边栏 -->
-    <ChatSidebar ref="sidebarRef" />
+    <ChatSidebar ref="historyPanel" id="chat-history" @return-to-chat="closeHistory" />
 
     <!-- 主聊天区域 -->
     <div class="chat-main">
@@ -12,11 +12,15 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
           </div>
           <div class="header-titles">
-            <h2 class="page-title">智能对话</h2>
+            <div class="chat-title-row">
+              <h2 class="page-title">智能对话</h2>
+              <SessionChannelBadge :channel="activeChannel" />
+            </div>
             <span class="page-subtitle">与 AI 智能体自由交流</span>
           </div>
         </div>
         <div class="header-actions">
+          <button ref="historyButton" class="history-toggle" aria-controls="chat-history" @click="openHistory">历史记录</button>
           <button class="btn-new-chat" @click="newChat">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             <span>新对话</span>
@@ -33,8 +37,8 @@
               <svg viewBox="0 0 36 36" fill="none">
                 <defs>
                   <linearGradient id="welcomeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#4e6ef2" />
-                    <stop offset="100%" stop-color="#6b83f5" />
+                    <stop offset="0%" style="stop-color: var(--brand)" />
+                    <stop offset="100%" style="stop-color: var(--brand-2)" />
                   </linearGradient>
                 </defs>
                 <rect width="36" height="36" rx="11" fill="url(#welcomeGrad)" />
@@ -278,13 +282,37 @@ import ChatSidebar from '@/components/chat/ChatSidebar.vue'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import { useChat } from '@/composables/useChat'
 import { useChatStore } from '@/stores/chat'
+import { useSidebarStore } from '@/stores/sidebar'
+import SessionChannelBadge from '@/components/SessionChannelBadge.vue'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import { useAuthStore } from '@/stores/auth'
 import request from '@/api/request'
 import { getPendingExecApproval } from '@/api/chat'
 import { getModelConfigs, type ModelConfig } from '@/api/config'
 
+const historyOpen = ref(false)
+const historyButton = ref<HTMLButtonElement | null>(null)
+const historyPanel = ref<InstanceType<typeof ChatSidebar> | null>(null)
+
+async function openHistory() {
+  historyOpen.value = true
+  await nextTick()
+  historyPanel.value?.focusReturnButton()
+}
+
+async function closeHistory() {
+  if (!historyOpen.value) return
+  historyOpen.value = false
+  await nextTick()
+  historyButton.value?.focus()
+}
+
 const chatStore = useChatStore()
+const sidebarStore = useSidebarStore()
+const activeChannel = computed(() => {
+  if (!chatStore.currentChatId) return 'web'
+  return sidebarStore.chatHistory.find(chat => chat.id === chatStore.currentChatId)?.source
+})
 
 // 权限检查
 const auth = useAuthStore()
@@ -583,12 +611,7 @@ function watchStreaming() {
   if (isStreaming.value) {
     const msgs = messages.value
     const lastMsg = msgs[msgs.length - 1]
-    // 统计思考过程 + 正文的总长度，作为是否出现新内容依据
-    let totalLen = lastMsg && typeof lastMsg.content === 'string' ? lastMsg.content.length : 0
-    if (lastMsg && Array.isArray(lastMsg.thinkingProcesses)) {
-      totalLen += lastMsg.thinkingProcesses.reduce((s, tp) => s + (tp?.content?.length || 0), 0)
-    }
-    // 内容真的变长了才滚动（新 token 到达）；思考折叠/开合引起的高度变化不强拉
+    const totalLen = (lastMsg?.content?.length || 0) + (lastMsg?.toolNames?.length || 0)
     if (totalLen !== lastStreamedLength) {
       lastStreamedLength = totalLen
       smartScrollToBottom()
@@ -675,6 +698,7 @@ onMounted(() => {
 
 <style scoped>
 .chat-view {
+  container: chat / inline-size;
   display: flex;
   height: 100%;
   background: var(--bg-secondary);
@@ -722,6 +746,8 @@ onMounted(() => {
   width: 20px;
   height: 20px;
 }
+
+.chat-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 
 .header-titles {
   display: flex;
@@ -935,8 +961,8 @@ onMounted(() => {
   gap: 12px;
   padding: 12px 16px;
   margin: 8px 0;
-  background: #fff8e1;
-  border: 1px solid #ffe082;
+  background: var(--bg-warning);
+  border: 1px solid var(--border-warning);
   border-radius: 10px;
 }
 
@@ -950,7 +976,7 @@ onMounted(() => {
 
 .approval-banner-title {
   font-weight: 600;
-  color: #e65100;
+  color: var(--text-warning);
   font-size: 13px;
 }
 
@@ -962,7 +988,7 @@ onMounted(() => {
 .approval-banner-cmd {
   font-family: monospace;
   font-size: 12px;
-  background: rgba(0,0,0,0.05);
+  background: var(--bg-tertiary);
   padding: 4px 8px;
   border-radius: 6px;
   overflow: hidden;
@@ -1593,5 +1619,28 @@ onMounted(() => {
 .btn-secondary:hover {
   background: var(--bg-tertiary);
   border-color: var(--brand);
+}
+
+.history-toggle { display: none; }
+@container chat (max-width: 800px) {
+  .chat-sidebar { display: none; }
+  .show-history .chat-sidebar { display: flex; width: 100%; }
+  .show-history .chat-main { display: none; }
+  .header-actions { display: flex; align-items: center; gap: 6px; }
+  .history-toggle {
+    display: inline-flex; padding: 8px 10px; border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-primary);
+    cursor: pointer;
+  }
+  .chat-header, .input-area { padding: 12px; }
+  .messages-container { padding: 12px; }
+  .message-anchor { padding: 0; }
+  .input-actions { flex-wrap: wrap; }
+}
+@container chat (max-width: 410px) {
+  .header-logo, .page-subtitle { display: none; }
+  .header-actions button { padding: 7px 8px; }
+  .welcome-screen { padding: 0 4px; }
+  .welcome-title { font-size: 21px; }
 }
 </style>

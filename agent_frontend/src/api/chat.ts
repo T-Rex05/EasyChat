@@ -79,8 +79,8 @@ function handleAuthExpired(): void {
     localStorage.removeItem('authToken')
     localStorage.removeItem('userPermissions')
   } catch { /* ignore */ }
-  if (window.location.pathname !== '/login') {
-    window.location.href = '/login'
+  if (window.location.hash !== '#/login') {
+    window.location.hash = '#/login'
   }
 }
 
@@ -466,19 +466,19 @@ function dispatchStreamEvent(
       break
 
     case 'stream_reset':
-      {
-        const resetContent = state.fullContent
-        state.fullContent = ''
-        if (callbacks.onStreamReset) {
-          callbacks.onStreamReset(resetContent || undefined)
-        }
-      }
+      state.fullContent = ''
+      callbacks.onStreamReset?.()
       break
 
     case 'thinking_step':
-      // 流式思考过程：工具调用前的推理步骤
-      if (callbacks.onThinkingStep) {
-        callbacks.onThinkingStep(data.content || '')
+      // Older servers stream private reasoning fragments under this event name.
+      break
+
+    case 'tool_activity':
+      if (Array.isArray(data.tools)) {
+        for (const name of data.tools) {
+          if (typeof name === 'string' && name.trim()) callbacks.onToolCall?.(name)
+        }
       }
       break
 
@@ -489,9 +489,7 @@ function dispatchStreamEvent(
       break
 
     case 'tool_call':
-      if (callbacks.onToolCall) {
-        callbacks.onToolCall(data.tool_name || '')
-      }
+      if (typeof data.tool_name === 'string') callbacks.onToolCall?.(data.tool_name)
       break
 
     case 'tool_output':

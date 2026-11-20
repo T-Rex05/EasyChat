@@ -137,6 +137,81 @@ async def test_cursor_pagination_stable_order(rig) -> None:
     assert len(ids2) == 1
 
 
+async def test_task_users_require_manage_and_reflect_effective_view_permission(rig) -> None:
+    service, admin, user = _service(rig)
+    rig.access.create_role(admin, name="superagent_limited", display_name="Limited", permissions=[])
+    granted = rig.seed_user(role="superagent_limited", grants=("superagent.view",), username="granted")
+    manager = rig.seed_user(grants=("superagent.manage",), username="manager")
+    revoked = rig.seed_user(revokes=("superagent.view",), username="revoked")
+    disabled = rig.seed_user(username="disabled")
+    manage_only = rig.seed_user(role="superagent_limited", grants=("superagent.manage",))
+    rig.access.set_user_status(admin, disabled.user_id, 0)
+    assert not rig.access.has_permission(manager, "system.manage")
+
+    async with _client(rig, service) as client:
+        url = "/api/superagent/task-users"
+        assert (await client.get(url, headers=_headers(rig, user))).status_code == 403
+        assert (await client.get(url, headers=_headers(rig, manage_only))).status_code == 403
+
+        response = await client.get(url, headers=_headers(rig, manager))
+        assert response.status_code == 200
+        users = response.json()["users"]
+        user_ids = {entry["user_id"] for entry in users}
+        assert {admin.user_id, user.user_id, granted.user_id, manager.user_id} <= user_ids
+        assert user_ids.isdisjoint({revoked.user_id, disabled.user_id, manage_only.user_id})
+        assert all(set(entry) == {"user_id", "username"} for entry in users)
+        assert {"user_id": granted.user_id, "username": "granted"} in users
+
+        rig.access.set_user_permission(admin, granted.user_id, "superagent.view", False)
+        updated = await client.get(url, headers=_headers(rig, manager))
+        assert granted.user_id not in {entry["user_id"] for entry in updated.json()["users"]}
+
+
+async def test_task_owner_and_status_filters_apply_before_pagination(rig) -> None:
+    service, admin, user = _service(rig)
+    manager = rig.seed_user(grants=("superagent.manage",))
+    other = rig.seed_user()
+    service.update_settings(admin, enabled=True, repo_url="https://github.com/foo/bar.git")
+    first = service.create_task(user, title="first", requirement="r")
+    second = service.create_task(user, title="second", requirement="r")
+    cancelled = service.create_task(user, title="cancelled", requirement="r")
+    await service.cancel_task(user, cancelled.task_id)
+    foreign = service.create_task(other, title="foreign", requirement="r")
+
+    async with _client(rig, service) as client:
+        url = "/api/superagent/tasks"
+        regular_headers = _headers(rig, user)
+        own = await client.get(url, headers=regular_headers)
+        assert {task["owner_id"] for task in own.json()["tasks"]} == {user.user_id}
+        assert (await client.get(url, headers=regular_headers, params={"owner_id": other.user_id})).status_code == 403
+        explicit_own = await client.get(url, headers=regular_headers, params={"owner_id": user.user_id})
+        assert explicit_own.json() == own.json()
+        own_queued = await client.get(url, headers=regular_headers, params={"status": "queued", "limit": 1})
+        assert own_queued.json()["tasks"][0]["status"] == "queued"
+        assert own_queued.json()["next_cursor"]
+
+        manager_headers = _headers(rig, manager)
+        params = {"owner_id": user.user_id, "status": "queued", "limit": 1}
+        page1 = (await client.get(url, headers=manager_headers, params=params)).json()
+        assert len(page1["tasks"]) == 1
+        assert page1["next_cursor"]
+        page2 = (await client.get(url, headers=manager_headers, params={**params, "cursor": page1["next_cursor"]})).json()
+        assert len(page2["tasks"]) == 1
+        assert {task["task_id"] for task in page1["tasks"] + page2["tasks"]} == {first.task_id, second.task_id}
+        assert not page2["next_cursor"]
+
+        rig.access.set_user_permission(admin, other.user_id, "superagent.view", False)
+        historical = await client.get(f"{url}/{foreign.task_id}", headers=manager_headers)
+        assert historical.status_code == 200
+        assert historical.json()["task"]["owner_id"] == other.user_id
+        assert (await client.get(f"{url}/{foreign.task_id}/events", headers=manager_headers)).status_code == 200
+        assert (await client.get(url, headers=manager_headers, params={"owner_id": other.user_id})).status_code == 403
+        rig.access.set_user_status(admin, user.user_id, 0)
+        assert (await client.get(url, headers=manager_headers, params={"owner_id": user.user_id})).status_code == 403
+        all_tasks = await client.get(url, headers=manager_headers)
+        assert {foreign.task_id, first.task_id} <= {task["task_id"] for task in all_tasks.json()["tasks"]}
+
+
 async def test_inputs_endpoint_and_incremental_events(rig) -> None:
     service, admin, user = _service(rig)
     service.update_settings(admin, enabled=True, repo_url="https://github.com/foo/bar.git")

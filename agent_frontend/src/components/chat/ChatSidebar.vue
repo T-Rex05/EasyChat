@@ -1,11 +1,12 @@
 <template>
-  <div class="chat-sidebar" :style="{ width: `${panelWidth}px` }">
+  <div class="chat-sidebar" :style="{ '--history-width': `${panelWidth}px` }">
     <div class="sidebar-header">
       <h3>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="14" y2="13"/></svg>
         <span>历史记录</span>
       </h3>
       <div class="header-actions">
+        <button ref="returnButton" class="btn-new-chat return-button" @click="emit('returnToChat')">返回对话</button>
         <button @click="newChat" class="btn-new-chat">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           新对话
@@ -40,10 +41,13 @@
             @blur="saveRename(chat.id)"
             ref="renameInput" />
           <template v-else>
-            <div class="history-item-title" :title="chat.title || chat.user_question || '新对话'">
+            <button type="button" class="history-item-title" @click.stop="selectChat(chat.id)" :title="chat.title || chat.user_question || '新对话'">
               {{ chat.title || chat.user_question || '新对话' }}
+            </button>
+            <div class="history-item-time">
+              <SessionChannelBadge :channel="chat.source" />
+              {{ formatTime(chat.update_time || chat.create_time) }}
             </div>
-            <div class="history-item-time">{{ formatTime(chat.update_time || chat.create_time) }}</div>
           </template>
         </div>
         <div class="history-item-actions">
@@ -66,6 +70,7 @@ import { useChatStore } from '@/stores/chat'
 import { getUserSessions, deleteSession, renameSession } from '@/api/session'
 import { useAuthStore } from '@/stores/auth'
 import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
+import SessionChannelBadge from '@/components/SessionChannelBadge.vue'
 
 // P8 实测缺陷③：拖动宽度此前不落存储，刷新回弹默认值。
 // 初值从 localStorage 读并钳制到当前 [min,max]（旧持久化宽度可能超界）。
@@ -80,6 +85,10 @@ function onPanelResize(width: number) {
   panelWidth.value = width
   localStorage.setItem(HISTORY_WIDTH_KEY, String(width))
 }
+
+const emit = defineEmits<{ returnToChat: [] }>()
+const returnButton = ref<HTMLButtonElement | null>(null)
+defineExpose({ focusReturnButton: () => returnButton.value?.focus() })
 
 const sidebarStore = useSidebarStore()
 const chatStore = useChatStore()
@@ -145,6 +154,7 @@ async function loadHistory(append = false) {
 }
 
 async function selectChat(chatId: string) {
+  emit('returnToChat')
   if (chatId === selectedChatId.value) return
   window.dispatchEvent(new CustomEvent('chat:loadHistory', { detail: { chatId } }))
 }
@@ -164,6 +174,7 @@ async function deleteChat(chatId: string) {
 }
 
 function newChat() {
+  emit('returnToChat')
   chatStore.clearMessages()
   chatStore.setCurrentChatId('')
 }
@@ -191,7 +202,7 @@ onMounted(() => {
     sidebarStore.removeFromHistory(detail.chatId)
     sidebarStore.prependChatHistory({
       id: detail.chatId, title: detail.title, user_question: detail.title,
-      update_time: now, create_time: now, is_schedule: 0,
+      update_time: now, create_time: now, is_schedule: 0, source: 'web',
     })
   }
   window.addEventListener('chat:refreshHistory', handleRefreshHistory)
@@ -207,7 +218,7 @@ onMounted(() => {
 <style scoped>
 .chat-sidebar {
   position: relative;
-  width: 280px; flex-shrink: 0; display: flex; flex-direction: column;
+  width: var(--history-width, 280px); flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--bg-sidebar, var(--bg-secondary)); border-right: 1px solid var(--border-primary);
   height: 100%; overflow: hidden;
 }
@@ -223,8 +234,8 @@ onMounted(() => {
 .history-item.active { background: var(--bg-tertiary); }
 .history-item-icon svg { width: 15px; height: 15px; color: var(--text-tertiary); }
 .history-item-content { flex: 1; min-width: 0; }
-.history-item-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.history-item-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.history-item-title { display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; color: inherit; cursor: pointer; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item-time { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 .history-item-title-input { width: 100%; border: 1px solid var(--accent, #4a7cff); border-radius: 4px; padding: 2px 4px; background: var(--bg-primary); color: inherit; font-size: 13px; }
 .history-item-actions { display: none; gap: 2px; }
 .history-item:hover .history-item-actions { display: flex; }
@@ -235,4 +246,10 @@ onMounted(() => {
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); animation: blink 1s infinite alternate; }
 .dot:nth-child(2) { animation-delay: .2s; } .dot:nth-child(3) { animation-delay: .4s; }
 @keyframes blink { from { opacity: .25; } to { opacity: 1; } }
+.return-button { display: none; }
+@container chat (max-width: 800px) {
+  .header-actions { display: flex; gap: 6px; }
+  .return-button { display: inline-flex; }
+  .panel-resize-handle { display: none; }
+}
 </style>

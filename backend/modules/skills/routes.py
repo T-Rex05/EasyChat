@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.modules.skills.api import SkillService
 from backend.modules.skills.contracts import SkillVersionView, SkillView
+from backend.modules.skills.templates import matching_template_provenance, template_detail, templates_catalog
 from backend.shared.errors import InvalidInputError, UnauthenticatedError
 
 
@@ -87,9 +88,15 @@ def build_skills_router(service: SkillService, authenticate: Any) -> APIRouter:
         # 模板元数据为公开内容（来源/许可固定），登录即可浏览；
         # 导入的写权限（skill.create/manage）由 SkillService 内校验。
         _principal(authorization)
-        from backend.modules.skills.templates import templates_catalog
-
         return {"templates": templates_catalog()}
+
+    @router.get("/templates/{key}")
+    async def get_template(
+        key: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        _principal(authorization)
+        return {"template": template_detail(key)}
 
     @router.post("/templates/{key}/import")
     async def import_template(
@@ -101,14 +108,15 @@ def build_skills_router(service: SkillService, authenticate: Any) -> APIRouter:
         payload = body or {}
         raw_name = payload.get("name")
         name = str(raw_name) if isinstance(raw_name, str) and raw_name.strip() else None
-        version = service.import_template(principal, key, name=name)
+        require_inactive = payload.get("activate") is True and payload.get("only_if_inactive") is True
+        version = service.import_template(principal, key, name=name, require_inactive=require_inactive)
         activated = None
         if payload.get("activate") is True:
             # 显式勾选才激活：导入≠启用，避免批量生效
             skill = service.get(principal, version.skill_id)
             activated = service.activate(
                 principal, version.skill_id, version.version_id,
-                skill.active_version_id,
+                None if require_inactive else skill.active_version_id,
             )
         return {
             "version": _version_payload(version),
@@ -124,14 +132,24 @@ def build_skills_router(service: SkillService, authenticate: Any) -> APIRouter:
         skill = service.get(principal, skill_id)
         versions = service.list_versions(principal, skill_id)
         content = (
-            service.read_active_content(principal, skill_id)
+            service.read_version_content(principal, skill.active_version_id, skill_id=skill_id)
             if skill.active_version_id else None
         )
         return {
             "skill": _skill_payload(skill),
             "versions": [_version_payload(v) for v in versions],
             "content": content,
+            "template_provenance": matching_template_provenance(skill.name, content),
         }
+
+    @router.get("/{skill_id}/versions/{version_id}")
+    async def get_version_content(
+        skill_id: str,
+        version_id: str,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        principal = _principal(authorization)
+        return {"content": service.read_version_content(principal, version_id, skill_id=skill_id)}
 
     @router.post("/{name}/versions")
     async def propose_version(

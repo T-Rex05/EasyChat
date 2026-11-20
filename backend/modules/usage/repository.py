@@ -88,6 +88,23 @@ class UsageRepository:
         finally:
             conn.close()
 
+    def conversation_text(self, *, owner_id: int, session_id: str | None, run_id: str | None) -> dict[str, str]:
+        """按该轮的三个归属字段读取仍可见的用户消息和最终回复。"""
+        if not session_id or not run_id:
+            return {}
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                """SELECT role, content FROM conversations
+                   WHERE owner_id=? AND session_id=? AND run_id=? AND status=1
+                     AND role IN ('user','assistant') AND source <> 'system' AND seq=0
+                   ORDER BY id""",
+                (owner_id, session_id, run_id),
+            )
+            return {row["role"]: row["content"] for row in rows}
+        finally:
+            conn.close()
+
     def complete_call(
         self,
         *,
@@ -223,6 +240,73 @@ class UsageRepository:
                     "WHERE owner_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (owner_id, limit, offset),
                 ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def call_groups(self, *, owner_id: int | None, limit: int, offset: int) -> list[dict[str, Any]]:
+        """按用户和会话聚合，再按可见消息的最新时间分页。"""
+        scope = "WHERE c.owner_id=?" if owner_id is not None else ""
+        params = (owner_id, limit, offset) if owner_id is not None else (limit, offset)
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                f"""WITH calls AS (
+                       SELECT c.owner_id, NULLIF(c.session_id, '') AS sid, COUNT(*) AS call_count,
+                              COALESCE(SUM(c.prompt_tokens),0) AS input_tokens,
+                              COALESCE(SUM(c.completion_tokens),0) AS output_tokens,
+                              COALESCE(SUM(c.total_tokens),0) AS total_tokens, MAX(c.created_at) AS last_call_at,
+                              CASE WHEN COUNT(DISTINCT r.source)=1 THEN MAX(r.source) END AS run_channel
+                       FROM llm_calls c LEFT JOIN runs r ON r.id=c.run_id AND r.owner_id=c.owner_id
+                           AND r.session_id=c.session_id AND r.source IN ('web','wechat')
+                       {scope}
+                       GROUP BY c.owner_id, NULLIF(c.session_id, '')
+                   )
+                   SELECT calls.owner_id, u.username, calls.sid AS session_id,
+                          CASE WHEN s.source IN ('web','wechat') THEN s.source
+                               ELSE calls.run_channel END AS channel,
+                          calls.call_count, calls.input_tokens, calls.output_tokens,
+                          calls.total_tokens, calls.last_call_at,
+                          (SELECT created_at FROM conversations
+                           WHERE owner_id=calls.owner_id AND session_id=calls.sid AND status=1
+                             AND role IN ('user','assistant') AND source <> 'system'
+                           ORDER BY julianday(created_at) DESC, id DESC LIMIT 1) AS last_message_at,
+                          (SELECT SUBSTR(TRIM(content),1,160) FROM conversations
+                           WHERE owner_id=calls.owner_id AND session_id=calls.sid AND status=1
+                             AND role='user' AND source <> 'system' AND TRIM(content) <> ''
+                           ORDER BY julianday(created_at) DESC, id DESC LIMIT 1) AS preview,
+                          COALESCE(NULLIF(TRIM(s.title),''),
+                              (SELECT SUBSTR(TRIM(content),1,64) FROM conversations
+                               WHERE owner_id=calls.owner_id AND session_id=calls.sid AND status=1 AND role='user'
+                                 AND source <> 'system' AND TRIM(content) <> ''
+                               ORDER BY julianday(created_at), id LIMIT 1)) AS title
+                   FROM calls
+                   LEFT JOIN sessions s ON s.id=calls.sid AND s.owner_id=calls.owner_id
+                   LEFT JOIN users u ON u.id=calls.owner_id
+                   ORDER BY julianday(COALESCE(last_message_at,last_call_at)) DESC, calls.owner_id, calls.sid
+                   LIMIT ? OFFSET ?""",
+                params,
+            )
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def group_calls(self, *, owner_id: int, session_id: str | None, limit: int, offset: int) -> list[dict[str, Any]]:
+        conn = self.db.connect()
+        try:
+            rows = conn.execute(
+                """SELECT c.call_id, c.created_at, c.model, c.source, c.prompt_tokens, c.completion_tokens, c.status,
+                          CASE WHEN c.source='chat' THEN
+                               CASE WHEN r.source IN ('web','wechat') THEN r.source
+                                    WHEN s.source IN ('web','wechat') THEN s.source END
+                          END AS channel
+                   FROM llm_calls c
+                   LEFT JOIN runs r ON r.id=c.run_id AND r.owner_id=c.owner_id AND r.session_id=c.session_id
+                   LEFT JOIN sessions s ON s.id=c.session_id AND s.owner_id=c.owner_id
+                   WHERE c.owner_id=? AND NULLIF(c.session_id, '') IS ?
+                   ORDER BY c.created_at DESC, c.call_id DESC LIMIT ? OFFSET ?""",
+                (owner_id, session_id, limit, offset),
+            )
             return [dict(r) for r in rows]
         finally:
             conn.close()
