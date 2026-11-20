@@ -55,6 +55,29 @@ ROUND1 = {
 
 
 @pytest.mark.asyncio
+async def test_acceptance_evidence_uses_latest_report_for_authorized_task(rig, tmp_path, monkeypatch) -> None:
+    service, _, owner, other = await _env(rig)
+    task, attempt = await _succeeded_task(service, owner)
+    result = service.submit_acceptance_round(owner, task.task_id, attempt_id=attempt.attempt_id, **ROUND1)
+    for version in (1, 2):
+        root = tmp_path / f"report-{version}"
+        evidence = root / "assets" / "c1.png"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_bytes(f"report {version}".encode())
+        monkeypatch.setattr("backend.modules.superagent.repository.utc_now_iso",
+                            lambda day=version: f"2026-01-{day:02d}T00:00:00Z")
+        service.repo.insert_report(
+            task_id=task.task_id, attempt_id=attempt.attempt_id,
+            kind="verification", verification_ref=str(root),
+        )
+
+    request = (task.task_id, result["round_id"], "c1", 0)
+    with pytest.raises(ForbiddenError):
+        service.acceptance_evidence_path(other, *request)
+    assert service.acceptance_evidence_path(owner, *request).read_bytes() == b"report 2"
+
+
+@pytest.mark.asyncio
 async def test_round_coverage_gate_and_verdict(rig) -> None:
     service, admin, owner, _ = await _env(rig)
     task, attempt = await _succeeded_task(service, owner)
@@ -73,7 +96,7 @@ async def test_round_coverage_gate_and_verdict(rig) -> None:
 async def test_reject_reworks_original_task_and_keeps_history(rig) -> None:
     service, admin, owner, _ = await _env(rig)
     task, attempt = await _succeeded_task(service, owner)
-    r = service.submit_acceptance_round(owner, task.task_id, attempt_id=attempt.attempt_id, **ROUND1)
+    service.submit_acceptance_round(owner, task.task_id, attempt_id=attempt.attempt_id, **ROUND1)
     rounds = service.acceptance_for_task(owner, task.task_id)
     c1 = [c for c in rounds[0]["checks"] if c["item_id"] == "c1"][0]
 

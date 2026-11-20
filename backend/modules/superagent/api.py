@@ -15,8 +15,10 @@ Gate：enabled 且 repo_url 可解析才受理新任务；GitHub token 可后补
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from backend.modules.access.api import AccessService
@@ -563,8 +565,6 @@ class SuperagentService:
                                  item_id: str, index: int):
         """受控读取证据文件：owner 校验 + 相对 attempt.verification_ref 的 resolve 防逃逸。"""
         self._task_for(principal, task_id)
-        import json as _json
-        from pathlib import Path
 
         rounds = self.acceptance.list_rounds(task_id)
         for r in rounds:
@@ -573,16 +573,15 @@ class SuperagentService:
             for c in r["checks"]:
                 if c["item_id"] != item_id:
                     continue
-                entries = _json.loads(c["evidence_json"] or "[]")
+                entries = json.loads(c["evidence_json"] or "[]")
                 if not (0 <= index < len(entries)):
                     raise NotFoundError("证据序号不存在")
                 rel = str(entries[index].get("path") or "")
                 # 证据根:该轮 attempt 最新报告的 verification_ref(验证工件目录)
                 root = None
-                for rep in reversed(self.repo.reports_for_task(task.task_id)):
+                for rep in self.repo.reports_for_task(task_id):
                     if (not r["attempt_id"] or rep.attempt_id == r["attempt_id"]) and rep.verification_ref:
-                        from pathlib import Path as _P
-                        root = _P(rep.verification_ref)
+                        root = Path(rep.verification_ref)
                         break
                 if not rel or not rel.startswith("assets/") or root is None or not root.is_dir():
                     raise ForbiddenError("证据路径不在受控工件目录内")

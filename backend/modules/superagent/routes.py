@@ -7,6 +7,8 @@ from fastapi import APIRouter, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from backend.shared.errors import UnauthenticatedError
+
 
 class AcceptanceCheckBody(BaseModel):
     item_id: str
@@ -28,8 +30,6 @@ class AcceptanceRoundBody(BaseModel):
 class AcceptanceDecisionBody(BaseModel):
     decision: str  # accepted | rejected
     note: str = ""
-
-from backend.shared.errors import UnauthenticatedError
 
 
 class SettingsBody(BaseModel):
