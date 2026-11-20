@@ -1,6 +1,8 @@
 <template>
   <div class="app-shell">
-    <AppSidebar v-if="showSidebar" />
+    <div v-if="showSidebar" class="nav-slot" :class="{ 'memory-nav': route.name === 'Memory' }">
+      <AppSidebar :compact-on-mobile="route.name === 'Memory'" />
+    </div>
     <main class="app-main" :class="{ 'full-width': !showSidebar }">
       <!-- P8 实测缺陷②：transition mode="out-in" 要求单根组件；ChatView 三列布局为
            多根模板，leave 永不完成 → 登录后所有 SPA 路由切换冻结（URL 变、视图不换）。
@@ -12,11 +14,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppSidebar from './components/AppSidebar.vue'
 import { useAuthStore } from './stores/auth'
+import { memoryLoginHash } from '@/utils/memoryView'
 
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 
 const showSidebar = computed(() => route.path !== '/login')
@@ -27,6 +31,7 @@ onMounted(async () => {
     authStore.markReady()
     return
   }
+  const memoryLogin = memoryLoginHash(window.location.hash)
   try {
     await authStore.verify()
     authStore.markReady()
@@ -47,7 +52,10 @@ onMounted(async () => {
     // 验证和刷新都失败 → 彻底过期，logout 并跳转登录
     authStore.logout()
     authStore.markReady()
-    if (window.location.pathname !== '/login') {
+    if (memoryLogin) {
+      await router.isReady()
+      await router.replace(memoryLogin.slice(1))
+    } else if (route.name !== 'Login' && window.location.pathname !== '/login') {
       window.location.href = '/login'
     }
   }
@@ -58,7 +66,14 @@ onMounted(async () => {
 .app-shell {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+}
+
+.nav-slot { display: flex; flex: none; }
+@media (max-width: 700px) {
+  .memory-nav { width: 64px; position: relative; z-index: 5; }
+  .memory-nav :deep(.sidebar) { position: absolute; inset: 0 auto 0 0; max-width: calc(100vw - 55px); }
 }
 
 .app-main {

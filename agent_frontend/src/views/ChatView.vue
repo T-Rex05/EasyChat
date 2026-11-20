@@ -13,16 +13,19 @@
           </div>
           <div class="header-titles">
             <h2 class="page-title">智能对话</h2>
-            <span class="page-subtitle">与 AI 智能体自由交流</span>
+            <span class="page-subtitle">{{ currentPersona }}</span>
           </div>
         </div>
         <div class="header-actions">
+          <button type="button" class="btn btn-secondary btn-sm" @click="personaDialog?.open()">对话角色</button>
           <button class="btn-new-chat" @click="newChat">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             <span>新对话</span>
           </button>
         </div>
       </header>
+
+      <PersonaDialog ref="personaDialog" @loaded="personas = $event" @created="selectNewSession" />
 
       <!-- 消息列表 -->
       <div class="messages-container" ref="messagesContainer">
@@ -276,6 +279,9 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import ChatSidebar from '@/components/chat/ChatSidebar.vue'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
+import PersonaDialog from '@/components/chat/PersonaDialog.vue'
+import type { Persona } from '@/api/personas'
+import { useSidebarStore } from '@/stores/sidebar'
 import { useChat } from '@/composables/useChat'
 import { useChatStore } from '@/stores/chat'
 import { useAutoScroll } from '@/composables/useAutoScroll'
@@ -285,6 +291,13 @@ import { getPendingExecApproval } from '@/api/chat'
 import { getModelConfigs, type ModelConfig } from '@/api/config'
 
 const chatStore = useChatStore()
+const sidebarStore = useSidebarStore()
+const personaDialog = ref<InstanceType<typeof PersonaDialog>>()
+const personas = ref<Persona[]>([])
+const currentPersona = computed(() => {
+  const id = sidebarStore.chatHistory.find(session => session.id === chatStore.currentChatId)?.persona_id
+  return personas.value.find(persona => persona.id === (id ?? null))?.name ?? (id ? '自定义角色' : '默认角色')
+})
 
 // 权限检查
 const auth = useAuthStore()
@@ -351,6 +364,12 @@ const {
   // 模型选择
   selectedModelId,
 } = useChat()
+
+function selectNewSession(id: string, personaId: string | null) {
+  newChat()
+  chatStore.setCurrentChatId(id)
+  sidebarStore.prependChatHistory({ id, title: '新对话', persona_id: personaId, create_time: new Date().toISOString() })
+}
 
 // ── 模型选择器 ──
 const chatModels = ref<ModelConfig[]>([])
@@ -740,6 +759,8 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-tertiary);
 }
+
+.chat-header .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .btn-new-chat {
   display: inline-flex;

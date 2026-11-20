@@ -168,3 +168,10 @@ test('停止只作用于当前浏览会话', async () => {
   assert.equal(api.streams[1].closed, true, '当前浏览会话(B)被停止')
   assert.equal(api.streams[0].closed, false, '后台会话(A)不受影响')
 })
+
+test('the first message in an empty, server-created conversation uses its existing session id', async () => {
+  const { chat, store, api } = makeEnv()
+  store.setCurrentChatId('sess_bound_persona')
+  await chat.sendMessage('你好')
+  assert.equal(api.streams[0]?.chatId, 'sess_bound_persona')
+})

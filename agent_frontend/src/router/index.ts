@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
+import { memoryAccess, memoryLocator, memoryReturnLocation, memoryVersion } from '@/utils/memoryView'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -51,7 +52,7 @@ const routes: RouteRecordRaw[] = [
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryView.vue'),
-    meta: { title: '记忆管理', icon: '', requiresAuth: true, permission: 'memory.edit', capModule: 'memory', capLevel: 'read' },
+    meta: { title: '记忆管理', icon: '', requiresAuth: true, permission: 'memory.view', capModule: 'memory', capLevel: 'read' },
   },
   {
     path: '/trace',
@@ -109,13 +110,15 @@ router.beforeEach(async (to, _from, next) => {
 
   // 需要认证的页面
   if (to.meta.requiresAuth && !token) {
-    next('/login')
+    const memory = to.name === 'Memory' ? memoryLocator(to.query.memory) : undefined
+    const version = memoryVersion(to.query.version)
+    next({ name: 'Login', query: memory ? { memory, version } : undefined })
     return
   }
 
   // 已登录访问登录页，跳转到聊天页
   if (to.path === '/login' && token) {
-    next('/chat')
+    next(memoryReturnLocation(to.query.memory, to.query.version))
     return
   }
 
@@ -147,7 +150,9 @@ router.beforeEach(async (to, _from, next) => {
   if (to.meta.permission && userRole !== 'super_admin') {
     const perm = to.meta.permission as string
     let hasPerm = false
-    if (to.meta.capModule) {
+    if (to.name === 'Memory') {
+      hasPerm = memoryAccess(permissions, capabilities?.modules?.memory).view
+    } else if (to.meta.capModule) {
       const mod = capabilities?.modules?.[to.meta.capModule as string]
       if (mod) {
         const level = to.meta.capLevel as 'read' | 'use' | 'manage'
@@ -157,8 +162,6 @@ router.beforeEach(async (to, _from, next) => {
       }
     } else if (perm === 'trace.view') {
       hasPerm = permissions.includes('trace.view') || permissions.includes('trace.manage')
-    } else if (perm === 'memory.edit') {
-      hasPerm = permissions.includes('memory.edit') || permissions.includes('memory.view')
     } else if (perm === 'skill.create') {
       hasPerm = permissions.includes('skill.create') || permissions.includes('skill.manage')
     } else {

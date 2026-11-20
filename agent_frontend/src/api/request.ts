@@ -3,6 +3,7 @@
 import axios, { type AxiosInstance, type InternalAxiosRequestConfig, type AxiosResponse } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { extractErrorMessage } from '@/utils/errorMessage'
+import { memoryLoginHash } from '@/utils/memoryView'
 
 // API 基础路径（从环境变量或默认值）
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -79,7 +80,10 @@ request.interceptors.response.use(
         const authStore = useAuthStore()
         authStore.logout()
         // 跳转到登录页（如果在路由环境中）
-        if (window.location.pathname !== '/login') {
+        const memoryLogin = memoryLoginHash(window.location.hash)
+        if (memoryLogin) {
+          if (authStore.ready) window.location.hash = memoryLogin
+        } else if (window.location.pathname !== '/login') {
           window.location.href = '/login'
         }
         // 延迟重置标记，避免页面跳转前的其他请求再次触发

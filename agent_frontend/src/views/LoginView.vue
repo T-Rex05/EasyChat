@@ -57,10 +57,12 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { memoryReturnLocation } from '@/utils/memoryView'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const username = ref('')
@@ -75,7 +77,7 @@ async function handleLogin() {
 
   try {
     await authStore.login(username.value, password.value)
-    router.push('/chat')
+    router.replace(memoryReturnLocation(route.query.memory, route.query.version))
   } catch (e: any) {
     error.value = e.message || '登录失败：用户名或密码错误'
     console.error('登录失败:', e)
@@ -90,7 +92,7 @@ async function handleRegister() {
 
   try {
     await authStore.register(username.value, password.value)
-    router.push('/chat')
+    router.replace(memoryReturnLocation(route.query.memory, route.query.version))
   } catch (e) {
     error.value = '注册失败：用户名可能已存在'
     console.error('注册失败:', e)

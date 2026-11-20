@@ -36,17 +36,16 @@ function view(path, request, exposed) {
 
 test('manual memory uses a supported, user-confirmed source type', async () => {
   let submitted
-  const memory = view('MemoryView', {
-    async post(url, body) { submitted = { url, body } },
-    async get() { return { data: { memories: [] } } },
-  }, ['remember', 'draft', 'error'])
-  Object.assign(memory.draft, { content: '偏好茶', source: 'chat:42', quote: '记住我喜欢茶', pinned: true })
-  await memory.remember()
+  const { rememberMemory } = evaluate(readSource('api/memoryManagement.ts'), {
+    request: { async post(url, body) { submitted = { url, body } } },
+  }, ['rememberMemory'])
+  await rememberMemory({ kind: 'preference', content: '偏好茶', pinned: true, is_shared: false,
+    source_refs: [{ kind: 'manual', ref: 'chat:42', quote: '记住我喜欢茶' }],
+  })
   assert.equal(submitted.url, '/api/memory/remember')
   assert.equal(submitted.body.source_type, 'user_confirmed')
   assert.deepEqual(submitted.body.source_refs, [{ kind: 'manual', ref: 'chat:42', quote: '记住我喜欢茶' }])
   assert.equal(submitted.body.pinned, true)
-  assert.equal(memory.error.value, '')
 })
 
 test('successive skill activations submit the latest expected active version', async () => {

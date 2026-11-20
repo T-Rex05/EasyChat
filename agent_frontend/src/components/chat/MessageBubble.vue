@@ -87,7 +87,7 @@
 
     <!-- 记忆引用（可折叠） -->
     <div
-      v-if="message.role === 'assistant' && message.memoryCitations?.length && !isThinking"
+      v-if="canViewMemory && message.role === 'assistant' && !message.run_id && message.memoryCitations?.length && !isThinking"
       class="memory-citations"
     >
       <details class="citations-details">
@@ -111,6 +111,11 @@
         </div>
       </details>
     </div>
+
+    <RunMemoryDetails
+      v-if="canViewMemory && message.role === 'assistant' && message.run_id && !isThinking"
+      :key="message.run_id" :run-id="message.run_id"
+    />
 
     <!-- 消息操作按钮（仅助手消息） -->
     <div v-if="message.role === 'assistant'" class="message-actions">
@@ -176,6 +181,9 @@
 </template>
 
 <script setup lang="ts">
+import RunMemoryDetails from './RunMemoryDetails.vue'
+import { useAuthStore } from '@/stores/auth'
+import { memoryAccess } from '@/utils/memoryView'
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { renderMarkdown, sanitizeModelOutput } from '@/utils/markdown'
 import type { Message } from '@/types/chat'
@@ -224,6 +232,9 @@ function formatCitationTime(dateStr: string): string {
     return ''
   }
 }
+
+const auth = useAuthStore()
+const canViewMemory = computed(() => memoryAccess(auth.permissions, auth.capabilities?.modules?.memory, auth.userRole === 'super_admin').view)
 
 // ── 思考过程折叠状态（非受控） ──
 // 默认：无正文时展开（思考/流式阶段），有正文时折叠（给出答案后）。

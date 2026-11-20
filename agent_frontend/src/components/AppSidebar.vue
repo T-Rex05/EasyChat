@@ -57,26 +57,42 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
       </template>
-      <button class="sidebar-btn" @click="collapsed = !collapsed" :title="collapsed ? '展开侧边栏' : '折叠侧边栏'">
+      <button class="sidebar-btn" @click="toggleCollapsed" :title="collapsed ? '展开侧边栏' : '折叠侧边栏'">
         <svg v-if="collapsed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
     </div>
-    <PanelResizeHandle v-if="!collapsed" label="调整导航栏宽度" :width="panelWidth"
+    <PanelResizeHandle v-if="!collapsed && !compact" label="调整导航栏宽度" :width="panelWidth"
       :min="180" :max="360" :initial="240" @resize="onPanelResize" />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { memoryAccess } from '@/utils/memoryView'
 import PanelResizeHandle from '@/components/PanelResizeHandle.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
-const collapsed = ref(false)
+const props = defineProps<{ compactOnMobile?: boolean }>()
+const desktopCollapsed = ref(false)
+const mobileExpanded = ref(false)
+const media = window.matchMedia('(max-width: 700px)')
+const narrow = ref(media.matches)
+const compact = computed(() => props.compactOnMobile && narrow.value)
+const collapsed = computed(() => compact.value ? !mobileExpanded.value : desktopCollapsed.value)
+
+function updateWidth(event: MediaQueryListEvent) { narrow.value = event.matches }
+function toggleCollapsed() {
+  if (compact.value) mobileExpanded.value = !mobileExpanded.value
+  else desktopCollapsed.value = !desktopCollapsed.value
+}
+onMounted(() => media.addEventListener('change', updateWidth))
+onUnmounted(() => media.removeEventListener('change', updateWidth))
+watch(() => router.currentRoute.value.path, () => { mobileExpanded.value = false })
 // P8 缺陷③同修：导航栏宽度持久化 + 读回钳制（旧值可能超出当前 min/max）。
 const NAV_WIDTH_KEY = 'chatNavPanelWidth'
 function persistedNavWidth(): number {
@@ -139,7 +155,7 @@ const menuItems = computed(() => {
     },
     {
       path: '/memory',
-      cap: 'memory', title: '记忆管理', perm: 'memory.edit',
+      cap: 'memory', title: '记忆管理', perm: 'memory.view',
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`,
     },
     {
@@ -189,7 +205,7 @@ const menuItems = computed(() => {
   }
   return allItems.filter(item => {
     switch (item.cap) {
-      case 'memory': return hasCap('memory', 'read')       // 只读角色也有入口
+      case 'memory': return memoryAccess(permissions.value, caps?.memory).view
       case 'skills': return hasCap('skills', 'use') || hasCap('skills', 'manage')
       case 'trace': return hasCap('trace', 'read')          // trace.manage 同样可见
             case 'superagent': return hasCap('superagent', 'read')
@@ -202,9 +218,6 @@ const menuItems = computed(() => {
     // 兜底（capabilities 未就绪）
     if (item.perm === 'trace.view') {
       return permissions.value.includes('trace.view') || permissions.value.includes('trace.manage')
-    }
-    if (item.perm === 'memory.edit') {
-      return permissions.value.includes('memory.edit') || permissions.value.includes('memory.view')
     }
     return permissions.value.includes(item.perm)
   })

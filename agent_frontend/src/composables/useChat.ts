@@ -144,7 +144,7 @@ export function useChat(chatMode: string = 'normal') {
 
     // 判断是否为新会话
     let chatId = currentChatId.value
-    const isNewChat = !chatId || messages.value.length === 0
+    const isNewChat = !chatId
     if (isNewChat) {
       const userId = localStorage.getItem('chatUserId') || ''
       if (!userId) throw new Error('用户身份尚未初始化，请刷新页面重试')
@@ -309,6 +309,7 @@ export function useChat(chatMode: string = 'normal') {
           // （避免重复：流式已经推送过的，后端 process_log 可能也有）
           const metadata: any = {
             conversation_id: data.conversation_id,
+            run_id: streamState.conversationId || data.conversation_id,
             json_data: data.json_data,
           }
           // 记忆引用

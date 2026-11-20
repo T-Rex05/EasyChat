@@ -72,6 +72,7 @@ export interface Message {
   content: string
   timestamp: string
   conversation_id?: string
+  run_id?: string
   status?: number
   source?: string
   json_data?: any
@@ -94,6 +95,7 @@ export interface Message {
 export interface ChatSession {
   id: string
   title: string
+  persona_id?: string | null
   source?: string
   user_question?: string
   create_time?: string

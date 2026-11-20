@@ -19,12 +19,20 @@ export async function getUserSessions(
     id: s.session_id || s.id || '',
     title: s.title || '',
     source: s.source,
+    persona_id: s.persona_id ?? null,
     user_question: s.title || '',
     create_time: s.created_at,
     update_time: s.updated_at,
     is_schedule: 0,
   }))
   return { sessions, has_more: sessions.length >= limit }
+}
+
+export async function createPersonaSession(personaId: string | null) {
+  const { data } = await request.post<{ session_id: string; persona_id: string | null }>('/api/history', {
+    persona_id: personaId,
+  })
+  return data
 }
 
 /**
